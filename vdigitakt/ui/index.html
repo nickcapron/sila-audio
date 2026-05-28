@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VDigitakt</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #111;
+      --surface: #1a1a1a;
+      --border: #2a2a2a;
+      --accent: #e8632a;
+      --accent-dim: #6b3015;
+      --text: #d4d4d4;
+      --text-dim: #666;
+      --step-off: #222;
+      --step-on: #e8632a;
+      --step-hover: #333;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .logo { color: var(--accent); font-weight: 700; font-size: 15px; letter-spacing: 2px; }
+    .bpm-display { display: flex; align-items: center; gap: 6px; }
+    .bpm-display input {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      width: 52px;
+      padding: 3px 6px;
+      border-radius: 3px;
+    }
+    .btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .btn:hover { background: #2a2a2a; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: #d4571f; }
+    .btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+    .spacer { flex: 1; }
+
+    /* ── Main layout ─────────────────────────────────────────── */
+    main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Track list ──────────────────────────────────────────── */
+    #track-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+    }
+
+    .track-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .track-name {
+      width: 80px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+    .track-name:hover { color: var(--text); cursor: pointer; }
+    .mute-btn {
+      width: 22px; height: 22px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 10px;
+      color: var(--text-dim);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .mute-btn.muted { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+
+    .step-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      flex: 1;
+    }
+    .step {
+      width: 28px; height: 28px;
+      background: var(--step-off);
+      border: 1px solid #2e2e2e;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: background 0.05s;
+      position: relative;
+    }
+    .step:hover { background: var(--step-hover); }
+    .step.on { background: var(--step-on); border-color: #ff7843; }
+    .step.playing { outline: 2px solid #fff; outline-offset: -2px; }
+
+    /* ── Sidebar (inspector) ─────────────────────────────────── */
+    #sidebar {
+      width: 220px;
+      border-left: 1px solid var(--border);
+      padding: 12px;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
+    .inspector-section { margin-bottom: 16px; }
+    .inspector-title {
+      color: var(--text-dim);
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+    .field label { color: var(--text-dim); font-size: 11px; }
+    .field input, .field select, .field textarea {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 4px 6px;
+      border-radius: 3px;
+      width: 100%;
+    }
+    .field textarea { resize: vertical; height: 60px; }
+
+    /* ── Status bar ──────────────────────────────────────────── */
+    footer {
+      padding: 4px 16px;
+      border-top: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">VDIGITAKT</span>
+  <div class="bpm-display">
+    <span style="color:var(--text-dim)">BPM</span>
+    <input type="number" id="bpm-input" value="120" min="20" max="300">
+  </div>
+  <button class="btn primary" id="btn-play" onclick="togglePlay()">PLAY</button>
+  <button class="btn" id="btn-fill" onclick="toggleFill()">FILL</button>
+  <button class="btn" onclick="undo()">UNDO</button>
+  <button class="btn" onclick="redo()">REDO</button>
+  <div class="spacer"></div>
+  <button class="btn" onclick="addTrack()">+ TRACK</button>
+  <button class="btn" onclick="saveProject()">SAVE</button>
+  <button class="btn primary" onclick="exportDigitakt()">EXPORT FOR DIGITAKT</button>
+</header>
+
+<main>
+  <div id="track-list">
+    <div id="tracks-container"></div>
+  </div>
+
+  <div id="sidebar">
+    <div class="inspector-section">
+      <div class="inspector-title">Step</div>
+      <div class="field">
+        <label>Velocity</label>
+        <input type="range" id="step-vel" min="0" max="127" value="100">
+      </div>
+      <div class="field">
+        <label>Pitch offset</label>
+        <input type="range" id="step-pitch" min="-24" max="24" value="0">
+      </div>
+      <div class="field">
+        <label>Probability %</label>
+        <input type="range" id="step-prob" min="0" max="100" value="100">
+      </div>
+      <div class="field">
+        <label>Trig condition</label>
+        <select id="step-trig">
+          <option value="always">Always</option>
+          <option value="1:2">1:2</option>
+          <option value="1:4">1:4</option>
+          <option value="fill">Fill</option>
+          <option value="not_fill">Not fill</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="inspector-section">
+      <div class="inspector-title">Track notes</div>
+      <div class="field">
+        <textarea id="track-notes" placeholder="What is this track for?"></textarea>
+      </div>
+      <button class="btn" onclick="saveNotes()">Save notes</button>
+    </div>
+  </div>
+</main>
+
+<footer id="status">Ready</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

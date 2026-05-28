@@ -1,0 +1,8 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+soundfile>=0.12.1
+soxr>=0.3.7
+python-reapy>=0.10.0
+python-multipart>=0.0.9
+aiofiles>=23.2.1
