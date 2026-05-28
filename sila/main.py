@@ -20,7 +20,7 @@ from sila.api.routes import router, startup as routes_startup, last_ping_age
 from sila.security import generate_session_token
 
 _PORT = 8765
-_HEARTBEAT_TIMEOUT = 30.0  # shut down if no browser ping for this many seconds
+_HEARTBEAT_TIMEOUT = 120.0  # shut down if no browser ping for this many seconds
 _HEARTBEAT_POLL = 5.0      # how often the watchdog checks
 
 
