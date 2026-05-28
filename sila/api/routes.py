@@ -257,6 +257,22 @@ async def set_fill(active: bool) -> dict[str, bool]:
     return {"fill_active": active}
 
 
+@router.get("/sequencer/status")
+async def sequencer_status() -> dict[str, Any]:
+    playing = _clock is not None and _clock.running
+    error = _clock.error if _clock is not None else None
+    try:
+        bpm: float | None = _store.project.bpm
+    except RuntimeError:
+        bpm = None
+    return {
+        "playing": playing,
+        "healthy": _clock.healthy if _clock is not None else True,
+        "error": error,
+        "bpm": bpm,
+    }
+
+
 @router.post("/sequencer/reset")
 async def reset_sequencer() -> dict[str, bool]:
     _get_seq().reset()

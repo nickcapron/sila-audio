@@ -69,7 +69,47 @@ async function boot() {
     project = await POST("/project/new", { name: "Untitled" });
   }
   renderTracks();
+  await syncPlayState();
   status("Ready");
+}
+
+// Fetch real sequencer state from the server and reconcile UI.
+async function syncPlayState() {
+  let s;
+  try {
+    s = await GET("/sequencer/status");
+  } catch {
+    return;
+  }
+  const btn = document.getElementById("btn-play");
+  if (!s.playing && playing) {
+    // Server stopped (stream error or restart) — reset UI to stopped state.
+    playing = false;
+    if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
+    _clearPlayhead();
+    _startedAt = null;
+    btn.textContent = "PLAY";
+    btn.classList.remove("active");
+    btn.classList.add("primary");
+  }
+  if (s.error) {
+    status("Audio error: " + s.error + " — click PLAY to retry");
+  }
+}
+
+let _statusPollId = null;
+
+function _startStatusPoll() {
+  _statusPollId = setInterval(syncPlayState, 2000);
+}
+
+function _stopStatusPoll() {
+  if (_statusPollId !== null) { clearInterval(_statusPollId); _statusPollId = null; }
+}
+
+function _clearPlayhead() {
+  document.querySelectorAll(".step.playing").forEach(c => c.classList.remove("playing"));
+  _tickPos = {};
 }
 
 // ---------------------------------------------------------------------------
@@ -232,8 +272,9 @@ async function togglePlay() {
   const btn = document.getElementById("btn-play");
   if (playing) {
     playing = false;
+    _stopStatusPoll();
     if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
-    _tickPos = {};
+    _clearPlayhead();
     _startedAt = null;
     btn.textContent = "PLAY";
     btn.classList.remove("active");
@@ -257,6 +298,7 @@ async function togglePlay() {
     btn.classList.remove("primary");
     btn.classList.add("active");
     _rafId = requestAnimationFrame(tickUI);
+    _startStatusPoll();
   }
 }
 

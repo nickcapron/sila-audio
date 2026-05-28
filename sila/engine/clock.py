@@ -27,10 +27,19 @@ class PlaybackClock:
         self._thread: threading.Thread | None = None
         self._running = False
         self._start_time: float | None = None
+        self._error: str | None = None
 
     @property
     def running(self) -> bool:
         return self._running
+
+    @property
+    def healthy(self) -> bool:
+        return self._running and self._error is None and self._audio.healthy
+
+    @property
+    def error(self) -> str | None:
+        return self._error
 
     @property
     def start_time(self) -> float | None:
@@ -60,6 +69,15 @@ class PlaybackClock:
     def _run(self, interval: float) -> None:
         next_tick = time.perf_counter()
         while self._running:
+            # If the stream died unexpectedly, attempt one restart before
+            # giving up. This handles transient device glitches.
+            if self._audio.stream_died:
+                try:
+                    self._audio.start()
+                except RuntimeError as exc:
+                    self._error = str(exc)
+                    self._running = False
+                    break
             for event in self._seq.tick():
                 player = self._players.get(event.track_id)
                 if player is None:

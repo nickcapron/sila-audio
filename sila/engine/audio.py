@@ -48,10 +48,35 @@ class AudioEngine:
         self._voices: list[_Voice] = []
         self._lock = threading.Lock()
         self._stream: sd.OutputStream | None = None
+        self._stopping_intentionally = False
+        self._stream_died = threading.Event()
+
+    @property
+    def healthy(self) -> bool:
+        if self._stream is None:
+            return False
+        try:
+            return self._stream.active and not self._stream_died.is_set()
+        except Exception:
+            return False
+
+    @property
+    def stream_died(self) -> bool:
+        return self._stream_died.is_set()
 
     def start(self) -> None:
-        if self._stream is not None:
+        # If there's a live, active stream already, nothing to do.
+        if self._stream is not None and self._stream.active:
             return
+        # Clean up a dead or stopped stream before reopening.
+        if self._stream is not None:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        self._stopping_intentionally = False
+        self._stream_died.clear()
         device = _find_wasapi_device()
         try:
             self._stream = sd.OutputStream(
@@ -60,6 +85,7 @@ class AudioEngine:
                 dtype="float32",
                 blocksize=BLOCK,
                 callback=self._callback,
+                finished_callback=self._on_stream_finished,
                 device=device,
             )
             self._stream.start()
@@ -68,12 +94,19 @@ class AudioEngine:
             raise RuntimeError(f"Audio device unavailable: {exc}") from exc
 
     def stop(self) -> None:
+        self._stopping_intentionally = True
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
             self._stream = None
         with self._lock:
             self._voices.clear()
+
+    def _on_stream_finished(self) -> None:
+        # Called by PortAudio on a background thread when the stream stops.
+        # Setting a threading.Event here is safe from any thread.
+        if not self._stopping_intentionally:
+            self._stream_died.set()
 
     def play(self, audio: np.ndarray, volume: float = 1.0, pan: float = 0.0) -> None:
         with self._lock:
