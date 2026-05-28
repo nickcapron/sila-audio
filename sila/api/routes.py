@@ -226,7 +226,7 @@ class StartRequest(BaseModel):
 async def start_sequencer(req: StartRequest = StartRequest()) -> dict[str, Any]:
     global _clock
     if _clock is not None and _clock.running:
-        return {"ok": True, "already_running": True}
+        return {"ok": True, "already_running": True, "bpm": _store.project.bpm, "started_at": _clock.start_time}
     bpm = req.bpm if req.bpm is not None else _store.project.bpm
     _store.project.bpm = bpm
     try:
@@ -237,7 +237,7 @@ async def start_sequencer(req: StartRequest = StartRequest()) -> dict[str, Any]:
     seq.reset()
     _clock = PlaybackClock(seq, _sample_players, _audio_engine)
     _clock.start(bpm)
-    return {"ok": True, "bpm": bpm}
+    return {"ok": True, "bpm": bpm, "started_at": _clock.start_time}
 
 
 @router.post("/sequencer/stop")

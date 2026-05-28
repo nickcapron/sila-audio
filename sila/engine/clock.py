@@ -26,15 +26,22 @@ class PlaybackClock:
         self._audio = audio_engine
         self._thread: threading.Thread | None = None
         self._running = False
+        self._start_time: float | None = None
 
     @property
     def running(self) -> bool:
         return self._running
 
+    @property
+    def start_time(self) -> float | None:
+        """Unix timestamp (seconds) when the clock's first tick fired."""
+        return self._start_time
+
     def start(self, bpm: float) -> None:
         if self._running:
             return
         self._running = True
+        self._start_time = time.time()
         interval = 60.0 / bpm / 4.0  # 16th-note in seconds
         self._thread = threading.Thread(
             target=self._run,

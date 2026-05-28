@@ -53,7 +53,9 @@ let selectedTrackId = null;
 let selectedStepIdx = null;
 let playing = false;
 let fillActive = false;
-let playInterval = null;
+let _startedAt = null;   // ms epoch when server clock started
+let _intervalMs = null;  // 16th-note duration in ms
+let _rafId = null;
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -230,43 +232,51 @@ async function togglePlay() {
   const btn = document.getElementById("btn-play");
   if (playing) {
     playing = false;
-    clearInterval(playInterval);
+    if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
     _tickPos = {};
+    _startedAt = null;
     btn.textContent = "PLAY";
     btn.classList.remove("active");
     btn.classList.add("primary");
     try { await POST("/sequencer/stop"); } catch { /* already stopped */ }
   } else {
     const bpm = parseFloat(document.getElementById("bpm-input").value) || 120;
+    let res;
     try {
-      await POST("/sequencer/start", { bpm });
+      res = await POST("/sequencer/start", { bpm });
     } catch {
       status("Audio device unavailable — check system audio settings");
       return;
     }
     playing = true;
+    // Anchor the playhead to the server's clock start time so the visual
+    // step position is computed from elapsed wall-clock time, not a JS timer.
+    _startedAt = res.started_at * 1000;  // Python time.time() → ms
+    _intervalMs = (60 / res.bpm / 4) * 1000;
     btn.textContent = "STOP";
     btn.classList.remove("primary");
     btn.classList.add("active");
-    const intervalMs = (60 / bpm / 4) * 1000;
-    playInterval = setInterval(tickUI, intervalMs);
+    _rafId = requestAnimationFrame(tickUI);
   }
 }
 
-let _tickPos = {}; // trackId → step index for playhead
+let _tickPos = {}; // trackId → current displayed step index
 
 function tickUI() {
+  if (!playing || _startedAt === null) return;
+  const elapsed = Date.now() - _startedAt;
   for (const track of project.tracks) {
     if (track.muted) continue;
     const stepCount = track.steps.length;
     if (!stepCount) continue;
-    const prev = _tickPos[track.id] ?? -1;
-    const next = (prev + 1) % stepCount;
-    _tickPos[track.id] = next;
-    // Highlight playhead.
-    const cells = document.querySelectorAll(`[data-track-id="${track.id}"] .step`);
-    cells.forEach((c, i) => c.classList.toggle("playing", i === next));
+    const stepIdx = Math.floor(elapsed / _intervalMs) % stepCount;
+    if (_tickPos[track.id] !== stepIdx) {
+      _tickPos[track.id] = stepIdx;
+      const cells = document.querySelectorAll(`[data-track-id="${track.id}"] .step`);
+      cells.forEach((c, i) => c.classList.toggle("playing", i === stepIdx));
+    }
   }
+  _rafId = requestAnimationFrame(tickUI);
 }
 
 async function toggleFill() {
