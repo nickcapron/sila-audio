@@ -11,6 +11,24 @@ SR = 48_000
 BLOCK = 512  # frames per callback
 
 
+def _find_wasapi_device() -> int | None:
+    """Return the default WASAPI output device index, or None if unavailable.
+
+    On Windows the system default device is often MME at 44100 Hz, which
+    rejects a 48 kHz stream. WASAPI devices natively support 48 kHz and are
+    preferred when available.
+    """
+    try:
+        for hostapi in sd.query_hostapis():
+            if "WASAPI" in hostapi["name"]:
+                dev_idx = int(hostapi.get("default_output_device", -1))
+                if dev_idx >= 0:
+                    return dev_idx
+    except Exception:
+        pass
+    return None
+
+
 class _Voice:
     __slots__ = ("audio", "pos", "volume", "pan_l", "pan_r")
 
@@ -34,6 +52,7 @@ class AudioEngine:
     def start(self) -> None:
         if self._stream is not None:
             return
+        device = _find_wasapi_device()
         try:
             self._stream = sd.OutputStream(
                 samplerate=SR,
@@ -41,6 +60,7 @@ class AudioEngine:
                 dtype="float32",
                 blocksize=BLOCK,
                 callback=self._callback,
+                device=device,
             )
             self._stream.start()
         except sd.PortAudioError as exc:

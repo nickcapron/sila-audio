@@ -35,6 +35,12 @@ def set_store(store: ProjectStore) -> None:
     _store = store
 
 
+def startup() -> None:
+    """Auto-load the most recently saved project on server startup."""
+    if _store.load_latest() is not None:
+        _load_sample_players()
+
+
 def _get_seq() -> Sequencer:
     global _sequencer
     if _sequencer is None:
@@ -255,6 +261,23 @@ async def set_fill(active: bool) -> dict[str, bool]:
 async def reset_sequencer() -> dict[str, bool]:
     _get_seq().reset()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Samples
+# ---------------------------------------------------------------------------
+
+@router.get("/samples")
+async def list_samples() -> dict[str, list[str]]:
+    """Return audio files available in the current project's samples/ directory."""
+    samples_dir = _store.samples_dir
+    if not samples_dir.exists():
+        return {"files": []}
+    files = sorted(
+        f.name for f in samples_dir.iterdir()
+        if f.suffix.lower() in {".wav", ".aiff", ".aif"}
+    )
+    return {"files": files}
 
 
 # ---------------------------------------------------------------------------

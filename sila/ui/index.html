@@ -112,6 +112,49 @@
     }
     .mute-btn.muted { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
 
+    .sample-slot {
+      width: 96px;
+      flex-shrink: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 10px;
+      padding: 3px 6px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--surface);
+      cursor: pointer;
+      color: var(--text-dim);
+    }
+    .sample-slot:hover { border-color: #444; color: var(--text); }
+    .sample-slot.loaded { color: var(--accent); border-color: var(--accent-dim); }
+
+    .sample-picker {
+      position: fixed;
+      background: #1e1e1e;
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+      min-width: 180px;
+      max-height: 220px;
+      overflow-y: auto;
+      z-index: 200;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.5);
+    }
+    .picker-item {
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: inherit;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .picker-item:hover { background: #2a2a2a; color: var(--accent); }
+    .picker-empty {
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
     .step-grid {
       display: flex;
       flex-wrap: wrap;

@@ -111,6 +111,19 @@ class ProjectStore:
             raise RuntimeError("No project loaded")
         return self._project_dir / "samples"
 
+    def load_latest(self) -> ProjectModel | None:
+        """Load the most recently saved project. Returns None if none exist."""
+        if not PROJECTS_ROOT.exists():
+            return None
+        candidates = sorted(
+            PROJECTS_ROOT.glob("*/project.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            return None
+        return self.load(candidates[0].parent.name)
+
     def can_undo(self) -> bool:
         return bool(self._undo_stack)
 

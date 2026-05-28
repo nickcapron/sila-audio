@@ -110,8 +110,16 @@ function buildTrackRow(track) {
     grid.appendChild(cell);
   });
 
+  const sampleName = track.samples && track.samples.length ? track.samples[0].path : null;
+  const sampleSlot = document.createElement("div");
+  sampleSlot.className = "sample-slot" + (sampleName ? " loaded" : "");
+  sampleSlot.textContent = sampleName ? sampleName.replace(/\.[^.]+$/, "") : "no sample";
+  sampleSlot.title = sampleName || "Click to assign a sample";
+  sampleSlot.onclick = (e) => { e.stopPropagation(); openSamplePicker(track.id, sampleSlot); };
+
   row.appendChild(muteBtn);
   row.appendChild(nameEl);
+  row.appendChild(sampleSlot);
   row.appendChild(grid);
   return row;
 }
@@ -129,6 +137,75 @@ function selectStep(trackId, idx, step) {
   document.getElementById("step-pitch").value = step.pitch_offset;
   document.getElementById("step-prob").value  = step.probability;
   document.getElementById("step-trig").value  = step.trig_condition;
+}
+
+// ---------------------------------------------------------------------------
+// Sample picker
+// ---------------------------------------------------------------------------
+
+async function openSamplePicker(trackId, anchorEl) {
+  closeSamplePicker();
+
+  let files;
+  try {
+    const res = await GET("/samples");
+    files = res.files;
+  } catch {
+    status("Could not load samples list");
+    return;
+  }
+
+  const picker = document.createElement("div");
+  picker.id = "sample-picker";
+  picker.className = "sample-picker";
+
+  if (files.length === 0) {
+    const msg = document.createElement("div");
+    msg.className = "picker-empty";
+    msg.textContent = "No WAV files in samples folder";
+    picker.appendChild(msg);
+  } else {
+    for (const file of files) {
+      const item = document.createElement("div");
+      item.className = "picker-item";
+      item.textContent = file;
+      item.onclick = async () => { closeSamplePicker(); await assignSample(trackId, file); };
+      picker.appendChild(item);
+    }
+  }
+
+  const rect = anchorEl.getBoundingClientRect();
+  picker.style.left = rect.left + "px";
+  picker.style.top  = (rect.bottom + 4) + "px";
+  document.body.appendChild(picker);
+
+  // Close on next click outside
+  setTimeout(() => document.addEventListener("click", closeSamplePicker, { once: true }), 0);
+}
+
+function closeSamplePicker() {
+  document.getElementById("sample-picker")?.remove();
+}
+
+async function assignSample(trackId, filename) {
+  const layer = { path: filename, velocity_min: 0, velocity_max: 127, start: 0.0, end: 1.0, loop: false, rr_group: 0 };
+  try {
+    await PUT(`/tracks/${trackId}/samples`, { samples: [layer] });
+  } catch {
+    status("Failed to assign sample");
+    return;
+  }
+  // Update local state
+  const track = project.tracks.find(t => t.id === trackId);
+  if (track) track.samples = [layer];
+  // Update the slot in-place (avoids re-rendering the whole row)
+  const slot = document.querySelector(`[data-track-id="${trackId}"] .sample-slot`);
+  if (slot) {
+    slot.textContent = filename.replace(/\.[^.]+$/, "");
+    slot.title = filename;
+    slot.classList.add("loaded");
+  }
+  status(`Assigned: ${filename}`);
 }
 
 // ---------------------------------------------------------------------------
