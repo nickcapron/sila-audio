@@ -154,6 +154,7 @@ async function togglePlay() {
   if (playing) {
     playing = false;
     clearInterval(playInterval);
+    _tickPos = {};
     btn.textContent = "PLAY";
     btn.classList.remove("active");
     btn.classList.add("primary");
@@ -182,7 +183,7 @@ function tickUI() {
     if (track.muted) continue;
     const stepCount = track.steps.length;
     if (!stepCount) continue;
-    const prev = _tickPos[track.id] ?? 0;
+    const prev = _tickPos[track.id] ?? -1;
     const next = (prev + 1) % stepCount;
     _tickPos[track.id] = next;
     // Highlight playhead.
@@ -191,11 +192,17 @@ function tickUI() {
   }
 }
 
-function toggleFill() {
+async function toggleFill() {
   fillActive = !fillActive;
   const btn = document.getElementById("btn-fill");
   btn.classList.toggle("active", fillActive);
-  POST("/sequencer/fill?active=" + fillActive);
+  try {
+    await POST("/sequencer/fill?active=" + fillActive);
+  } catch {
+    fillActive = !fillActive;
+    btn.classList.toggle("active", fillActive);
+    status("Fill toggle failed");
+  }
 }
 
 // ---------------------------------------------------------------------------

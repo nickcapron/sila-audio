@@ -36,7 +36,7 @@ class ProjectStore:
     # ------------------------------------------------------------------
 
     def new_project(self, name: str) -> ProjectModel:
-        project_dir = PROJECTS_ROOT / name
+        project_dir = safe_path(PROJECTS_ROOT, name)
         project_dir.mkdir(parents=True, exist_ok=True)
         (project_dir / "samples").mkdir(exist_ok=True)
         self._project_dir = project_dir

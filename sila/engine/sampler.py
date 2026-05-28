@@ -27,7 +27,7 @@ class LoadedSample:
         # Resample to target SR if needed.
         if sr != TARGET_SR:
             audio = soxr.resample(audio, sr, TARGET_SR, quality="HQ")
-        self.audio = audio  # float64 mono, target SR
+        self.audio = audio  # float32 mono, target SR
 
     def slice(self) -> np.ndarray:
         """Return the start–end region of the audio buffer."""
@@ -51,7 +51,7 @@ class SamplePlayer:
             src = safe_path(samples_dir, layer.path)
             if not src.exists():
                 continue
-            data, sr = sf.read(str(src), dtype="float64", always_2d=True)
+            data, sr = sf.read(str(src), dtype="float32", always_2d=True)
             mono = data[:, 0] if data.shape[1] == 1 else data.mean(axis=1)
             self._layers.append(LoadedSample(layer, mono, sr))
 

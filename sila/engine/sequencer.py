@@ -128,17 +128,15 @@ class Sequencer:
         tc = step.trig_condition
         if tc == TrigCondition.ALWAYS:
             return True
-        if tc == TrigCondition.FILL:
+        elif tc == TrigCondition.FILL:
             return self._fill_active
-        if tc == TrigCondition.NOT_FILL:
+        elif tc == TrigCondition.NOT_FILL:
             return not self._fill_active
-        if tc == TrigCondition.ONE_IN_2:
-            # Fires on every other evaluation — use a simple coin flip seeded
-            # by randomness so it doesn't require external state.
+        elif tc == TrigCondition.ONE_IN_2:
             return random.random() < 0.5
-        if tc == TrigCondition.ONE_IN_4:
+        elif tc == TrigCondition.ONE_IN_4:
             return random.random() < 0.25
-        return True
+        return False
 
     @staticmethod
     def _probability_passes(probability: int) -> bool:

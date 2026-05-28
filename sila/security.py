@@ -34,7 +34,7 @@ def safe_path(base: str | Path, untrusted: str | Path) -> Path:
     """
     base = Path(base).resolve()
     candidate = (base / untrusted).resolve()
-    if not str(candidate).startswith(str(base)):
+    if not candidate.is_relative_to(base):
         raise ValueError(f"Path traversal blocked: {untrusted!r} escapes {base}")
     return candidate
 

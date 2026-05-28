@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sila.engine.audio import AudioEngine
 from sila.engine.clock import PlaybackClock
@@ -267,7 +267,6 @@ class ExportRequest(BaseModel):
 
 @router.post("/export/digitakt")
 async def export_digitakt(req: ExportRequest) -> dict[str, str]:
-    from sila.security import safe_path as _safe_path
     out = Path(req.output_dir)
     if not out.is_absolute():
         raise HTTPException(status_code=400, detail="output_dir must be an absolute path")
