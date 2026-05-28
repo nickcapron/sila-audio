@@ -149,18 +149,29 @@ async function toggleStep(trackId, idx) {
 // Transport
 // ---------------------------------------------------------------------------
 
-function togglePlay() {
-  playing = !playing;
+async function togglePlay() {
   const btn = document.getElementById("btn-play");
-  btn.textContent = playing ? "STOP" : "PLAY";
-  btn.classList.toggle("primary", !playing);
-  btn.classList.toggle("active",   playing);
   if (playing) {
-    const bpm = parseFloat(document.getElementById("bpm-input").value) || 120;
-    const intervalMs = (60 / bpm / 4) * 1000; // 16th-note tick
-    playInterval = setInterval(tickUI, intervalMs);
-  } else {
+    playing = false;
     clearInterval(playInterval);
+    btn.textContent = "PLAY";
+    btn.classList.remove("active");
+    btn.classList.add("primary");
+    try { await POST("/sequencer/stop"); } catch { /* already stopped */ }
+  } else {
+    const bpm = parseFloat(document.getElementById("bpm-input").value) || 120;
+    try {
+      await POST("/sequencer/start", { bpm });
+    } catch {
+      status("Audio device unavailable — check system audio settings");
+      return;
+    }
+    playing = true;
+    btn.textContent = "STOP";
+    btn.classList.remove("primary");
+    btn.classList.add("active");
+    const intervalMs = (60 / bpm / 4) * 1000;
+    playInterval = setInterval(tickUI, intervalMs);
   }
 }
 

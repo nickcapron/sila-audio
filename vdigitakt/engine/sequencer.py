@@ -93,6 +93,12 @@ class Sequencer:
         self._project.tracks = [t for t in self._project.tracks if t.id != track_id]
         self._counters.pop(track_id, None)
 
+    def get_track(self, track_id: str) -> TrackModel | None:
+        for t in self._project.tracks:
+            if t.id == track_id:
+                return t
+        return None
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

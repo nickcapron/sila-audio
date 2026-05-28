@@ -11,18 +11,23 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from vdigitakt.engine.audio import AudioEngine
+from vdigitakt.engine.clock import PlaybackClock
+from vdigitakt.engine.sampler import SamplePlayer
 from vdigitakt.engine.sequencer import Sequencer, TrigEvent
 from vdigitakt.export.digitakt import export_for_digitakt, export_result_summary
-from vdigitakt.models.project import ProjectModel, TrackModel
+from vdigitakt.models.project import ProjectModel, SampleLayer, TrackModel
 from vdigitakt.models.step import Step
 from vdigitakt.security import require_token, sanitize_notes
 from vdigitakt.storage.project_store import ProjectStore
 
 router = APIRouter(dependencies=[Depends(require_token)])
 
-# Module-level store and sequencer. Replaced at startup via set_store().
 _store: ProjectStore = ProjectStore()
 _sequencer: Sequencer | None = None
+_audio_engine = AudioEngine()
+_sample_players: dict[str, SamplePlayer] = {}
+_clock: PlaybackClock | None = None
 
 
 def set_store(store: ProjectStore) -> None:
@@ -38,8 +43,21 @@ def _get_seq() -> Sequencer:
 
 
 def _reset_seq() -> None:
-    global _sequencer
+    global _sequencer, _clock
+    if _clock is not None:
+        _clock.stop()
+        _clock = None
+    _audio_engine.stop()
     _sequencer = None
+
+
+def _load_sample_players() -> None:
+    global _sample_players
+    _sample_players = {}
+    for track in _store.project.tracks:
+        player = SamplePlayer()
+        player.load(_store.samples_dir, track.samples)
+        _sample_players[track.id] = player
 
 
 # ---------------------------------------------------------------------------
@@ -54,16 +72,24 @@ class LoadProjectRequest(BaseModel):
     name: str
 
 
+class BpmRequest(BaseModel):
+    bpm: float = Field(gt=0, le=300)
+
+
 @router.post("/project/new")
 async def new_project(req: NewProjectRequest) -> ProjectModel:
     _reset_seq()
-    return _store.new_project(req.name)
+    project = _store.new_project(req.name)
+    _load_sample_players()
+    return project
 
 
 @router.post("/project/load")
 async def load_project(req: LoadProjectRequest) -> ProjectModel:
     _reset_seq()
-    return _store.load(req.name)
+    project = _store.load(req.name)
+    _load_sample_players()
+    return project
 
 
 @router.post("/project/save")
@@ -77,12 +103,19 @@ async def get_project() -> ProjectModel:
     return _store.project
 
 
+@router.put("/project/bpm")
+async def set_bpm(req: BpmRequest) -> dict[str, float]:
+    _store.project.bpm = req.bpm
+    return {"bpm": req.bpm}
+
+
 @router.post("/project/undo")
 async def undo() -> dict[str, Any]:
     project = _store.undo()
     if project is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nothing to undo")
     _reset_seq()
+    _load_sample_players()
     return {"ok": True, "project": project.model_dump()}
 
 
@@ -92,6 +125,7 @@ async def redo() -> dict[str, Any]:
     if project is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nothing to redo")
     _reset_seq()
+    _load_sample_players()
     return {"ok": True, "project": project.model_dump()}
 
 
@@ -112,12 +146,19 @@ class UpdateStepRequest(BaseModel):
     step: Step
 
 
+class SetSamplesRequest(BaseModel):
+    samples: list[SampleLayer]
+
+
 @router.post("/tracks")
 async def add_track(req: AddTrackRequest) -> TrackModel:
     _store.snapshot()
     track = TrackModel(name=req.name, step_count=req.step_count)
     track.ensure_steps()
     _get_seq().add_track(track)
+    player = SamplePlayer()
+    player.load(_store.samples_dir, track.samples)
+    _sample_players[track.id] = player
     return track
 
 
@@ -125,6 +166,7 @@ async def add_track(req: AddTrackRequest) -> TrackModel:
 async def remove_track(track_id: str) -> dict[str, bool]:
     _store.snapshot()
     _get_seq().remove_track(track_id)
+    _sample_players.pop(track_id, None)
     return {"ok": True}
 
 
@@ -154,9 +196,54 @@ async def toggle_mute(track_id: str) -> dict[str, bool]:
     return {"muted": track.muted}
 
 
+@router.put("/tracks/{track_id}/samples")
+async def set_track_samples(track_id: str, req: SetSamplesRequest) -> dict[str, Any]:
+    """Assign sample layers to a track and reload its sample player."""
+    track = _find_track(track_id)
+    _store.snapshot()
+    track.samples = req.samples
+    player = SamplePlayer()
+    player.load(_store.samples_dir, track.samples)
+    _sample_players[track_id] = player
+    return {"track_id": track_id, "sample_count": len(req.samples)}
+
+
 # ---------------------------------------------------------------------------
 # Sequencer control
 # ---------------------------------------------------------------------------
+
+class StartRequest(BaseModel):
+    bpm: float | None = Field(default=None, gt=0, le=300)
+
+
+@router.post("/sequencer/start")
+async def start_sequencer(req: StartRequest = StartRequest()) -> dict[str, Any]:
+    global _clock
+    if _clock is not None and _clock.running:
+        return {"ok": True, "already_running": True}
+    bpm = req.bpm if req.bpm is not None else _store.project.bpm
+    _store.project.bpm = bpm
+    try:
+        _audio_engine.start()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    seq = _get_seq()
+    seq.reset()
+    _clock = PlaybackClock(seq, _sample_players, _audio_engine)
+    _clock.start(bpm)
+    return {"ok": True, "bpm": bpm}
+
+
+@router.post("/sequencer/stop")
+async def stop_sequencer() -> dict[str, bool]:
+    global _clock
+    if _clock is not None:
+        _clock.stop()
+        _clock = None
+    _audio_engine.stop()
+    _get_seq().reset()
+    return {"ok": True}
+
 
 @router.post("/sequencer/fill")
 async def set_fill(active: bool) -> dict[str, bool]:
@@ -181,8 +268,6 @@ class ExportRequest(BaseModel):
 @router.post("/export/digitakt")
 async def export_digitakt(req: ExportRequest) -> dict[str, str]:
     from vdigitakt.security import safe_path as _safe_path
-    # Output dir is user-chosen; we validate it's an absolute path (no traversal
-    # relative to project root — user picks it via file picker so any abs path is ok).
     out = Path(req.output_dir)
     if not out.is_absolute():
         raise HTTPException(status_code=400, detail="output_dir must be an absolute path")
