@@ -7,9 +7,9 @@ from __future__ import annotations
 import threading
 import time
 
-from vdigitakt.engine.audio import AudioEngine
-from vdigitakt.engine.sampler import SamplePlayer
-from vdigitakt.engine.sequencer import Sequencer
+from sila.engine.audio import AudioEngine
+from sila.engine.sampler import SamplePlayer
+from sila.engine.sequencer import Sequencer
 
 
 class PlaybackClock:
@@ -40,7 +40,7 @@ class PlaybackClock:
             target=self._run,
             args=(interval,),
             daemon=True,
-            name="vdigitakt-clock",
+            name="sila-clock",
         )
         self._thread.start()
 

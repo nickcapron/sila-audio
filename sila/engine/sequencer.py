@@ -15,8 +15,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Callable
 
-from vdigitakt.models.project import ProjectModel, TrackModel
-from vdigitakt.models.step import Step, TrigCondition
+from sila.models.project import ProjectModel, TrackModel
+from sila.models.step import Step, TrigCondition
 
 
 @dataclass

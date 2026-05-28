@@ -11,15 +11,15 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from vdigitakt.engine.audio import AudioEngine
-from vdigitakt.engine.clock import PlaybackClock
-from vdigitakt.engine.sampler import SamplePlayer
-from vdigitakt.engine.sequencer import Sequencer, TrigEvent
-from vdigitakt.export.digitakt import export_for_digitakt, export_result_summary
-from vdigitakt.models.project import ProjectModel, SampleLayer, TrackModel
-from vdigitakt.models.step import Step
-from vdigitakt.security import require_token, sanitize_notes
-from vdigitakt.storage.project_store import ProjectStore
+from sila.engine.audio import AudioEngine
+from sila.engine.clock import PlaybackClock
+from sila.engine.sampler import SamplePlayer
+from sila.engine.sequencer import Sequencer, TrigEvent
+from sila.export.digitakt import export_for_digitakt, export_result_summary
+from sila.models.project import ProjectModel, SampleLayer, TrackModel
+from sila.models.step import Step
+from sila.security import require_token, sanitize_notes
+from sila.storage.project_store import ProjectStore
 
 router = APIRouter(dependencies=[Depends(require_token)])
 
@@ -267,7 +267,7 @@ class ExportRequest(BaseModel):
 
 @router.post("/export/digitakt")
 async def export_digitakt(req: ExportRequest) -> dict[str, str]:
-    from vdigitakt.security import safe_path as _safe_path
+    from sila.security import safe_path as _safe_path
     out = Path(req.output_dir)
     if not out.is_absolute():
         raise HTTPException(status_code=400, detail="output_dir must be an absolute path")

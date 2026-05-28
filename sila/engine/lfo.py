@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 
-from vdigitakt.models.project import LFOModel
+from sila.models.project import LFOModel
 
 
 def _random_phase_value(phase: float) -> float:

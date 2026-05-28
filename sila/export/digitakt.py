@@ -22,8 +22,8 @@ import numpy as np
 import soundfile as sf
 import soxr
 
-from vdigitakt.models.project import ProjectModel, SampleLayer
-from vdigitakt.security import safe_path, sanitize_filename
+from sila.models.project import ProjectModel, SampleLayer
+from sila.security import safe_path, sanitize_filename
 
 log = logging.getLogger(__name__)
 

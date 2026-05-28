@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from vdigitakt.models.project import FXModel
+from sila.models.project import FXModel
 
 
 def apply_fx(audio: np.ndarray, fx: FXModel, sample_rate: int = 48000) -> np.ndarray:

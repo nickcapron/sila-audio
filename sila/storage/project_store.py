@@ -12,8 +12,8 @@ import json
 from collections import deque
 from pathlib import Path
 
-from vdigitakt.models.project import ProjectModel
-from vdigitakt.security import backup_before_write, safe_path
+from sila.models.project import ProjectModel
+from sila.security import backup_before_write, safe_path
 
 PROJECTS_ROOT = Path.home() / "SILA" / "projects"
 MAX_UNDO = 100

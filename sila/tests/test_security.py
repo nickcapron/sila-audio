@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from vdigitakt.security import (
+from sila.security import (
     backup_before_write,
     generate_session_token,
     safe_path,

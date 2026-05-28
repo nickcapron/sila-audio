@@ -12,8 +12,8 @@ import numpy as np
 import soundfile as sf
 import soxr
 
-from vdigitakt.models.project import SampleLayer, TrackModel
-from vdigitakt.security import safe_path
+from sila.models.project import SampleLayer, TrackModel
+from sila.security import safe_path
 
 TARGET_SR = 48_000
 

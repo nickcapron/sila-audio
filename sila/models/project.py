@@ -8,8 +8,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
-from vdigitakt.models.step import Step
-from vdigitakt.security import sanitize_notes
+from sila.models.step import Step
+from sila.security import sanitize_notes
 
 
 class LFOModel(BaseModel):

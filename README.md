@@ -6,7 +6,7 @@ A Python step sequencer and sample instrument inspired by the Elektron Digitakt,
 
 ```
 pip install -r requirements.txt
-python -m vdigitakt.main
+python -m sila.main
 ```
 
 Open `http://127.0.0.1:8765` in a browser. The session token is printed to stdout on startup — the UI reads it from the URL hash (`#token=...`) or localStorage.
@@ -14,7 +14,7 @@ Open `http://127.0.0.1:8765` in a browser. The session token is printed to stdou
 ## Project layout
 
 ```
-vdigitakt/
+sila/
   main.py              Entry point — binds to 127.0.0.1:8765
   security.py          All security primitives (import this first)
   engine/

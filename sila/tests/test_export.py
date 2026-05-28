@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from vdigitakt.export.digitakt import (
+from sila.export.digitakt import (
     MAX_DURATION_S,
     MAX_FILE_SIZE_B,
     TARGET_SR,
@@ -27,7 +27,7 @@ from vdigitakt.export.digitakt import (
     export_for_digitakt,
     export_result_summary,
 )
-from vdigitakt.models.project import ProjectModel, SampleLayer, TrackModel
+from sila.models.project import ProjectModel, SampleLayer, TrackModel
 
 
 # ---------------------------------------------------------------------------

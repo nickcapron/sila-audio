@@ -9,8 +9,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from vdigitakt.api.routes import router
-from vdigitakt.security import generate_session_token
+from sila.api.routes import router
+from sila.security import generate_session_token
 
 app = FastAPI(title="SILA", version="0.1.0")
 app.include_router(router, prefix="/api")
@@ -26,7 +26,7 @@ def main() -> None:
     # Print token once for the UI/harness to read. Not logged anywhere else.
     print(f"SILA_TOKEN={token}", flush=True)
     uvicorn.run(
-        "vdigitakt.main:app",
+        "sila.main:app",
         host="127.0.0.1",  # never 0.0.0.0
         port=8765,
         log_level="warning",
