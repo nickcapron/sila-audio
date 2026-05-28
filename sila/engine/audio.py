@@ -11,18 +11,28 @@ SR = 48_000
 BLOCK = 512  # frames per callback
 
 
-def _find_wasapi_device() -> int | None:
-    """Return the default WASAPI output device index, or None if unavailable.
+def _find_output_device() -> int | None:
+    """Return the best output device index for a 48 kHz stream, or None.
 
-    On Windows the system default device is often MME at 44100 Hz, which
-    rejects a 48 kHz stream. WASAPI devices natively support 48 kHz and are
-    preferred when available.
+    Preference order:
+    1. The WASAPI host API's default output device (avoids MME's 44100 Hz limit).
+    2. Any WASAPI output device, if the host API has no default set.
+    3. None — lets sounddevice pick the system default (last resort).
     """
     try:
-        for hostapi in sd.query_hostapis():
-            if "WASAPI" in hostapi["name"]:
-                dev_idx = int(hostapi.get("default_output_device", -1))
+        wasapi_api_idx = None
+        for api_idx, api in enumerate(sd.query_hostapis()):
+            if "WASAPI" in api["name"]:
+                wasapi_api_idx = api_idx
+                dev_idx = int(api.get("default_output_device", -1))
                 if dev_idx >= 0:
+                    return dev_idx
+                break
+
+        # WASAPI host API found but no default device set — scan for any output.
+        if wasapi_api_idx is not None:
+            for dev_idx, dev in enumerate(sd.query_devices()):
+                if dev["hostapi"] == wasapi_api_idx and dev["max_output_channels"] > 0:
                     return dev_idx
     except Exception:
         pass
@@ -80,22 +90,29 @@ class AudioEngine:
             self._stream = None
         self._stopping_intentionally = False
         self._stream_died.clear()
-        device = _find_wasapi_device()
+        device = _find_output_device()
         self._device_idx = device
-        try:
-            self._stream = sd.OutputStream(
-                samplerate=SR,
-                channels=2,
-                dtype="float32",
-                blocksize=BLOCK,
-                callback=self._callback,
-                finished_callback=self._on_stream_finished,
-                device=device,
-            )
-            self._stream.start()
-        except sd.PortAudioError as exc:
-            self._stream = None
-            raise RuntimeError(f"Audio device unavailable: {exc}") from exc
+        exc_to_raise: Exception | None = None
+        for dev in ([device, None] if device is not None else [None]):
+            try:
+                self._stream = sd.OutputStream(
+                    samplerate=SR,
+                    channels=2,
+                    dtype="float32",
+                    blocksize=BLOCK,
+                    callback=self._callback,
+                    finished_callback=self._on_stream_finished,
+                    device=dev,
+                )
+                self._stream.start()
+                self._device_idx = dev
+                exc_to_raise = None
+                break
+            except sd.PortAudioError as exc:
+                self._stream = None
+                exc_to_raise = exc
+        if exc_to_raise is not None:
+            raise RuntimeError(f"Audio device unavailable: {exc_to_raise}") from exc_to_raise
         # Start the device-change watcher if not already running.
         self._watcher_stop.clear()
         if self._watcher_thread is None or not self._watcher_thread.is_alive():
@@ -119,7 +136,7 @@ class AudioEngine:
         while not self._watcher_stop.wait(timeout=1.0):
             if self._stopping_intentionally:
                 break
-            new_device = _find_wasapi_device()
+            new_device = _find_output_device()
             if (new_device != self._device_idx or self._stream_died.is_set()) \
                     and not self._stopping_intentionally:
                 self._restart_stream(new_device)
@@ -148,25 +165,31 @@ class AudioEngine:
         self._stopping_intentionally = False
         self._stream_died.clear()
 
-        try:
-            stream = sd.OutputStream(
-                samplerate=SR,
-                channels=2,
-                dtype="float32",
-                blocksize=BLOCK,
-                callback=self._callback,
-                finished_callback=self._on_stream_finished,
-                device=new_device,
-            )
-            stream.start()
-            # Guard against stop() being called while we were restarting.
+        candidates = [new_device, None] if new_device is not None else [None]
+        for dev in candidates:
             if self._stopping_intentionally:
-                stream.stop()
-                stream.close()
-            else:
-                self._stream = stream
-        except sd.PortAudioError:
-            pass  # device still unavailable; watcher will retry next tick
+                return
+            try:
+                stream = sd.OutputStream(
+                    samplerate=SR,
+                    channels=2,
+                    dtype="float32",
+                    blocksize=BLOCK,
+                    callback=self._callback,
+                    finished_callback=self._on_stream_finished,
+                    device=dev,
+                )
+                stream.start()
+                # Guard against stop() being called while we were restarting.
+                if self._stopping_intentionally:
+                    stream.stop()
+                    stream.close()
+                else:
+                    self._device_idx = dev
+                    self._stream = stream
+                return
+            except sd.PortAudioError:
+                pass  # try next candidate; watcher will retry next tick if all fail
 
     def _on_stream_finished(self) -> None:
         # Called by PortAudio on a background thread when the stream stops.
