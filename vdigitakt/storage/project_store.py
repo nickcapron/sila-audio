@@ -2,8 +2,8 @@
 Project persistence — load/save JSON projects with backup-before-write
 and undo/redo history.
 
-Projects live at ~/VDigitakt/projects/<name>/project.json.
-Samples live at ~/VDigitakt/projects/<name>/samples/.
+Projects live at ~/SILA/projects/<name>/project.json.
+Samples live at ~/SILA/projects/<name>/samples/.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 from vdigitakt.models.project import ProjectModel
 from vdigitakt.security import backup_before_write, safe_path
 
-PROJECTS_ROOT = Path.home() / "VDigitakt" / "projects"
+PROJECTS_ROOT = Path.home() / "SILA" / "projects"
 MAX_UNDO = 100
 
 

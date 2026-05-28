@@ -1,10 +1,10 @@
 /**
- * VDigitakt frontend.
+ * SILA frontend.
  * Reads the session token from the URL hash (#token=...) or localStorage.
  * Every fetch goes through api() which attaches the token header.
  */
 
-const TOKEN_KEY = "vdigitakt_token";
+const TOKEN_KEY = "sila_token";
 let TOKEN = "";
 
 // Grab token from URL hash on first load, then store it.
@@ -27,7 +27,7 @@ let TOKEN = "";
 async function api(method, path, body) {
   const opts = {
     method,
-    headers: { "X-VDigitakt-Token": TOKEN, "Content-Type": "application/json" },
+    headers: { "X-SILA-Token": TOKEN, "Content-Type": "application/json" },
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch("/api" + path, opts);

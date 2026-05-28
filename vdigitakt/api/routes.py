@@ -1,6 +1,6 @@
 """
 FastAPI routes. Every route requires the session token via require_token.
-No route is reachable without a valid X-VDigitakt-Token header.
+No route is reachable without a valid X-SILA-Token header.
 """
 
 from __future__ import annotations

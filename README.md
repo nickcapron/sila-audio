@@ -1,4 +1,4 @@
-# VDigitakt
+# SILA
 
 A Python step sequencer and sample instrument inspired by the Elektron Digitakt, running as a local FastAPI server with an HTML/JS UI. Designed to run inside Reaper via a JUCE VST3 shell (Phase 3).
 
@@ -22,6 +22,8 @@ vdigitakt/
     sampler.py         Sample player with velocity layers + round-robin
     lfo.py             Per-track LFO shapes
     fx.py              Volume / pan / filter
+    audio.py           sounddevice output stream + voice mixer
+    clock.py           BPM clock thread — drives sequencer → sampler → audio
   models/
     project.py         ProjectModel, TrackModel, SampleLayer, FX, LFO
     step.py            Step model with trig conditions
@@ -41,14 +43,14 @@ vdigitakt/
 ## Security model
 
 - Server binds to `127.0.0.1` only.
-- Every API route requires `X-VDigitakt-Token` header (session token, generated at startup).
+- Every API route requires `X-SILA-Token` header (session token, generated at startup).
 - All file paths go through `safe_path()` — no traversal possible.
 - All notes fields go through `sanitize_notes()` — prompt injection stripped.
 - Project files are backed up before every write.
 
 ## Projects
 
-Stored at `~/VDigitakt/projects/<name>/project.json`. Samples at `~/VDigitakt/projects/<name>/samples/`.
+Stored at `~/SILA/projects/<name>/project.json`. Samples at `~/SILA/projects/<name>/samples/`.
 
 ## Digitakt export (Phase 2)
 

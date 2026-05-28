@@ -1,5 +1,5 @@
 """
-Security primitives for VDigitakt. Every module imports from here.
+Security primitives for SILA. Every module imports from here.
 Enforces: 127.0.0.1-only binding, token auth on all routes, path traversal
 prevention, notes sanitization, backup-before-write, and filename safety.
 """
@@ -90,10 +90,10 @@ def backup_before_write(path: str | Path) -> Path:
     return backup
 
 
-async def require_token(x_vdigitakt_token: str = Header(...)) -> None:
+async def require_token(x_sila_token: str = Header(...)) -> None:
     """FastAPI Depends() — validates the session token on every request."""
-    if not verify_token(x_vdigitakt_token):
+    if not verify_token(x_sila_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing VDigitakt session token",
+            detail="Invalid or missing SILA session token",
         )
