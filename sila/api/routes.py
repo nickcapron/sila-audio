@@ -5,6 +5,7 @@ No route is reachable without a valid X-SILA-Token header.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -28,6 +29,7 @@ _sequencer: Sequencer | None = None
 _audio_engine = AudioEngine()
 _sample_players: dict[str, SamplePlayer] = {}
 _clock: PlaybackClock | None = None
+_last_ping: float = 0.0
 
 
 def set_store(store: ProjectStore) -> None:
@@ -35,8 +37,14 @@ def set_store(store: ProjectStore) -> None:
     _store = store
 
 
+def last_ping_age() -> float:
+    return time.monotonic() - _last_ping
+
+
 def startup() -> None:
     """Auto-load the most recently saved project on server startup."""
+    global _last_ping
+    _last_ping = time.monotonic()
     if _store.load_latest() is not None:
         _load_sample_players()
 
@@ -294,6 +302,18 @@ async def list_samples() -> dict[str, list[str]]:
         if f.suffix.lower() in {".wav", ".aiff", ".aif"}
     )
     return {"files": files}
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat
+# ---------------------------------------------------------------------------
+
+@router.post("/ping")
+async def ping() -> dict[str, bool]:
+    """Browser calls this every few seconds so the server knows the UI is open."""
+    global _last_ping
+    _last_ping = time.monotonic()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

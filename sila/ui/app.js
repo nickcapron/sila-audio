@@ -404,4 +404,7 @@ function status(msg) {
 // Init
 // ---------------------------------------------------------------------------
 
+// Keep the server alive while the tab is open; server shuts down when pings stop.
+setInterval(() => { POST("/ping").catch(() => {}); }, 5000);
+
 boot();
