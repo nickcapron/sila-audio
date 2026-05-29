@@ -333,6 +333,65 @@ def test_import_execute_rejects_non_canonical_category(client, tmp_path):
     assert "Invalid category" in resp.json()["detail"]
 
 
+# ---------------------------------------------------------------------------
+# Auto-save persistence (no explicit Save click required)
+# ---------------------------------------------------------------------------
+
+def test_step_toggle_persists_without_explicit_save(client):
+    """Toggling a step must survive a project reload with no manual Save."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    step = {"active": True, "velocity": 100, "pitch_offset": 0,
+            "probability": 100, "trig_condition": "always", "p_locks": {}}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0]["active"] is True
+
+
+def test_sample_assignment_persists_without_explicit_save(client, tmp_path):
+    """Sample assignment must survive a project reload with no manual Save."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    # Plant a sample file in the project samples dir
+    sample = tmp_path / "projects" / "P" / "samples" / "kick.wav"
+    sample.parent.mkdir(parents=True, exist_ok=True)
+    sample.write_bytes(b"\x00" * 44)
+
+    layer = {"path": "kick.wav", "velocity_min": 0, "velocity_max": 127,
+             "start": 0.0, "end": 1.0, "loop": False, "rr_group": 0}
+    client.put(f"/api/tracks/{track['id']}/samples",
+               json={"samples": [layer]}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert len(t["samples"]) == 1
+    assert t["samples"][0]["path"] == "kick.wav"
+
+
+def test_track_notes_persist_without_explicit_save(client):
+    """Track notes must survive a project reload with no manual Save."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    client.put(f"/api/tracks/{track['id']}/notes",
+               json={"notes": "four-on-the-floor kick"}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["notes"] == "four-on-the-floor kick"
+
+
+def test_new_project_appears_in_list_without_explicit_save(client):
+    """A newly created project must appear in GET /projects immediately."""
+    _new_project(client, "BrandNew")
+    projects = client.get("/api/projects", headers=_h()).json()["projects"]
+    assert "BrandNew" in projects
+
+
 def test_import_execute_copies_files_to_library(client, tmp_path):
     """Files must appear under library/<pack>/<category>/ after a successful import."""
     pack = tmp_path / "Pack"

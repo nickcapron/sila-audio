@@ -114,6 +114,7 @@ async def set_bpm(
     state.store.project.bpm = req.bpm
     if state.clock is not None and state.clock.running:
         state.clock.set_bpm(req.bpm)
+    state.autosave()
     return {"bpm": req.bpm}
 
 
@@ -124,6 +125,7 @@ async def undo(state: AppState = Depends(get_state)) -> dict[str, Any]:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nothing to undo")
     state.reset_seq()
     state.load_sample_players()
+    state.autosave()
     return {"ok": True, "project": project.model_dump()}
 
 
@@ -134,6 +136,7 @@ async def redo(state: AppState = Depends(get_state)) -> dict[str, Any]:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nothing to redo")
     state.reset_seq()
     state.load_sample_players()
+    state.autosave()
     return {"ok": True, "project": project.model_dump()}
 
 
@@ -169,6 +172,7 @@ async def add_track(
     player = SamplePlayer()
     player.load(state.store.samples_dir, track.samples)
     state.sample_players[track.id] = player
+    state.autosave()
     return track
 
 
@@ -179,6 +183,7 @@ async def remove_track(
     state.store.snapshot()
     state.get_seq().remove_track(track_id)
     state.sample_players.pop(track_id, None)
+    state.autosave()
     return {"ok": True}
 
 
@@ -191,6 +196,7 @@ async def update_track_notes(
     track = _find_track(state, track_id)
     state.store.snapshot()
     track.notes = sanitize_notes(req.notes)
+    state.autosave()
     return {"notes": track.notes}
 
 
@@ -206,6 +212,7 @@ async def update_step(
         raise HTTPException(status_code=404, detail="Step index out of range")
     state.store.snapshot()
     track.steps[step_index] = req.step
+    state.autosave()
     return req.step
 
 
@@ -216,6 +223,7 @@ async def toggle_mute(
     track = _find_track(state, track_id)
     state.store.snapshot()
     track.muted = not track.muted
+    state.autosave()
     return {"muted": track.muted}
 
 
@@ -232,6 +240,7 @@ async def set_track_samples(
     player = SamplePlayer()
     player.load(state.store.samples_dir, track.samples)
     state.sample_players[track_id] = player
+    state.autosave()
     return {"track_id": track_id, "sample_count": len(req.samples)}
 
 

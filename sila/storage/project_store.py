@@ -43,6 +43,7 @@ class ProjectStore:
         self._project = ProjectModel(name=name)
         self._undo_stack.clear()
         self._redo_stack.clear()
+        self.autosave()  # make the project immediately visible to list_projects()
         return self._project
 
     def load(self, name: str) -> ProjectModel:
@@ -64,6 +65,21 @@ class ProjectStore:
             self._project.model_dump_json(indent=2), encoding="utf-8"
         )
         return json_path
+
+    def autosave(self) -> None:
+        """Write current project to disk without creating a backup.
+
+        Called after every incremental mutation (step toggle, sample
+        assignment, BPM change, …) so the project survives a restart without
+        the user having to click Save.  Uses a temp-file rename for atomicity.
+        Silent no-op when no project is loaded.
+        """
+        if self._project is None or self._project_dir is None:
+            return
+        json_path = self._project_dir / "project.json"
+        tmp = json_path.with_suffix(".tmp")
+        tmp.write_text(self._project.model_dump_json(indent=2), encoding="utf-8")
+        tmp.replace(json_path)
 
     # ------------------------------------------------------------------
     # Undo / Redo

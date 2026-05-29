@@ -69,6 +69,13 @@ class AppState:
             player.load(self.store.samples_dir, track.samples)
             self.sample_players[track.id] = player
 
+    def autosave(self) -> None:
+        """Persist current project state to disk. Best-effort: never raises."""
+        try:
+            self.store.autosave()
+        except Exception:
+            pass
+
 
 _state = AppState()
 

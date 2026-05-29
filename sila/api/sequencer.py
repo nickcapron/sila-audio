@@ -38,6 +38,7 @@ async def start_sequencer(
     seq.reset()
     state.clock = PlaybackClock(seq, state.sample_players, state.audio_engine)
     state.clock.start(bpm)
+    state.autosave()
     return {"ok": True, "bpm": bpm, "started_at": state.clock.start_time}
 
 
@@ -56,6 +57,7 @@ async def set_fill(
     active: bool, state: AppState = Depends(get_state)
 ) -> dict[str, bool]:
     state.get_seq().fill_active = active
+    state.autosave()
     return {"fill_active": active}
 
 
