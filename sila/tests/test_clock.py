@@ -7,6 +7,8 @@ Uses a stub AudioEngine so no real device is needed.
 import threading
 import time
 
+import pytest
+
 from sila.engine.clock import PlaybackClock
 from sila.engine.sequencer import Sequencer
 from sila.models.project import ProjectModel
@@ -129,3 +131,49 @@ def test_clock_no_error_on_healthy_stream():
 
     assert not t.is_alive(), "clock thread did not exit cleanly"
     assert clock.error is None
+
+
+# ---------------------------------------------------------------------------
+# start() initialisation and set_bpm()
+# ---------------------------------------------------------------------------
+
+def test_start_sets_correct_interval_for_bpm():
+    """start(bpm) must store the right 16th-note interval or tempo will be wrong."""
+    clock = _make_clock(_StubAudio())
+    clock.start(120.0)
+    try:
+        assert clock._interval == pytest.approx(60.0 / 120.0 / 4.0)
+    finally:
+        clock.stop()
+
+
+def test_start_sets_start_time():
+    """start_time is used by the UI to anchor the visual playhead; must be set."""
+    clock = _make_clock(_StubAudio())
+    before = time.time()
+    clock.start(120.0)
+    try:
+        assert clock.start_time is not None
+        assert clock.start_time >= before
+    finally:
+        clock.stop()
+
+
+def test_set_bpm_updates_interval():
+    """set_bpm must overwrite _interval — that is the only mechanism for live tempo change."""
+    clock = _make_clock(_StubAudio())
+    clock._interval = 60.0 / 120.0 / 4.0  # pretend it was started at 120 BPM
+    clock.set_bpm(60.0)
+    assert clock._interval == pytest.approx(60.0 / 60.0 / 4.0)
+
+
+def test_set_bpm_live_halves_interval_when_doubling_tempo():
+    """Doubling BPM on a running clock must halve the tick interval."""
+    clock = _make_clock(_StubAudio())
+    clock.start(120.0)
+    try:
+        original = clock._interval
+        clock.set_bpm(240.0)
+        assert clock._interval == pytest.approx(original / 2.0)
+    finally:
+        clock.stop()

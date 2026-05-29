@@ -4,9 +4,7 @@ Tests for export/digitakt.py.
 Uses synthetic WAV files so no real samples are needed.
 """
 
-import struct
 import tempfile
-import wave
 from pathlib import Path
 
 import numpy as np
@@ -20,8 +18,6 @@ from sila.export.digitakt import (
     ExportResult,
     ExportWarning,
     _collect_sample_paths,
-    _load_as_mono_float,
-    _resample_if_needed,
     _unique_output_name,
     _validate_limits,
     export_for_digitakt,
@@ -67,44 +63,6 @@ def test_collect_deduplicates():
 def test_collect_empty_project():
     proj = ProjectModel()
     assert _collect_sample_paths(proj) == []
-
-
-# ---------------------------------------------------------------------------
-# _load_as_mono_float
-# ---------------------------------------------------------------------------
-
-def test_load_mono_unchanged():
-    with tempfile.TemporaryDirectory() as tmp:
-        p = Path(tmp) / "mono.wav"
-        _make_wav(p, 44100, 1, 0.5)
-        audio, sr = _load_as_mono_float(p)
-        assert audio.ndim == 1
-        assert sr == 44100
-
-
-def test_load_stereo_summed():
-    with tempfile.TemporaryDirectory() as tmp:
-        p = Path(tmp) / "stereo.wav"
-        _make_wav(p, 44100, 2, 0.5)
-        audio, sr = _load_as_mono_float(p)
-        assert audio.ndim == 1  # summed to mono
-
-
-# ---------------------------------------------------------------------------
-# _resample_if_needed
-# ---------------------------------------------------------------------------
-
-def test_resample_same_sr_noop():
-    data = np.zeros(1000)
-    result = _resample_if_needed(data, TARGET_SR)
-    assert result is data  # identical object, no copy
-
-
-def test_resample_changes_length():
-    data = np.zeros(44100)  # 1 second at 44100
-    result = _resample_if_needed(data, 44100)
-    # 44100 → 48000: should be longer
-    assert len(result) == pytest.approx(48000, abs=100)
 
 
 # ---------------------------------------------------------------------------

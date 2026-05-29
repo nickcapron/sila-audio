@@ -12,6 +12,7 @@ from sila.security import (
     safe_path,
     sanitize_filename,
     sanitize_notes,
+    sanitize_project_name,
     verify_token,
 )
 
@@ -177,11 +178,50 @@ def test_backup_before_write_backup_has_timestamp():
 
 
 def test_backup_before_write_multiple_backups_unique():
-    import time
+    from datetime import datetime
+    from unittest.mock import patch
     with tempfile.TemporaryDirectory() as tmp:
         original = Path(tmp) / "project.json"
         original.write_text("{}")
-        b1 = backup_before_write(original)
-        time.sleep(1.1)  # ensure different timestamp
-        b2 = backup_before_write(original)
+        with patch("sila.security.datetime") as mock_dt:
+            mock_dt.now.side_effect = [
+                datetime(2025, 1, 1, 12, 0, 0),
+                datetime(2025, 1, 1, 12, 0, 1),
+            ]
+            b1 = backup_before_write(original)
+            b2 = backup_before_write(original)
         assert b1 != b2
+
+
+# ---------------------------------------------------------------------------
+# sanitize_project_name
+# ---------------------------------------------------------------------------
+
+def test_sanitize_project_name_spaces_become_underscores():
+    assert sanitize_project_name("My Project") == "My_Project"
+
+
+def test_sanitize_project_name_strips_special_chars():
+    assert sanitize_project_name("My Project!!!") == "My_Project"
+
+
+def test_sanitize_project_name_strips_non_ascii():
+    result = sanitize_project_name("Pröject")
+    assert "ö" not in result
+    assert len(result) > 0  # some chars survived
+
+
+def test_sanitize_project_name_64_char_limit():
+    result = sanitize_project_name("a" * 80)
+    assert len(result) == 64
+
+
+def test_sanitize_project_name_returns_empty_for_all_special():
+    # The API uses this to detect blank names after sanitization.
+    assert sanitize_project_name("!!!!") == ""
+
+
+def test_sanitize_project_name_no_leading_or_trailing_dots():
+    result = sanitize_project_name("...project...")
+    assert not result.startswith(".")
+    assert not result.endswith(".")
