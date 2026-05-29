@@ -50,6 +50,30 @@ class SamplePlayer:
                 continue
             self._layers.append(LoadedSample(layer, audio))
 
+    def get_with_offset(
+        self,
+        velocity: int,
+        start: float | None = None,
+        end: float | None = None,
+    ) -> np.ndarray | None:
+        """Like get(), but override the start/end slice positions."""
+        candidates = [
+            s for s in self._layers
+            if s.layer.velocity_min <= velocity <= s.layer.velocity_max
+        ]
+        if not candidates:
+            return None
+        group = candidates[0].layer.rr_group
+        idx = self._rr_counters.get(group, 0) % len(candidates)
+        self._rr_counters[group] = idx + 1
+        sample = candidates[idx]
+        n = len(sample.audio)
+        s = int((start if start is not None else sample.layer.start) * n)
+        e = int((end   if end   is not None else sample.layer.end)   * n)
+        s = max(0, min(s, n - 1))
+        e = max(s + 1, min(e, n))
+        return sample.audio[s:e]
+
     def get(self, velocity: int) -> np.ndarray | None:
         """
         Return audio for the given velocity using velocity-layer selection

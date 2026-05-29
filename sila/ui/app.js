@@ -68,9 +68,39 @@ async function boot() {
     // No project loaded yet — create a default one.
     project = await POST("/project/new", { name: "Untitled" });
   }
+  document.getElementById("bpm-input").value = project.bpm || 120;
+  const swingPct = Math.round((project.swing || 0) * 100);
+  document.getElementById("swing-input").value = swingPct;
+  document.getElementById("swing-pct").textContent = swingPct + "%";
+  document.getElementById("swing-input").addEventListener("input", function () {
+    const val = parseInt(this.value);
+    document.getElementById("swing-pct").textContent = val + "%";
+  });
+  document.getElementById("swing-input").addEventListener("change", async function () {
+    const swing = parseInt(this.value) / 100;
+    try { await PUT("/project/swing", { swing }); } catch { /* ignore */ }
+  });
+
+  document.getElementById("step-start").addEventListener("change", function () {
+    _saveStepPlocks("start", parseInt(this.value) / 100);
+  });
+  document.getElementById("step-end").addEventListener("change", function () {
+    _saveStepPlocks("end", parseInt(this.value) / 100);
+  });
   renderTracks();
   await syncPlayState();
+  await initSongBar();
   status("Ready");
+
+  // Live BPM: send change to server on every committed value (blur / Enter).
+  document.getElementById("bpm-input").addEventListener("change", async function () {
+    const bpm = parseFloat(this.value);
+    if (isNaN(bpm) || bpm <= 0 || bpm > 300) return;
+    try {
+      await PUT("/project/bpm", { bpm });
+      if (playing) _intervalMs = (60 / bpm / 4) * 1000;
+    } catch { /* ignore */ }
+  });
 }
 
 // Fetch real sequencer state from the server and reconcile UI.
@@ -128,6 +158,8 @@ function buildTrackRow(track) {
   const row = document.createElement("div");
   row.className = "track-row";
   row.dataset.trackId = track.id;
+  if (track.color) row.style.setProperty("--track-col", track.color);
+  row.oncontextmenu = (e) => { e.preventDefault(); _showTrackMenu(track.id, e); };
 
   const muteBtn = document.createElement("button");
   muteBtn.className = "mute-btn" + (track.muted ? " muted" : "");
@@ -135,11 +167,17 @@ function buildTrackRow(track) {
   muteBtn.title = "Mute";
   muteBtn.onclick = () => toggleMute(track.id);
 
+  const soloBtn = document.createElement("button");
+  soloBtn.className = "solo-btn" + (track.solo ? " soloed" : "");
+  soloBtn.textContent = "S";
+  soloBtn.title = "Solo";
+  soloBtn.onclick = () => toggleSolo(track.id);
+
   const nameEl = document.createElement("div");
   nameEl.className = "track-name";
   nameEl.textContent = track.name;
-  nameEl.title = track.notes || track.name;
-  nameEl.onclick = () => selectTrack(track.id);
+  nameEl.title = "Click to rename";
+  nameEl.onclick = () => startRenameTrack(track.id, nameEl);
 
   const grid = document.createElement("div");
   grid.className = "step-grid";
@@ -159,17 +197,161 @@ function buildTrackRow(track) {
   sampleSlot.title = sampleName || "Click to assign a sample";
   sampleSlot.onclick = (e) => { e.stopPropagation(); openSamplePicker(track.id, sampleSlot); };
 
+  const diceBtn = document.createElement("button");
+  diceBtn.className = "dice-btn";
+  diceBtn.textContent = "⚄";
+  diceBtn.title = "Randomize steps (right-click for density)";
+  diceBtn.onclick = () => randomizeTrack(track.id, 0.5);
+  diceBtn.oncontextmenu = (e) => {
+    e.preventDefault();
+    const d = parseFloat(prompt("Density (0=sparse, 0.5=medium, 1=dense):", "0.5") || "0.5");
+    if (!isNaN(d)) randomizeTrack(track.id, Math.max(0, Math.min(1, d)));
+  };
+
+  const stepCountSel = document.createElement("select");
+  stepCountSel.className = "step-count-sel";
+  stepCountSel.title = "Step count";
+  [16, 32, 64, 128].forEach(n => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    if (track.steps.length === n) opt.selected = true;
+    stepCountSel.appendChild(opt);
+  });
+  stepCountSel.onchange = () => changeStepCount(track.id, parseInt(stepCountSel.value));
+
   row.appendChild(muteBtn);
+  row.appendChild(soloBtn);
+  row.appendChild(diceBtn);
   row.appendChild(nameEl);
   row.appendChild(sampleSlot);
+  row.appendChild(stepCountSel);
   row.appendChild(grid);
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Copy / paste pattern
+// ---------------------------------------------------------------------------
+
+let _copiedPattern = null;
+
+function _showTrackMenu(trackId, e) {
+  document.getElementById("track-ctx-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.id = "track-ctx-menu";
+  menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;
+    background:#1e1e1e;border:1px solid #3a3a3a;border-radius:4px;
+    z-index:500;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.5)`;
+  const addItem = (label, fn) => {
+    const div = document.createElement("div");
+    div.textContent = label;
+    div.style.cssText = "padding:6px 12px;font-size:12px;cursor:pointer;color:#d4d4d4";
+    div.onmouseenter = () => div.style.background = "#2a2a2a";
+    div.onmouseleave = () => div.style.background = "";
+    div.onclick = () => { menu.remove(); fn(); };
+    menu.appendChild(div);
+  };
+  addItem("Copy pattern", () => {
+    const t = project.tracks.find(t => t.id === trackId);
+    if (t) { _copiedPattern = JSON.parse(JSON.stringify(t.steps)); status("Pattern copied"); }
+  });
+  if (_copiedPattern) {
+    addItem("Paste pattern", () => pastePattern(trackId));
+  }
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+}
+
+async function pastePattern(trackId) {
+  if (!_copiedPattern) return;
+  try {
+    await PUT(`/tracks/${trackId}/pattern`, { steps: _copiedPattern });
+    const track = project.tracks.find(t => t.id === trackId);
+    if (track) {
+      track.steps = JSON.parse(JSON.stringify(_copiedPattern));
+      track.step_count = track.steps.length;
+    }
+    renderTracks();
+    status("Pattern pasted");
+  } catch { status("Paste failed"); }
+}
+
+async function randomizeTrack(trackId, density) {
+  try {
+    const res = await POST(`/tracks/${trackId}/randomize`, { density });
+    const track = project.tracks.find(t => t.id === trackId);
+    if (track && res.steps) {
+      res.steps.forEach((s, i) => { if (track.steps[i]) track.steps[i].active = s.active; });
+    }
+    renderTracks();
+  } catch { status("Randomize failed"); }
+}
+
+async function changeStepCount(trackId, stepCount) {
+  try {
+    await PUT(`/tracks/${trackId}/step_count`, { step_count: stepCount });
+    const track = project.tracks.find(t => t.id === trackId);
+    if (track) {
+      track.step_count = stepCount;
+      // Pad or trim local steps array to match
+      while (track.steps.length < stepCount) track.steps.push({ active: false, velocity: 100, pitch_offset: 0, probability: 100, trig_condition: "always", p_locks: {} });
+      if (track.steps.length > stepCount) track.steps = track.steps.slice(0, stepCount);
+    }
+    renderTracks();
+  } catch { status("Failed to change step count"); }
 }
 
 function selectTrack(trackId) {
   selectedTrackId = trackId;
   const track = project.tracks.find(t => t.id === trackId);
-  if (track) document.getElementById("track-notes").value = track.notes || "";
+  if (track) {
+    document.getElementById("track-notes").value = track.notes || "";
+    document.getElementById("track-humanize").value = Math.round((track.humanize || 0) * 100);
+  }
+}
+
+document.addEventListener("change", async (e) => {
+  if (e.target.id === "track-humanize" && selectedTrackId) {
+    const amount = parseInt(e.target.value) / 100;
+    try {
+      await PUT(`/tracks/${selectedTrackId}/humanize`, { amount });
+      const t = project.tracks.find(t => t.id === selectedTrackId);
+      if (t) t.humanize = amount;
+    } catch { /* ignore */ }
+  }
+});
+
+function startRenameTrack(trackId, nameEl) {
+  if (nameEl.querySelector("input")) return; // already editing
+  const track = project.tracks.find(t => t.id === trackId);
+  if (!track) return;
+  selectTrack(trackId);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "track-name-input";
+  input.value = track.name;
+  nameEl.textContent = "";
+  nameEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    const newName = input.value.trim() || track.name;
+    nameEl.textContent = newName;
+    if (newName !== track.name) {
+      try {
+        await PUT(`/tracks/${trackId}/name`, { name: newName });
+        track.name = newName;
+      } catch { nameEl.textContent = track.name; }
+    }
+  };
+  input.onblur = commit;
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    if (e.key === "Escape") { nameEl.textContent = track.name; }
+  };
 }
 
 function selectStep(trackId, idx, step) {
@@ -179,6 +361,20 @@ function selectStep(trackId, idx, step) {
   document.getElementById("step-pitch").value = step.pitch_offset;
   document.getElementById("step-prob").value  = step.probability;
   document.getElementById("step-trig").value  = step.trig_condition;
+  const pl = step.p_locks || {};
+  document.getElementById("step-start").value = Math.round((pl.start ?? 0)   * 100);
+  document.getElementById("step-end").value   = Math.round((pl.end   ?? 1.0) * 100);
+}
+
+async function _saveStepPlocks(field, value) {
+  if (selectedTrackId === null || selectedStepIdx === null) return;
+  const track = project.tracks.find(t => t.id === selectedTrackId);
+  if (!track) return;
+  const step = track.steps[selectedStepIdx];
+  if (!step) return;
+  step.p_locks = step.p_locks || {};
+  step.p_locks[field] = value;
+  await PUT(`/tracks/${selectedTrackId}/steps/${selectedStepIdx}`, { step });
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +571,14 @@ async function toggleMute(trackId) {
   renderTracks();
 }
 
+async function toggleSolo(trackId) {
+  const res = await PUT(`/tracks/${trackId}/solo`);
+  // Update all local solo states (toggling one solo affects all)
+  project.tracks.forEach(t => { t.solo = (t.id === trackId) ? res.solo : t.solo; });
+  if (!res.any_solo) project.tracks.forEach(t => { t.solo = false; });
+  renderTracks();
+}
+
 async function saveNotes() {
   if (!selectedTrackId) { status("Select a track first"); return; }
   const notes = document.getElementById("track-notes").value;
@@ -406,6 +610,140 @@ function status(msg) {
 
 // Keep the server alive while the tab is open; server shuts down when pings stop.
 setInterval(() => { POST("/ping").catch(() => {}); }, 5000);
+
+// ---------------------------------------------------------------------------
+// Project switcher
+// ---------------------------------------------------------------------------
+
+async function toggleProjectMenu() {
+  const dd = document.getElementById("proj-dropdown");
+  if (dd.classList.contains("open")) {
+    dd.classList.remove("open");
+    return;
+  }
+  dd.innerHTML = "";
+  let projects = [];
+  try {
+    const res = await GET("/projects");
+    projects = res.projects || [];
+  } catch { /* ignore */ }
+
+  projects.forEach(name => {
+    const item = document.createElement("div");
+    item.className = "proj-item" + (project && name === project.name ? " active" : "");
+    item.textContent = name;
+    item.onclick = () => { dd.classList.remove("open"); loadProjectByName(name); };
+    dd.appendChild(item);
+  });
+
+  const newItem = document.createElement("div");
+  newItem.className = "proj-item new-proj";
+  newItem.textContent = "+ New project…";
+  newItem.onclick = () => { dd.classList.remove("open"); newProjectFromMenu(); };
+  dd.appendChild(newItem);
+
+  dd.classList.add("open");
+  setTimeout(() => document.addEventListener("click", _closeProjectMenu, { once: true }), 0);
+}
+
+function _closeProjectMenu(e) {
+  const dd = document.getElementById("proj-dropdown");
+  if (dd && !dd.contains(e.target)) dd.classList.remove("open");
+}
+
+async function loadProjectByName(name) {
+  try {
+    const res = await fetch(`/api/projects/${encodeURIComponent(name)}/load`, {
+      method: "PUT",
+      headers: { "X-SILA-Token": TOKEN },
+    });
+    if (!res.ok) { status("Failed to load project"); return; }
+    project = await res.json();
+    renderTracks();
+    document.getElementById("bpm-input").value = project.bpm;
+    status(`Loaded: ${project.name}`);
+  } catch { status("Failed to load project"); }
+}
+
+// ---------------------------------------------------------------------------
+// Song mode / pattern chain
+// ---------------------------------------------------------------------------
+
+let _songChain = [];
+let _songMode = false;
+let _savedSlots = new Set();
+
+async function initSongBar() {
+  try {
+    const res = await GET("/patterns");
+    _savedSlots = new Set(res.slots_used.map(Number));
+    _songChain = res.chain || [];
+    _songMode = res.song_mode || false;
+  } catch { /* ignore */ }
+  renderPatternSlots();
+  document.getElementById("btn-song-mode").textContent = "SONG " + (_songMode ? "ON" : "OFF");
+  if (_songMode) document.getElementById("btn-song-mode").classList.add("active");
+}
+
+function renderPatternSlots() {
+  const wrap = document.getElementById("pattern-slots");
+  wrap.innerHTML = "";
+  for (let i = 0; i < 8; i++) {
+    const slot = document.createElement("div");
+    const label = String.fromCharCode(65 + i);  // A-H
+    slot.className = "pattern-slot" +
+      (_savedSlots.has(i) ? " saved" : "") +
+      (_songChain.includes(i) ? " in-chain" : "");
+    slot.title = `Right-click to save; click to add/remove from chain`;
+    slot.textContent = label;
+    slot.onclick = () => toggleChainSlot(i);
+    slot.oncontextmenu = (e) => { e.preventDefault(); savePatternSlot(i); };
+    wrap.appendChild(slot);
+  }
+}
+
+async function savePatternSlot(slot) {
+  try {
+    await POST(`/patterns/${slot}/save`);
+    _savedSlots.add(slot);
+    renderPatternSlots();
+    status(`Saved to slot ${String.fromCharCode(65 + slot)}`);
+  } catch { status("Failed to save pattern"); }
+}
+
+async function toggleChainSlot(slot) {
+  if (!_savedSlots.has(slot)) {
+    // Auto-save first if empty
+    await savePatternSlot(slot);
+  }
+  const idx = _songChain.indexOf(slot);
+  if (idx >= 0) _songChain.splice(idx, 1);
+  else _songChain.push(slot);
+  try {
+    await PUT("/song/chain", { chain: _songChain });
+    renderPatternSlots();
+  } catch { status("Failed to update chain"); }
+}
+
+async function toggleSongMode() {
+  _songMode = !_songMode;
+  const btn = document.getElementById("btn-song-mode");
+  btn.textContent = "SONG " + (_songMode ? "ON" : "OFF");
+  btn.classList.toggle("active", _songMode);
+  try { await fetch("/api/song/mode?active=" + _songMode, { method: "PUT", headers: { "X-SILA-Token": TOKEN } }); } catch { /* ignore */ }
+}
+
+async function newProjectFromMenu() {
+  const name = prompt("Project name:");
+  if (!name || !name.trim()) return;
+  try {
+    const res = await POST("/projects", { name: name.trim() });
+    project = res;
+    renderTracks();
+    document.getElementById("bpm-input").value = project.bpm;
+    status(`Created: ${project.name}`);
+  } catch { status("Failed to create project"); }
+}
 
 // ---------------------------------------------------------------------------
 // Sample browser

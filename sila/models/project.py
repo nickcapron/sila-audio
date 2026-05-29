@@ -50,12 +50,14 @@ class SampleLayer(BaseModel):
 class TrackModel(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     name: str = "Track"
+    color: str = ""  # hex color from the track palette; "" = use accent default
     # Intent annotation — stored and displayed; never executed.
     notes: str = ""
     muted: bool = False
     solo: bool = False
 
     step_count: int = Field(default=16, ge=1, le=256)
+    humanize: float = Field(default=0.0, ge=0.0, le=1.0)
     steps: list[Step] = Field(default_factory=list)
 
     samples: list[SampleLayer] = Field(default_factory=list)
@@ -82,6 +84,12 @@ class TrackModel(BaseModel):
             self.steps = self.steps[: self.step_count]
 
 
+class PatternBank(BaseModel):
+    """8 named slots; each slot stores a snapshot of all tracks' steps."""
+    # slot_index (0-7) → {track_id: [Step, ...]}
+    slots: dict[int, dict[str, list[Step]]] = Field(default_factory=dict)
+
+
 class ProjectModel(BaseModel):
     version: int = 1
     name: str = "Untitled"
@@ -91,3 +99,8 @@ class ProjectModel(BaseModel):
 
     # fill_active drives "fill" trig conditions during playback.
     fill_active: bool = False
+
+    # Song / pattern chain
+    pattern_bank: PatternBank = Field(default_factory=PatternBank)
+    song_chain: list[int] = Field(default_factory=list)  # ordered slot indices
+    song_mode: bool = False

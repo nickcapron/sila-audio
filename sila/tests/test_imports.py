@@ -20,6 +20,7 @@ MODULES = [
     "sila.library.browser",
     "sila.import_tool.mapper",
     "sila.import_tool.scanner",
+    "sila.mcp.bridge",
     "sila.engine.sequencer",
     "sila.engine.sampler",
     "sila.engine.lfo",

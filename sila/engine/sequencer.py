@@ -64,10 +64,14 @@ class Sequencer:
         Advance all unmuted tracks by one step. Returns events that fired.
         Calls self.on_trig for each event if a callback is registered.
         """
+        tracks = list(self._project.tracks)
+        any_solo = any(t.solo for t in tracks)
         events: list[TrigEvent] = []
-        for track in list(self._project.tracks):  # snapshot: add/remove mid-tick is safe
+        for track in tracks:  # snapshot: add/remove mid-tick is safe
             if track.muted:
                 continue
+            if any_solo and not track.solo:
+                continue  # silenced by another track's solo
             event = self._evaluate_track(track)
             if event is not None:
                 events.append(event)
