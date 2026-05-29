@@ -174,6 +174,126 @@
     .step.on { background: var(--step-on); border-color: #ff7843; }
     .step.playing { outline: 2px solid #fff; outline-offset: -2px; }
 
+    /* ── Library browser panel (left, collapsible) ──────────── */
+    #lib-panel {
+      width: 260px;
+      border-right: 1px solid var(--border);
+      flex-shrink: 0;
+      overflow: hidden;
+      transition: width 0.18s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    #lib-panel.collapsed { width: 0; border-right-width: 0; }
+    #lib-panel-inner {
+      width: 260px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .lib-search {
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .lib-search input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 3px;
+    }
+    .lib-search input:focus { outline: none; border-color: #444; }
+    #lib-tree {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .lib-pack-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+    .lib-pack-header:hover { background: #222; }
+    .lib-cat-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px 4px 20px;
+      cursor: pointer;
+      font-size: 11px;
+      color: var(--text-dim);
+      user-select: none;
+    }
+    .lib-cat-header:hover { color: var(--text); background: #1c1c1c; }
+    .lib-caret {
+      font-size: 8px;
+      flex-shrink: 0;
+      transition: transform 0.12s;
+      display: inline-block;
+    }
+    .lib-caret.open { transform: rotate(90deg); }
+    .lib-pack-body, .lib-cat-body { display: none; }
+    .lib-pack-body.open, .lib-cat-body.open { display: block; }
+    .lib-sample {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 6px 3px 34px;
+      cursor: default;
+    }
+    .lib-sample:hover { background: #1e1e1e; }
+    .lib-sample.hidden { display: none; }
+    .lib-sample-name {
+      flex: 1;
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .lib-sample-size {
+      font-size: 10px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+      min-width: 44px;
+      text-align: right;
+    }
+    .lib-btn-prev, .lib-btn-add {
+      width: 18px; height: 18px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      color: var(--text-dim);
+      font-size: 10px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      font-family: inherit;
+      padding: 0;
+      line-height: 1;
+    }
+    .lib-btn-prev:hover { color: var(--accent); border-color: var(--accent); }
+    .lib-btn-add:hover { color: #66bb66; border-color: #66bb66; }
+    .lib-empty {
+      padding: 16px 12px;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
     /* ── Sidebar (inspector) ─────────────────────────────────── */
     #sidebar {
       width: 220px;
@@ -217,6 +337,7 @@
 <body>
 
 <header>
+  <button class="btn" id="btn-library" onclick="toggleBrowser()" title="Sample library">LIBRARY</button>
   <span class="logo">SILA</span>
   <div class="bpm-display">
     <span style="color:var(--text-dim)">BPM</span>
@@ -233,6 +354,15 @@
 </header>
 
 <main>
+  <div id="lib-panel" class="collapsed">
+    <div id="lib-panel-inner">
+      <div class="lib-search">
+        <input type="text" id="lib-search" placeholder="Search library…" oninput="filterLibrary(this.value)">
+      </div>
+      <div id="lib-tree"><div class="lib-empty">Press LIBRARY to browse samples</div></div>
+    </div>
+  </div>
+
   <div id="track-list">
     <div id="tracks-container"></div>
   </div>

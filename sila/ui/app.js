@@ -407,4 +407,184 @@ function status(msg) {
 // Keep the server alive while the tab is open; server shuts down when pings stop.
 setInterval(() => { POST("/ping").catch(() => {}); }, 5000);
 
+// ---------------------------------------------------------------------------
+// Sample browser
+// ---------------------------------------------------------------------------
+
+let _libraryLoaded = false;
+
+function toggleBrowser() {
+  const panel = document.getElementById("lib-panel");
+  const wasCollapsed = panel.classList.contains("collapsed");
+  panel.classList.toggle("collapsed");
+  if (wasCollapsed && !_libraryLoaded) {
+    _libraryLoaded = true;
+    loadLibrary();
+  }
+}
+
+async function loadLibrary() {
+  document.getElementById("lib-tree").innerHTML = '<div class="lib-empty">Loading…</div>';
+  try {
+    const data = await GET("/library");
+    renderLibrary(data.packs);
+  } catch {
+    document.getElementById("lib-tree").innerHTML = '<div class="lib-empty">Failed to load library</div>';
+  }
+}
+
+function _fmtSize(bytes) {
+  if (bytes < 1024)            return `${bytes} B`;
+  if (bytes < 1024 * 1024)     return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderLibrary(packs) {
+  const tree = document.getElementById("lib-tree");
+  tree.innerHTML = "";
+  if (!packs || !packs.length) {
+    tree.innerHTML = '<div class="lib-empty">Library is empty — add samples to ~/SILA/library/</div>';
+    return;
+  }
+  for (const pack of packs) {
+    tree.appendChild(_buildPackNode(pack));
+  }
+}
+
+function _buildPackNode(pack) {
+  const el   = document.createElement("div");
+  el.className   = "lib-pack";
+  el.dataset.pack = pack.name;
+
+  const hdr   = document.createElement("div");
+  hdr.className = "lib-pack-header";
+  const caret = document.createElement("span");
+  caret.className = "lib-caret";
+  caret.textContent = "▶";
+  hdr.appendChild(caret);
+  hdr.appendChild(document.createTextNode(" " + pack.name));
+  el.appendChild(hdr);
+
+  const body  = document.createElement("div");
+  body.className = "lib-pack-body";
+  for (const cat of pack.categories) {
+    body.appendChild(_buildCatNode(cat));
+  }
+  el.appendChild(body);
+
+  hdr.onclick = () => {
+    caret.classList.toggle("open");
+    body.classList.toggle("open");
+  };
+  return el;
+}
+
+function _buildCatNode(cat) {
+  const el   = document.createElement("div");
+  el.className   = "lib-cat";
+  el.dataset.cat = cat.name;
+
+  const hdr   = document.createElement("div");
+  hdr.className = "lib-cat-header";
+  const caret = document.createElement("span");
+  caret.className = "lib-caret";
+  caret.textContent = "▶";
+  hdr.appendChild(caret);
+  hdr.appendChild(document.createTextNode(" " + cat.name));
+  el.appendChild(hdr);
+
+  const body  = document.createElement("div");
+  body.className = "lib-cat-body";
+  for (const s of cat.samples) {
+    body.appendChild(_buildSampleNode(s));
+  }
+  el.appendChild(body);
+
+  hdr.onclick = () => {
+    caret.classList.toggle("open");
+    body.classList.toggle("open");
+  };
+  return el;
+}
+
+function _buildSampleNode(s) {
+  const el = document.createElement("div");
+  el.className     = "lib-sample";
+  el.dataset.name  = s.name.toLowerCase();
+  el.dataset.path  = s.path;
+  el.dataset.fname = s.filename;
+
+  const name = document.createElement("span");
+  name.className   = "lib-sample-name";
+  name.textContent = s.name;
+  name.title       = s.filename;
+  el.appendChild(name);
+
+  const sz = document.createElement("span");
+  sz.className   = "lib-sample-size";
+  sz.textContent = _fmtSize(s.size_bytes);
+  el.appendChild(sz);
+
+  const prev = document.createElement("button");
+  prev.className   = "lib-btn-prev";
+  prev.textContent = "▶";
+  prev.title       = "Preview";
+  prev.onclick = (e) => { e.stopPropagation(); previewSample(s.path); };
+  el.appendChild(prev);
+
+  const add = document.createElement("button");
+  add.className   = "lib-btn-add";
+  add.textContent = "+";
+  add.title       = "Add to project";
+  add.onclick = (e) => { e.stopPropagation(); addSample(s.path, s.filename); };
+  el.appendChild(add);
+
+  el.ondblclick = () => addSample(s.path, s.filename);
+  return el;
+}
+
+function filterLibrary(q) {
+  const query = q.trim().toLowerCase();
+
+  // Reveal/hide individual samples.
+  document.querySelectorAll(".lib-sample").forEach(el => {
+    el.classList.toggle("hidden", query !== "" && !el.dataset.name.includes(query));
+  });
+
+  // Auto-expand packs/categories that contain visible matches; hide empty ones.
+  document.querySelectorAll(".lib-cat").forEach(catEl => {
+    const hasMatch = catEl.querySelectorAll(".lib-sample:not(.hidden)").length > 0;
+    catEl.style.display = hasMatch ? "" : "none";
+    if (query && hasMatch) {
+      catEl.querySelector(".lib-caret").classList.add("open");
+      catEl.querySelector(".lib-cat-body").classList.add("open");
+    }
+  });
+  document.querySelectorAll(".lib-pack").forEach(packEl => {
+    const hasMatch = packEl.querySelectorAll(".lib-sample:not(.hidden)").length > 0;
+    packEl.style.display = hasMatch ? "" : "none";
+    if (query && hasMatch) {
+      packEl.querySelector(".lib-caret").classList.add("open");
+      packEl.querySelector(".lib-pack-body").classList.add("open");
+    }
+  });
+}
+
+async function previewSample(path) {
+  try {
+    await POST("/library/preview", { path });
+  } catch {
+    status("Preview failed — check audio device");
+  }
+}
+
+async function addSample(path, filename) {
+  try {
+    await POST("/library/add", { path });
+    status(`Added to project: ${filename}`);
+  } catch {
+    status("Failed to add sample to project");
+  }
+}
+
 boot();
