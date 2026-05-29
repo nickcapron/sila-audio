@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import sys
 import threading
 
 import numpy as np
@@ -9,6 +10,37 @@ import sounddevice as sd
 
 SR = 48_000
 BLOCK = 512  # frames per callback
+
+
+def _get_waveout_device_count() -> int:
+    """Return the Windows WinMM waveOut device count, or -1 on non-Windows.
+
+    Unlike PortAudio's device list (cached at Pa_Initialize time), WinMM always
+    reflects the live hardware state, so a change here means a device was added
+    or removed since the last check.
+    """
+    if sys.platform != "win32":
+        return -1
+    try:
+        import ctypes
+        return ctypes.windll.winmm.waveOutGetNumDevs()
+    except Exception:
+        return -1
+
+
+def _refresh_portaudio() -> None:
+    """Force PortAudio to re-enumerate audio devices.
+
+    PortAudio caches the device list at Pa_Initialize() time.  Terminating and
+    reinitializing causes it to rescan, so the next sd.query_* call sees any
+    devices that were plugged in or unplugged since startup.  Only safe to call
+    when no OutputStream is open.
+    """
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception:
+        pass
 
 
 def _find_output_device() -> int | None:
@@ -133,16 +165,50 @@ class AudioEngine:
 
     def _device_watcher(self) -> None:
         """Daemon thread: restart the stream when the default output device changes."""
-        while not self._watcher_stop.wait(timeout=1.0):
-            if self._stopping_intentionally:
-                break
-            new_device = _find_output_device()
-            if (new_device != self._device_idx or self._stream_died.is_set()) \
-                    and not self._stopping_intentionally:
-                self._restart_stream(new_device)
+        last_dev_count = _get_waveout_device_count()
+        _slow_ticks = 0
+        _SLOW_POLL = 5  # call _find_output_device every N seconds as fallback
 
-    def _restart_stream(self, new_device: int | None) -> None:
-        """Close the current stream and reopen on *new_device*."""
+        while not self._watcher_stop.wait(timeout=1.0):
+            # Use continue (not break) so the watcher survives while _restart_stream
+            # holds _stopping_intentionally=True mid-swap.
+            if self._stopping_intentionally:
+                continue
+
+            # WinMM always reflects live hardware; PortAudio's device cache does not.
+            dev_count = _get_waveout_device_count()
+            hardware_changed = dev_count != last_dev_count and last_dev_count >= 0
+            last_dev_count = dev_count
+
+            stream_died = self._stream_died.is_set()
+            _slow_ticks += 1
+
+            # _find_output_device() scans PortAudio structures and holds the GIL
+            # for several ms on each call. Only call it when something interesting
+            # happened, not on every 1-second tick — that caused timing jitter in
+            # the clock thread when it needed to wake from time.sleep().
+            if not (hardware_changed or stream_died or _slow_ticks >= _SLOW_POLL):
+                continue
+            if _slow_ticks >= _SLOW_POLL:
+                _slow_ticks = 0
+
+            new_device = _find_output_device()
+
+            # Avoid a restart loop when we fell back to device=None: if
+            # _device_idx is None (we're already on the system default and it
+            # works), don't restart just because a specific WASAPI device is
+            # found. Only restart on an explicit hardware event or stream death.
+            device_changed = (
+                new_device != self._device_idx
+                and not (self._device_idx is None and new_device is not None)
+            )
+
+            if (hardware_changed or device_changed or stream_died) \
+                    and not self._stopping_intentionally:
+                self._restart_stream(new_device, rescan=hardware_changed)
+
+    def _restart_stream(self, new_device: int | None, rescan: bool = False) -> None:
+        """Close the current stream and reopen, rescanning PortAudio devices if requested."""
         if self._stopping_intentionally:
             return
 
@@ -160,6 +226,12 @@ class AudioEngine:
 
         with self._lock:
             self._voices.clear()
+
+        # Stream is now closed — safe to reinitialize PortAudio and get a fresh
+        # device list that includes any hardware added since startup.
+        if rescan:
+            _refresh_portaudio()
+            new_device = _find_output_device()
 
         self._device_idx = new_device
         self._stopping_intentionally = False
