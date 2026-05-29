@@ -66,8 +66,8 @@ def _reset_seq() -> None:
 
 
 def _load_sample_players() -> None:
-    global _sample_players
-    _sample_players = {}
+    # Mutate in place so any running PlaybackClock's reference stays valid.
+    _sample_players.clear()
     for track in _store.project.tracks:
         player = SamplePlayer()
         player.load(_store.samples_dir, track.samples)

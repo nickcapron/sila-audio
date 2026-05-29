@@ -65,7 +65,7 @@ class Sequencer:
         Calls self.on_trig for each event if a callback is registered.
         """
         events: list[TrigEvent] = []
-        for track in self._project.tracks:
+        for track in list(self._project.tracks):  # snapshot: add/remove mid-tick is safe
             if track.muted:
                 continue
             event = self._evaluate_track(track)

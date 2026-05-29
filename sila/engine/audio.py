@@ -88,7 +88,8 @@ class AudioEngine:
 
     def __init__(self) -> None:
         self._voices: list[_Voice] = []
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()        # guards _voices (held briefly in callback)
+        self._stream_lock = threading.Lock() # guards stream lifecycle + PortAudio state
         self._stream: sd.OutputStream | None = None
         self._stopping_intentionally = False
         self._stream_died = threading.Event()
@@ -110,42 +111,43 @@ class AudioEngine:
         return self._stream_died.is_set()
 
     def start(self) -> None:
-        # If there's a live, active stream already, nothing to do.
-        if self._stream is not None and self._stream.active:
-            return
-        # Clean up a dead or stopped stream before reopening.
-        if self._stream is not None:
-            try:
-                self._stream.close()
-            except Exception:
-                pass
-            self._stream = None
-        self._stopping_intentionally = False
-        self._stream_died.clear()
-        device = _find_output_device()
-        self._device_idx = device
-        exc_to_raise: Exception | None = None
-        for dev in ([device, None] if device is not None else [None]):
-            try:
-                self._stream = sd.OutputStream(
-                    samplerate=SR,
-                    channels=2,
-                    dtype="float32",
-                    blocksize=BLOCK,
-                    callback=self._callback,
-                    finished_callback=self._on_stream_finished,
-                    device=dev,
-                )
-                self._stream.start()
-                self._device_idx = dev
-                exc_to_raise = None
-                break
-            except sd.PortAudioError as exc:
+        with self._stream_lock:
+            # If there's a live, active stream already, nothing to do.
+            if self._stream is not None and self._stream.active:
+                return
+            # Clean up a dead or stopped stream before reopening.
+            if self._stream is not None:
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
                 self._stream = None
-                exc_to_raise = exc
-        if exc_to_raise is not None:
-            raise RuntimeError(f"Audio device unavailable: {exc_to_raise}") from exc_to_raise
-        # Start the device-change watcher if not already running.
+            self._stopping_intentionally = False
+            self._stream_died.clear()
+            device = _find_output_device()
+            self._device_idx = device
+            exc_to_raise: Exception | None = None
+            for dev in ([device, None] if device is not None else [None]):
+                try:
+                    self._stream = sd.OutputStream(
+                        samplerate=SR,
+                        channels=2,
+                        dtype="float32",
+                        blocksize=BLOCK,
+                        callback=self._callback,
+                        finished_callback=self._on_stream_finished,
+                        device=dev,
+                    )
+                    self._stream.start()
+                    self._device_idx = dev
+                    exc_to_raise = None
+                    break
+                except sd.PortAudioError as exc:
+                    self._stream = None
+                    exc_to_raise = exc
+            if exc_to_raise is not None:
+                raise RuntimeError(f"Audio device unavailable: {exc_to_raise}") from exc_to_raise
+        # Start the device-change watcher outside the lock (no PortAudio calls here).
         self._watcher_stop.clear()
         if self._watcher_thread is None or not self._watcher_thread.is_alive():
             self._watcher_thread = threading.Thread(
@@ -156,10 +158,11 @@ class AudioEngine:
     def stop(self) -> None:
         self._stopping_intentionally = True
         self._watcher_stop.set()
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        with self._stream_lock:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+                self._stream = None
         with self._lock:
             self._voices.clear()
 
@@ -214,54 +217,58 @@ class AudioEngine:
 
         # Suppress finished_callback → stream_died during the swap.
         self._stopping_intentionally = True
-        old_stream = self._stream
-        self._stream = None
 
-        if old_stream is not None:
-            try:
-                old_stream.stop()
-                old_stream.close()
-            except Exception:
-                pass
+        with self._stream_lock:
+            # _stream_lock serialises this against start() and stop() so that
+            # sd.OutputStream() never races with _refresh_portaudio()'s Pa_Terminate().
+            old_stream = self._stream
+            self._stream = None
 
-        with self._lock:
-            self._voices.clear()
+            if old_stream is not None:
+                try:
+                    old_stream.stop()
+                    old_stream.close()
+                except Exception:
+                    pass
 
-        # Stream is now closed — safe to reinitialize PortAudio and get a fresh
-        # device list that includes any hardware added since startup.
-        if rescan:
-            _refresh_portaudio()
-            new_device = _find_output_device()
+            with self._lock:
+                self._voices.clear()
 
-        self._device_idx = new_device
-        self._stopping_intentionally = False
-        self._stream_died.clear()
+            # Stream is now closed — safe to reinitialize PortAudio and get a fresh
+            # device list that includes any hardware added since startup.
+            if rescan:
+                _refresh_portaudio()
+                new_device = _find_output_device()
 
-        candidates = [new_device, None] if new_device is not None else [None]
-        for dev in candidates:
-            if self._stopping_intentionally:
-                return
-            try:
-                stream = sd.OutputStream(
-                    samplerate=SR,
-                    channels=2,
-                    dtype="float32",
-                    blocksize=BLOCK,
-                    callback=self._callback,
-                    finished_callback=self._on_stream_finished,
-                    device=dev,
-                )
-                stream.start()
-                # Guard against stop() being called while we were restarting.
+            self._device_idx = new_device
+            self._stopping_intentionally = False
+            self._stream_died.clear()
+
+            candidates = [new_device, None] if new_device is not None else [None]
+            for dev in candidates:
                 if self._stopping_intentionally:
-                    stream.stop()
-                    stream.close()
-                else:
-                    self._device_idx = dev
-                    self._stream = stream
-                return
-            except sd.PortAudioError:
-                pass  # try next candidate; watcher will retry next tick if all fail
+                    return
+                try:
+                    stream = sd.OutputStream(
+                        samplerate=SR,
+                        channels=2,
+                        dtype="float32",
+                        blocksize=BLOCK,
+                        callback=self._callback,
+                        finished_callback=self._on_stream_finished,
+                        device=dev,
+                    )
+                    stream.start()
+                    # Guard against stop() being called while we were restarting.
+                    if self._stopping_intentionally:
+                        stream.stop()
+                        stream.close()
+                    else:
+                        self._device_idx = dev
+                        self._stream = stream
+                    return
+                except sd.PortAudioError:
+                    pass  # try next candidate; watcher will retry next tick if all fail
 
     def _on_stream_finished(self) -> None:
         # Called by PortAudio on a background thread when the stream stops.
