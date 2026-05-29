@@ -28,6 +28,7 @@ class PlaybackClock:
         self._running = False
         self._start_time: float | None = None
         self._error: str | None = None
+        self._interval: float = 0.0  # seconds per 16th-note; written by start()/set_bpm()
 
     @property
     def running(self) -> bool:
@@ -51,14 +52,17 @@ class PlaybackClock:
             return
         self._running = True
         self._start_time = time.time()
-        interval = 60.0 / bpm / 4.0  # 16th-note in seconds
+        self._interval = 60.0 / bpm / 4.0  # 16th-note in seconds
         self._thread = threading.Thread(
             target=self._run,
-            args=(interval,),
             daemon=True,
             name="sila-clock",
         )
         self._thread.start()
+
+    def set_bpm(self, bpm: float) -> None:
+        """Update tempo during live playback; takes effect on the next tick."""
+        self._interval = 60.0 / bpm / 4.0
 
     def stop(self) -> None:
         self._running = False
@@ -66,7 +70,7 @@ class PlaybackClock:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-    def _run(self, interval: float) -> None:
+    def _run(self) -> None:
         next_tick = time.perf_counter()
         while self._running:
             # If the stream died unexpectedly, attempt one restart before
@@ -89,7 +93,7 @@ class PlaybackClock:
                 volume = track.fx.volume if track else 1.0
                 pan    = track.fx.pan    if track else 0.0
                 self._audio.play(audio, volume=volume, pan=pan)
-            next_tick += interval
+            next_tick += self._interval
             sleep = next_tick - time.perf_counter()
             if sleep > 0:
                 time.sleep(sleep)

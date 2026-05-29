@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sila.models.step import Step
 from sila.security import sanitize_notes
@@ -37,6 +37,14 @@ class SampleLayer(BaseModel):
     loop: bool = False
     # round-robin slot: engine cycles through layers sharing the same velocity range
     rr_group: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _start_before_end(self) -> "SampleLayer":
+        if self.start >= self.end:
+            raise ValueError(
+                f"SampleLayer.start ({self.start}) must be less than end ({self.end})"
+            )
+        return self
 
 
 class TrackModel(BaseModel):

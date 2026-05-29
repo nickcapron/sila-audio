@@ -88,8 +88,9 @@ def test_clock_sets_error_and_stops_when_restart_fails():
     audio = _StubAudio(dies=True, restart_raises="device lost")
     clock = _make_clock(audio)
     clock._running = True
+    clock._interval = 0.001
     # _run exits on the first iteration once restart fails (no sleep reached).
-    clock._run(0.001)
+    clock._run()
     assert clock.error is not None
     assert "device lost" in clock.error
     assert clock.running is False
@@ -99,8 +100,9 @@ def test_clock_recovers_and_continues_when_restart_succeeds():
     """Stream dies but restart succeeds → clock keeps running, no error."""
     audio = _StubAudio(dies=True)  # start() clears the died flag
     clock = _make_clock(audio)
+    clock._interval = 0.005
 
-    t = threading.Thread(target=clock._run, args=(0.005,))
+    t = threading.Thread(target=clock._run)
     clock._running = True
     t.start()
     time.sleep(0.05)
@@ -116,8 +118,9 @@ def test_clock_no_error_on_healthy_stream():
     """Normal operation — no error after several ticks."""
     audio = _StubAudio(dies=False)
     clock = _make_clock(audio)
+    clock._interval = 0.005
 
-    t = threading.Thread(target=clock._run, args=(0.005,))
+    t = threading.Thread(target=clock._run)
     clock._running = True
     t.start()
     time.sleep(0.05)

@@ -87,7 +87,7 @@ def sanitize_project_name(name: str) -> str:
     name = name.replace(" ", "_")
     name = re.sub(r"[^A-Za-z0-9_\-.]", "", name)
     name = name.strip("._")
-    return name[:64] if name else "untitled"
+    return name[:64]  # returns "" if nothing survived sanitization
 
 
 def backup_before_write(path: str | Path) -> Path:

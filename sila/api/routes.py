@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sila.engine.audio import AudioEngine
 from sila.engine.clock import PlaybackClock
 from sila.engine.sampler import SamplePlayer
-from sila.engine.sequencer import Sequencer, TrigEvent
+from sila.engine.sequencer import Sequencer
 from sila.export.digitakt import export_for_digitakt, export_result_summary
 from sila.models.project import ProjectModel, SampleLayer, TrackModel
 from sila.models.step import Step
@@ -24,54 +24,65 @@ from sila.storage.project_store import ProjectStore
 
 router = APIRouter(dependencies=[Depends(require_token)])
 
-_store: ProjectStore = ProjectStore()
-_sequencer: Sequencer | None = None
-_audio_engine = AudioEngine()
-_sample_players: dict[str, SamplePlayer] = {}
-_clock: PlaybackClock | None = None
-_last_ping: float = 0.0
+
+# ---------------------------------------------------------------------------
+# Application state
+# ---------------------------------------------------------------------------
+
+class AppState:
+    """All mutable server state in one place; injected into routes via Depends."""
+
+    def __init__(self) -> None:
+        self.store: ProjectStore = ProjectStore()
+        self.sequencer: Sequencer | None = None
+        self.audio_engine: AudioEngine = AudioEngine()
+        self.sample_players: dict[str, SamplePlayer] = {}
+        self.clock: PlaybackClock | None = None
+        self.last_ping: float = 0.0
+
+    def startup(self) -> None:
+        self.last_ping = time.monotonic()
+        if self.store.load_latest() is not None:
+            self.load_sample_players()
+
+    def last_ping_age(self) -> float:
+        return time.monotonic() - self.last_ping
+
+    def get_seq(self) -> Sequencer:
+        if self.sequencer is None:
+            self.sequencer = Sequencer(self.store.project)
+        return self.sequencer
+
+    def reset_seq(self) -> None:
+        if self.clock is not None:
+            self.clock.stop()
+            self.clock = None
+        self.audio_engine.stop()
+        self.sequencer = None
+
+    def load_sample_players(self) -> None:
+        # Mutate in place so any running PlaybackClock's reference stays valid.
+        self.sample_players.clear()
+        for track in self.store.project.tracks:
+            player = SamplePlayer()
+            player.load(self.store.samples_dir, track.samples)
+            self.sample_players[track.id] = player
 
 
-def set_store(store: ProjectStore) -> None:
-    global _store
-    _store = store
+_state = AppState()
+
+
+def get_state() -> AppState:
+    return _state
+
+
+# Shims called by main.py lifespan and heartbeat watchdog.
+def startup() -> None:
+    _state.startup()
 
 
 def last_ping_age() -> float:
-    return time.monotonic() - _last_ping
-
-
-def startup() -> None:
-    """Auto-load the most recently saved project on server startup."""
-    global _last_ping
-    _last_ping = time.monotonic()
-    if _store.load_latest() is not None:
-        _load_sample_players()
-
-
-def _get_seq() -> Sequencer:
-    global _sequencer
-    if _sequencer is None:
-        _sequencer = Sequencer(_store.project)
-    return _sequencer
-
-
-def _reset_seq() -> None:
-    global _sequencer, _clock
-    if _clock is not None:
-        _clock.stop()
-        _clock = None
-    _audio_engine.stop()
-    _sequencer = None
-
-
-def _load_sample_players() -> None:
-    # Mutate in place so any running PlaybackClock's reference stays valid.
-    _sample_players.clear()
-    for track in _store.project.tracks:
-        player = SamplePlayer()
-        player.load(_store.samples_dir, track.samples)
-        _sample_players[track.id] = player
+    return _state.last_ping_age()
 
 
 # ---------------------------------------------------------------------------
@@ -79,9 +90,9 @@ def _load_sample_players() -> None:
 # ---------------------------------------------------------------------------
 
 @router.get("/projects")
-async def list_projects() -> dict[str, list[str]]:
+async def list_projects(state: AppState = Depends(get_state)) -> dict[str, list[str]]:
     """List all saved project names, most recently modified first."""
-    return {"projects": _store.list_projects()}
+    return {"projects": state.store.list_projects()}
 
 
 class CreateProjectRequest(BaseModel):
@@ -89,28 +100,32 @@ class CreateProjectRequest(BaseModel):
 
 
 @router.post("/projects")
-async def create_project(req: CreateProjectRequest) -> ProjectModel:
+async def create_project(
+    req: CreateProjectRequest, state: AppState = Depends(get_state)
+) -> ProjectModel:
     """Create a new project; name is sanitized to a safe directory name."""
     safe_name = sanitize_project_name(req.name)
-    if not safe_name or safe_name == "untitled" and not req.name.strip():
+    if not safe_name:
         raise HTTPException(status_code=400, detail="Project name is empty after sanitization")
-    _reset_seq()
-    project = _store.new_project(safe_name)
-    _load_sample_players()
+    state.reset_seq()
+    project = state.store.new_project(safe_name)
+    state.load_sample_players()
     return project
 
 
 @router.put("/projects/{name}/load")
-async def load_named_project(name: str) -> ProjectModel:
+async def load_named_project(
+    name: str, state: AppState = Depends(get_state)
+) -> ProjectModel:
     """Load a saved project by name and make it the active project."""
-    _reset_seq()
+    state.reset_seq()
     try:
-        project = _store.load(name)
+        project = state.store.load(name)
     except (FileNotFoundError, OSError):
         raise HTTPException(status_code=404, detail=f"Project {name!r} not found")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _load_sample_players()
+    state.load_sample_players()
     return project
 
 
@@ -131,55 +146,63 @@ class BpmRequest(BaseModel):
 
 
 @router.post("/project/new")
-async def new_project(req: NewProjectRequest) -> ProjectModel:
-    _reset_seq()
-    project = _store.new_project(req.name)
-    _load_sample_players()
+async def new_project(
+    req: NewProjectRequest, state: AppState = Depends(get_state)
+) -> ProjectModel:
+    state.reset_seq()
+    project = state.store.new_project(req.name)
+    state.load_sample_players()
     return project
 
 
 @router.post("/project/load")
-async def load_project(req: LoadProjectRequest) -> ProjectModel:
-    _reset_seq()
-    project = _store.load(req.name)
-    _load_sample_players()
+async def load_project(
+    req: LoadProjectRequest, state: AppState = Depends(get_state)
+) -> ProjectModel:
+    state.reset_seq()
+    project = state.store.load(req.name)
+    state.load_sample_players()
     return project
 
 
 @router.post("/project/save")
-async def save_project() -> dict[str, str]:
-    path = _store.save()
+async def save_project(state: AppState = Depends(get_state)) -> dict[str, str]:
+    path = state.store.save()
     return {"saved": str(path)}
 
 
 @router.get("/project")
-async def get_project() -> ProjectModel:
-    return _store.project
+async def get_project(state: AppState = Depends(get_state)) -> ProjectModel:
+    return state.store.project
 
 
 @router.put("/project/bpm")
-async def set_bpm(req: BpmRequest) -> dict[str, float]:
-    _store.project.bpm = req.bpm
+async def set_bpm(
+    req: BpmRequest, state: AppState = Depends(get_state)
+) -> dict[str, float]:
+    state.store.project.bpm = req.bpm
+    if state.clock is not None and state.clock.running:
+        state.clock.set_bpm(req.bpm)
     return {"bpm": req.bpm}
 
 
 @router.post("/project/undo")
-async def undo() -> dict[str, Any]:
-    project = _store.undo()
+async def undo(state: AppState = Depends(get_state)) -> dict[str, Any]:
+    project = state.store.undo()
     if project is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nothing to undo")
-    _reset_seq()
-    _load_sample_players()
+    state.reset_seq()
+    state.load_sample_players()
     return {"ok": True, "project": project.model_dump()}
 
 
 @router.post("/project/redo")
-async def redo() -> dict[str, Any]:
-    project = _store.redo()
+async def redo(state: AppState = Depends(get_state)) -> dict[str, Any]:
+    project = state.store.redo()
     if project is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nothing to redo")
-    _reset_seq()
-    _load_sample_players()
+    state.reset_seq()
+    state.load_sample_players()
     return {"ok": True, "project": project.model_dump()}
 
 
@@ -205,60 +228,79 @@ class SetSamplesRequest(BaseModel):
 
 
 @router.post("/tracks")
-async def add_track(req: AddTrackRequest) -> TrackModel:
-    _store.snapshot()
+async def add_track(
+    req: AddTrackRequest, state: AppState = Depends(get_state)
+) -> TrackModel:
+    state.store.snapshot()
     track = TrackModel(name=req.name, step_count=req.step_count)
     track.ensure_steps()
-    _get_seq().add_track(track)
+    state.get_seq().add_track(track)
     player = SamplePlayer()
-    player.load(_store.samples_dir, track.samples)
-    _sample_players[track.id] = player
+    player.load(state.store.samples_dir, track.samples)
+    state.sample_players[track.id] = player
     return track
 
 
 @router.delete("/tracks/{track_id}")
-async def remove_track(track_id: str) -> dict[str, bool]:
-    _store.snapshot()
-    _get_seq().remove_track(track_id)
-    _sample_players.pop(track_id, None)
+async def remove_track(
+    track_id: str, state: AppState = Depends(get_state)
+) -> dict[str, bool]:
+    state.store.snapshot()
+    state.get_seq().remove_track(track_id)
+    state.sample_players.pop(track_id, None)
     return {"ok": True}
 
 
 @router.put("/tracks/{track_id}/notes")
-async def update_track_notes(track_id: str, req: UpdateTrackNotesRequest) -> dict[str, str]:
-    track = _find_track(track_id)
-    _store.snapshot()
+async def update_track_notes(
+    track_id: str,
+    req: UpdateTrackNotesRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, str]:
+    track = _find_track(state, track_id)
+    state.store.snapshot()
     track.notes = sanitize_notes(req.notes)
     return {"notes": track.notes}
 
 
 @router.put("/tracks/{track_id}/steps/{step_index}")
-async def update_step(track_id: str, step_index: int, req: UpdateStepRequest) -> Step:
-    track = _find_track(track_id)
+async def update_step(
+    track_id: str,
+    step_index: int,
+    req: UpdateStepRequest,
+    state: AppState = Depends(get_state),
+) -> Step:
+    track = _find_track(state, track_id)
     if step_index < 0 or step_index >= len(track.steps):
         raise HTTPException(status_code=404, detail="Step index out of range")
-    _store.snapshot()
+    state.store.snapshot()
     track.steps[step_index] = req.step
     return req.step
 
 
 @router.put("/tracks/{track_id}/mute")
-async def toggle_mute(track_id: str) -> dict[str, bool]:
-    track = _find_track(track_id)
-    _store.snapshot()
+async def toggle_mute(
+    track_id: str, state: AppState = Depends(get_state)
+) -> dict[str, bool]:
+    track = _find_track(state, track_id)
+    state.store.snapshot()
     track.muted = not track.muted
     return {"muted": track.muted}
 
 
 @router.put("/tracks/{track_id}/samples")
-async def set_track_samples(track_id: str, req: SetSamplesRequest) -> dict[str, Any]:
+async def set_track_samples(
+    track_id: str,
+    req: SetSamplesRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, Any]:
     """Assign sample layers to a track and reload its sample player."""
-    track = _find_track(track_id)
-    _store.snapshot()
+    track = _find_track(state, track_id)
+    state.store.snapshot()
     track.samples = req.samples
     player = SamplePlayer()
-    player.load(_store.samples_dir, track.samples)
-    _sample_players[track_id] = player
+    player.load(state.store.samples_dir, track.samples)
+    state.sample_players[track_id] = player
     return {"track_id": track_id, "sample_count": len(req.samples)}
 
 
@@ -271,59 +313,67 @@ class StartRequest(BaseModel):
 
 
 @router.post("/sequencer/start")
-async def start_sequencer(req: StartRequest = StartRequest()) -> dict[str, Any]:
-    global _clock
-    if _clock is not None and _clock.running:
-        return {"ok": True, "already_running": True, "bpm": _store.project.bpm, "started_at": _clock.start_time}
-    bpm = req.bpm if req.bpm is not None else _store.project.bpm
-    _store.project.bpm = bpm
+async def start_sequencer(
+    req: StartRequest = StartRequest(),
+    state: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    if state.clock is not None and state.clock.running:
+        return {
+            "ok": True,
+            "already_running": True,
+            "bpm": state.store.project.bpm,
+            "started_at": state.clock.start_time,
+        }
+    bpm = req.bpm if req.bpm is not None else state.store.project.bpm
+    state.store.project.bpm = bpm
     try:
-        _audio_engine.start()
+        state.audio_engine.start()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    seq = _get_seq()
+    seq = state.get_seq()
     seq.reset()
-    _clock = PlaybackClock(seq, _sample_players, _audio_engine)
-    _clock.start(bpm)
-    return {"ok": True, "bpm": bpm, "started_at": _clock.start_time}
+    state.clock = PlaybackClock(seq, state.sample_players, state.audio_engine)
+    state.clock.start(bpm)
+    return {"ok": True, "bpm": bpm, "started_at": state.clock.start_time}
 
 
 @router.post("/sequencer/stop")
-async def stop_sequencer() -> dict[str, bool]:
-    global _clock
-    if _clock is not None:
-        _clock.stop()
-        _clock = None
-    _audio_engine.stop()
-    _get_seq().reset()
+async def stop_sequencer(state: AppState = Depends(get_state)) -> dict[str, bool]:
+    if state.clock is not None:
+        state.clock.stop()
+        state.clock = None
+    state.audio_engine.stop()
+    state.get_seq().reset()
     return {"ok": True}
 
 
 @router.post("/sequencer/fill")
-async def set_fill(active: bool) -> dict[str, bool]:
-    _get_seq().fill_active = active
+async def set_fill(
+    active: bool, state: AppState = Depends(get_state)
+) -> dict[str, bool]:
+    state.get_seq().fill_active = active
     return {"fill_active": active}
 
 
 @router.get("/sequencer/status")
-async def sequencer_status() -> dict[str, Any]:
-    playing = _clock is not None and _clock.running
-    error = _clock.error if _clock is not None else None
+async def sequencer_status(state: AppState = Depends(get_state)) -> dict[str, Any]:
+    playing = state.clock is not None and state.clock.running
+    error = state.clock.error if state.clock is not None else None
     try:
-        bpm: float | None = _store.project.bpm
+        bpm: float | None = state.store.project.bpm
     except RuntimeError:
         bpm = None
     return {
         "playing": playing,
-        "healthy": _clock.healthy if _clock is not None else True,
+        "healthy": state.clock.healthy if state.clock is not None else True,
         "error": error,
         "bpm": bpm,
     }
 
 
 @router.post("/sequencer/reset")
-async def reset_sequencer() -> dict[str, bool]:
-    _get_seq().reset()
+async def reset_sequencer(state: AppState = Depends(get_state)) -> dict[str, bool]:
+    state.get_seq().reset()
     return {"ok": True}
 
 
@@ -332,9 +382,9 @@ async def reset_sequencer() -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 @router.get("/samples")
-async def list_samples() -> dict[str, list[str]]:
+async def list_samples(state: AppState = Depends(get_state)) -> dict[str, list[str]]:
     """Return audio files available in the current project's samples/ directory."""
-    samples_dir = _store.samples_dir
+    samples_dir = state.store.samples_dir
     if not samples_dir.exists():
         return {"files": []}
     files = sorted(
@@ -349,10 +399,9 @@ async def list_samples() -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 
 @router.post("/ping")
-async def ping() -> dict[str, bool]:
+async def ping(state: AppState = Depends(get_state)) -> dict[str, bool]:
     """Browser calls this every few seconds so the server knows the UI is open."""
-    global _last_ping
-    _last_ping = time.monotonic()
+    state.last_ping = time.monotonic()
     return {"ok": True}
 
 
@@ -365,11 +414,13 @@ class ExportRequest(BaseModel):
 
 
 @router.post("/export/digitakt")
-async def export_digitakt(req: ExportRequest) -> dict[str, str]:
+async def export_digitakt(
+    req: ExportRequest, state: AppState = Depends(get_state)
+) -> dict[str, str]:
     out = Path(req.output_dir)
     if not out.is_absolute():
         raise HTTPException(status_code=400, detail="output_dir must be an absolute path")
-    result = export_for_digitakt(_store.project, _store.samples_dir, out)
+    result = export_for_digitakt(state.store.project, state.store.samples_dir, out)
     return {"summary": export_result_summary(result)}
 
 
@@ -377,8 +428,8 @@ async def export_digitakt(req: ExportRequest) -> dict[str, str]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _find_track(track_id: str) -> TrackModel:
-    for t in _store.project.tracks:
+def _find_track(state: AppState, track_id: str) -> TrackModel:
+    for t in state.store.project.tracks:
         if t.id == track_id:
             return t
     raise HTTPException(status_code=404, detail=f"Track {track_id!r} not found")
