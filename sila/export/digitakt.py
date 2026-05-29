@@ -22,6 +22,7 @@ import numpy as np
 import soundfile as sf
 import soxr
 
+from sila.engine.audio_loader import load_audio_mono_f32
 from sila.models.project import ProjectModel, SampleLayer
 from sila.security import safe_path, sanitize_filename
 
@@ -61,16 +62,9 @@ def _collect_sample_paths(project: ProjectModel) -> list[str]:
 
 
 def _load_as_mono_float(src_path: Path) -> tuple[np.ndarray, int]:
-    """
-    Load any WAV/AIFF into a float64 mono array.
-    Stereo is summed as (L+R)*0.5 — matches Elektron Transfer behaviour.
-    """
-    data, sr = sf.read(str(src_path), dtype="float64", always_2d=True)
-    if data.shape[1] == 1:
-        mono = data[:, 0]
-    else:
-        # Sum all channels to mono at equal weight — preserves perceived level.
-        mono = data.mean(axis=1)
+    """Load any WAV/AIFF into a float32 mono array, returning (audio, original_sr)."""
+    data, sr = sf.read(str(src_path), dtype="float32", always_2d=True)
+    mono = data[:, 0] if data.shape[1] == 1 else data.mean(axis=1)
     return mono, sr
 
 
@@ -164,13 +158,11 @@ def export_for_digitakt(
             continue
 
         try:
-            mono, src_sr = _load_as_mono_float(src)
+            audio = load_audio_mono_f32(src)
         except Exception as exc:
             log.warning("Failed to load %r: %s", str(src), exc)
             result.skipped += 1
             continue
-
-        audio = _resample_if_needed(mono, src_sr)
 
         violations = _validate_limits(rel_path, audio, TARGET_SR)
         if violations:

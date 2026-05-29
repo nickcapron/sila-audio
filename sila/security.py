@@ -76,6 +76,20 @@ def sanitize_filename(name: str) -> str:
     return name[:16] if name else "untitled"
 
 
+def sanitize_project_name(name: str) -> str:
+    """
+    Return a filesystem-safe project directory name.
+
+    Same rules as sanitize_filename but with a 64-character limit instead of
+    16, since project names are not constrained by Digitakt hardware limits.
+    Spaces become underscores; non-ASCII and OS-reserved characters are stripped.
+    """
+    name = name.replace(" ", "_")
+    name = re.sub(r"[^A-Za-z0-9_\-.]", "", name)
+    name = name.strip("._")
+    return name[:64] if name else "untitled"
+
+
 def backup_before_write(path: str | Path) -> Path:
     """
     Copy `path` to a timestamped backup in the same directory and return the

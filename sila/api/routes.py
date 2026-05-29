@@ -19,7 +19,7 @@ from sila.engine.sequencer import Sequencer, TrigEvent
 from sila.export.digitakt import export_for_digitakt, export_result_summary
 from sila.models.project import ProjectModel, SampleLayer, TrackModel
 from sila.models.step import Step
-from sila.security import require_token, sanitize_notes
+from sila.security import require_token, sanitize_notes, sanitize_project_name
 from sila.storage.project_store import ProjectStore
 
 router = APIRouter(dependencies=[Depends(require_token)])
@@ -75,7 +75,47 @@ def _load_sample_players() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Project endpoints
+# Project management
+# ---------------------------------------------------------------------------
+
+@router.get("/projects")
+async def list_projects() -> dict[str, list[str]]:
+    """List all saved project names, most recently modified first."""
+    return {"projects": _store.list_projects()}
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+
+
+@router.post("/projects")
+async def create_project(req: CreateProjectRequest) -> ProjectModel:
+    """Create a new project; name is sanitized to a safe directory name."""
+    safe_name = sanitize_project_name(req.name)
+    if not safe_name or safe_name == "untitled" and not req.name.strip():
+        raise HTTPException(status_code=400, detail="Project name is empty after sanitization")
+    _reset_seq()
+    project = _store.new_project(safe_name)
+    _load_sample_players()
+    return project
+
+
+@router.put("/projects/{name}/load")
+async def load_named_project(name: str) -> ProjectModel:
+    """Load a saved project by name and make it the active project."""
+    _reset_seq()
+    try:
+        project = _store.load(name)
+    except (FileNotFoundError, OSError):
+        raise HTTPException(status_code=404, detail=f"Project {name!r} not found")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _load_sample_players()
+    return project
+
+
+# ---------------------------------------------------------------------------
+# Project endpoints (legacy — kept for UI backward compat)
 # ---------------------------------------------------------------------------
 
 class NewProjectRequest(BaseModel):

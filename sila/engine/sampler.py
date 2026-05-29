@@ -9,25 +9,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
-import soxr
 
-from sila.models.project import SampleLayer, TrackModel
+from sila.engine.audio_loader import load_audio_mono_f32
+from sila.models.project import SampleLayer
 from sila.security import safe_path
-
-TARGET_SR = 48_000
 
 
 class LoadedSample:
-    """A decoded audio buffer for one SampleLayer."""
+    """A decoded audio buffer for one SampleLayer (mono float32 at TARGET_SR)."""
 
-    def __init__(self, layer: SampleLayer, audio: np.ndarray, sr: int) -> None:
+    def __init__(self, layer: SampleLayer, audio: np.ndarray) -> None:
         self.layer = layer
-        self.sr = sr
-        # Resample to target SR if needed.
-        if sr != TARGET_SR:
-            audio = soxr.resample(audio, sr, TARGET_SR, quality="HQ")
-        self.audio = audio  # float32 mono, target SR
+        self.audio = audio  # already mono float32 at TARGET_SR
 
     def slice(self) -> np.ndarray:
         """Return the start–end region of the audio buffer."""
@@ -51,9 +44,11 @@ class SamplePlayer:
             src = safe_path(samples_dir, layer.path)
             if not src.exists():
                 continue
-            data, sr = sf.read(str(src), dtype="float32", always_2d=True)
-            mono = data[:, 0] if data.shape[1] == 1 else data.mean(axis=1)
-            self._layers.append(LoadedSample(layer, mono, sr))
+            try:
+                audio = load_audio_mono_f32(src)
+            except Exception:
+                continue
+            self._layers.append(LoadedSample(layer, audio))
 
     def get(self, velocity: int) -> np.ndarray | None:
         """

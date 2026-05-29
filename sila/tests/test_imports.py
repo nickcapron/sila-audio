@@ -16,6 +16,7 @@ MODULES = [
     "sila.security",
     "sila.models.step",
     "sila.models.project",
+    "sila.engine.audio_loader",
     "sila.engine.sequencer",
     "sila.engine.sampler",
     "sila.engine.lfo",
