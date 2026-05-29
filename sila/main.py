@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from sila.api.routes import router, startup as routes_startup, last_ping_age
@@ -80,6 +81,13 @@ app.include_router(router, prefix="/api")
 # Serve the UI from the ui/ directory.
 import pathlib
 _UI_DIR = pathlib.Path(__file__).parent / "ui"
+
+# Explicit route so /import serves the import tool page, not index.html.
+# Must be registered before the catch-all StaticFiles mount.
+@app.get("/import", include_in_schema=False)
+async def import_page() -> FileResponse:
+    return FileResponse(str(_UI_DIR / "import.html"))
+
 app.mount("/", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
 

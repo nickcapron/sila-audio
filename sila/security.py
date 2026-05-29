@@ -90,6 +90,21 @@ def sanitize_project_name(name: str) -> str:
     return name[:64]  # returns "" if nothing survived sanitization
 
 
+def sanitize_library_filename(name: str) -> str:
+    """Return a filesystem-safe filename for library copies.
+
+    Same character rules as sanitize_filename but with a 64-char limit on the
+    stem instead of 16, and preserves the original file extension.
+    """
+    p = Path(name)
+    ext = p.suffix.lower()
+    stem = p.stem.replace(" ", "_")
+    stem = re.sub(r"[^A-Za-z0-9_\-.]", "", stem)
+    stem = stem.strip("._")
+    stem = stem[:64] if stem else "sample"
+    return stem + ext
+
+
 def backup_before_write(path: str | Path) -> Path:
     """
     Copy `path` to a timestamped backup in the same directory and return the

@@ -13,10 +13,21 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from sila.engine.audio import AudioEngine
+from sila.engine.audio_loader import load_audio_mono_f32
 from sila.engine.clock import PlaybackClock
 from sila.engine.sampler import SamplePlayer
 from sila.engine.sequencer import Sequencer
 from sila.export.digitakt import export_for_digitakt, export_result_summary
+from sila.import_tool.scanner import ImportResult, ScanResult, execute_import, scan_folder
+from sila.library.browser import (
+    CANONICAL_CATEGORIES,
+    LIBRARY_ROOT,
+    PackInfo,
+    copy_to_project,
+    ensure_my_samples,
+    get_library_tree,
+    resolve_library_path,
+)
 from sila.models.project import ProjectModel, SampleLayer, TrackModel
 from sila.models.step import Step
 from sila.security import require_token, sanitize_notes, sanitize_project_name
@@ -42,6 +53,7 @@ class AppState:
 
     def startup(self) -> None:
         self.last_ping = time.monotonic()
+        ensure_my_samples()
         if self.store.load_latest() is not None:
             self.load_sample_players()
 
@@ -406,6 +418,64 @@ async def ping(state: AppState = Depends(get_state)) -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
+# Library browser
+# ---------------------------------------------------------------------------
+
+@router.get("/library")
+async def get_library(state: AppState = Depends(get_state)) -> dict[str, list[PackInfo]]:
+    """Return the full pack/category/sample tree for the sample browser."""
+    return {"packs": get_library_tree()}
+
+
+class LibraryPreviewRequest(BaseModel):
+    path: str  # relative path from LIBRARY_ROOT
+
+
+@router.post("/library/preview")
+async def preview_library_sample(
+    req: LibraryPreviewRequest, state: AppState = Depends(get_state)
+) -> dict[str, bool]:
+    """Play a library sample through the audio engine without assigning it to a track."""
+    try:
+        src = resolve_library_path(req.path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid library path")
+    if not src.exists():
+        raise HTTPException(status_code=404, detail="Sample not found in library")
+    try:
+        audio = load_audio_mono_f32(src)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to load sample: {exc}")
+    if not state.audio_engine.healthy:
+        try:
+            state.audio_engine.start()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+    state.audio_engine.play(audio)
+    return {"ok": True}
+
+
+class LibraryAddRequest(BaseModel):
+    path: str  # relative path from LIBRARY_ROOT
+
+
+@router.post("/library/add")
+async def add_library_sample(
+    req: LibraryAddRequest, state: AppState = Depends(get_state)
+) -> dict[str, str]:
+    """Copy a library sample into the current project's samples/ folder."""
+    try:
+        filename = copy_to_project(req.path, state.store.samples_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid library path")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"filename": filename}
+
+
+# ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
 
@@ -422,6 +492,100 @@ async def export_digitakt(
         raise HTTPException(status_code=400, detail="output_dir must be an absolute path")
     result = export_for_digitakt(state.store.project, state.store.samples_dir, out)
     return {"summary": export_result_summary(result)}
+
+
+# ---------------------------------------------------------------------------
+# Sample import tool
+# ---------------------------------------------------------------------------
+
+import asyncio as _asyncio
+import threading as _threading
+
+_browse_lock = _threading.Lock()  # one native dialog open at a time
+_CANONICAL_SET = frozenset(CANONICAL_CATEGORIES)
+
+
+def _open_folder_dialog() -> str:
+    """Open a native folder-picker and return the chosen path (or '' on cancel)."""
+    with _browse_lock:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError as exc:
+            raise RuntimeError(f"tkinter is not available: {exc}") from exc
+        root = tk.Tk()
+        root.withdraw()
+        root.wm_attributes("-topmost", 1)
+        path = filedialog.askdirectory(parent=root, title="Select a sample pack folder")
+        root.destroy()
+        return path or ""
+
+
+class ImportScanRequest(BaseModel):
+    path: str  # absolute filesystem path the user wants to scan
+
+
+class ImportExecuteRequest(BaseModel):
+    source_path: str
+    pack_name: str
+    mappings: dict[str, str]  # group_name → SILA canonical category
+
+
+@router.post("/import/browse")
+async def import_browse() -> dict[str, str]:
+    """Open a native OS folder picker and return the selected path.
+
+    Runs tkinter's blocking dialog in a thread so the async event loop
+    is not blocked.  Protected by the session token like every other route.
+    """
+    try:
+        loop = _asyncio.get_running_loop()
+        path = await loop.run_in_executor(None, _open_folder_dialog)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"path": path}
+
+
+@router.post("/import/scan")
+async def import_scan(req: ImportScanRequest) -> ScanResult:
+    """Scan a local folder, group audio files, and suggest categories.
+
+    Accepts any absolute local path — this is a local-only tool and the
+    user needs to be able to point at anywhere on their PC.
+    Protected by 127.0.0.1-only binding + session token.
+    """
+    if not Path(req.path).is_absolute():
+        raise HTTPException(status_code=400, detail="path must be absolute")
+    if not Path(req.path).is_dir():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {req.path!r}")
+    try:
+        return scan_folder(req.path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/import/execute")
+async def import_execute(req: ImportExecuteRequest) -> ImportResult:
+    """Copy the mapped files into ~/SILA/library/<pack_name>/<category>/.
+
+    Security: mapping values are validated against SILA's canonical category
+    list so no arbitrary subdirectories can be created in the library.
+    Destination paths are also guarded by safe_path() inside execute_import.
+    """
+    if not req.pack_name.strip():
+        raise HTTPException(status_code=400, detail="pack_name cannot be empty")
+    bad = [v for v in req.mappings.values() if v not in _CANONICAL_SET]
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category name(s): {bad!r} — must be SILA canonical categories",
+        )
+    try:
+        return execute_import(req.source_path, req.pack_name, req.mappings, LIBRARY_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------

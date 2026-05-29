@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SILA — Sample Import</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #111; --surface: #1a1a1a; --border: #2a2a2a;
+      --accent: #e8632a; --accent-dim: #6b3015;
+      --text: #d4d4d4; --text-dim: #666;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 13px;
+      min-height: 100vh;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 8px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { color: var(--accent); font-weight: 700; font-size: 15px; letter-spacing: 2px; }
+    .page-title { color: var(--text-dim); font-size: 12px; }
+    .back-link { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+
+    main { max-width: 860px; margin: 0 auto; padding: 28px 20px; }
+
+    .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+    }
+    .step-label {
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 14px;
+    }
+
+    .row { display: flex; gap: 8px; align-items: center; }
+
+    input[type=text] {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      padding: 6px 10px;
+      border-radius: 3px;
+    }
+    input[type=text]:focus { outline: none; border-color: #444; }
+
+    .btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 5px 14px;
+      border-radius: 3px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn:hover { background: #252525; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: #d4571f; }
+    .btn:disabled { opacity: 0.35; cursor: default; }
+
+    .hint { font-size: 11px; color: var(--text-dim); margin-top: 8px; }
+
+    /* ── Groups table ── */
+    .table-wrap { overflow-x: auto; margin-top: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th {
+      text-align: left;
+      color: var(--text-dim);
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 10px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 6px 10px; border-bottom: 1px solid #1c1c1c; vertical-align: middle; }
+    tr:hover td { background: #1f1f1f; }
+    .col-group { font-family: inherit; }
+    .col-count { color: var(--text-dim); width: 60px; text-align: right; }
+    .col-cat  { width: 260px; }
+    .suggested-badge {
+      display: inline-block;
+      font-size: 9px;
+      letter-spacing: .5px;
+      color: var(--accent);
+      border: 1px solid var(--accent-dim);
+      border-radius: 2px;
+      padding: 0 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 4px 6px;
+      border-radius: 3px;
+      width: 100%;
+    }
+
+    /* ── Result ── */
+    #import-result {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 2;
+    }
+    #import-result .num { color: var(--text); font-weight: 600; font-size: 14px; }
+    #import-result .label { color: var(--text-dim); font-size: 11px; }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">SILA</span>
+  <span class="page-title">Sample Import</span>
+  <a class="back-link" href="/">← Back to SILA</a>
+</header>
+
+<main>
+
+  <!-- ── Step 1: Scan ─────────────────────────────────────────────────────── -->
+  <div class="step">
+    <div class="step-label">Step 1 — Scan a folder</div>
+    <div class="row">
+      <input type="text" id="scan-path"
+             placeholder="Paste a folder path or click Browse">
+      <button class="btn" onclick="doBrowse()">Browse…</button>
+      <button class="btn primary" onclick="doScan()">Scan</button>
+    </div>
+    <div id="scan-msg" class="hint"></div>
+  </div>
+
+  <!-- ── Step 2: Map ──────────────────────────────────────────────────────── -->
+  <div class="step hidden" id="step2">
+    <div class="step-label">Step 2 — Map groups to categories</div>
+    <div id="scan-summary" class="hint" style="margin-bottom:0"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Group (folder name)</th>
+            <th class="col-count">Files</th>
+            <th class="col-cat">SILA Category</th>
+          </tr>
+        </thead>
+        <tbody id="map-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Step 3: Import ───────────────────────────────────────────────────── -->
+  <div class="step hidden" id="step3">
+    <div class="step-label">Step 3 — Import</div>
+    <div class="row">
+      <input type="text" id="pack-name" placeholder="Pack name — used as the library folder name">
+      <button class="btn primary" onclick="doImport()">Import</button>
+    </div>
+    <div id="import-result"></div>
+  </div>
+
+</main>
+
+<script src="/import.js"></script>
+</body>
+</html>
