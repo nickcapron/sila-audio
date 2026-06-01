@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends
 
 from sila.engine.audio import AudioEngine
 from sila.engine.clock import PlaybackClock
+from sila.engine.fx import apply_lowpass
+from sila.engine.midi import MidiListener, get_midi_input_names
 from sila.engine.sampler import SamplePlayer
 from sila.engine.sequencer import Sequencer
 from sila.library.browser import (
@@ -39,12 +41,37 @@ class AppState:
         self.sample_players: dict[str, SamplePlayer] = {}
         self.clock: PlaybackClock | None = None
         self.last_ping: float = 0.0
+        self.metronome_active: bool = False
+        # MIDI
+        self.midi_listener: MidiListener = MidiListener(self._on_midi_note)
+        self.midi_note_map: dict[int, str] = {}   # MIDI note → track_id
+        self.midi_learn_track_id: str | None = None
 
     def startup(self) -> None:
         self.last_ping = time.monotonic()
         ensure_my_samples()
-        if self.store.load_latest() is not None:
-            self.load_sample_players()
+
+        # Returning user: load the most recently modified project.
+        # Any exception (corrupt JSON, new validator rejecting old data, etc.)
+        # is caught so the server always starts with a usable project.
+        loaded = False
+        try:
+            if self.store.load_latest() is not None:
+                loaded = True
+        except Exception:
+            pass  # fall through — create a fresh default below
+
+        # First-time user (or unrecoverable load): create a blank "Untitled" session.
+        if not loaded:
+            self.store.new_project("Untitled")
+
+        # Always build sample players — no-op for an empty project.
+        self.load_sample_players()
+
+        # Open first available MIDI device
+        names = get_midi_input_names()
+        if names:
+            self.midi_listener.open(0)
 
     def last_ping_age(self) -> float:
         return time.monotonic() - self.last_ping
@@ -76,6 +103,44 @@ class AppState:
         except Exception:
             pass
 
+    def _on_midi_note(self, note: int, velocity: int) -> None:
+        """Called from the WinMM callback thread on every note-on."""
+        # MIDI learn: map note to the waiting track
+        if self.midi_learn_track_id is not None:
+            self.midi_note_map[note] = self.midi_learn_track_id
+            self.midi_learn_track_id = None
+            return
+        # Default mapping: note 36-43 → tracks by position
+        track_id = self.midi_note_map.get(note)
+        if track_id is None:
+            try:
+                tracks = self.store.project.tracks
+                idx = note - 36
+                if 0 <= idx < len(tracks):
+                    track_id = tracks[idx].id
+            except Exception:
+                return
+        if track_id is None or track_id not in self.sample_players:
+            return
+        player = self.sample_players[track_id]
+        audio = player.get(velocity)
+        if audio is None:
+            return
+        try:
+            track = next((t for t in self.store.project.tracks if t.id == track_id), None)
+            vol = track.fx.volume if track else 1.0
+            pan = track.fx.pan    if track else 0.0
+            if track and track.fx.filter_cutoff < 0.999:
+                audio = apply_lowpass(audio, track.fx.filter_cutoff, track.fx.filter_resonance)
+        except Exception:
+            vol, pan = 1.0, 0.0
+        if not self.audio_engine.healthy:
+            try:
+                self.audio_engine.start()
+            except Exception:
+                return
+        self.audio_engine.play(audio, volume=vol, pan=pan)
+
 
 _state = AppState()
 
@@ -91,6 +156,14 @@ def startup() -> None:
 
 def last_ping_age() -> float:
     return _state.last_ping_age()
+
+
+def shutdown() -> None:
+    """Graceful shutdown: stop clock first, then audio engine.
+
+    Called from the lifespan cleanup so no audio plays after the browser closes.
+    """
+    _state.reset_seq()
 
 
 # ---------------------------------------------------------------------------

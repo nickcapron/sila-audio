@@ -17,12 +17,20 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from sila.api.routes import router, startup as routes_startup, last_ping_age
+from sila.api.routes import router, startup as routes_startup, last_ping_age, shutdown as routes_shutdown
 from sila.security import generate_session_token
 
 _PORT = 8765
-_HEARTBEAT_TIMEOUT = 120.0  # shut down if no browser ping for this many seconds
+_HEARTBEAT_TIMEOUT = 30.0  # shut down if no browser ping for this many seconds
 _HEARTBEAT_POLL = 5.0      # how often the watchdog checks
+
+
+def _should_watchdog_fire() -> bool:
+    """Return True when the browser has been silent long enough to shut down.
+
+    Extracted from the async loop so it can be unit-tested synchronously.
+    """
+    return last_ping_age() > _HEARTBEAT_TIMEOUT
 
 
 def _kill_port(port: int) -> None:
@@ -58,7 +66,7 @@ async def _heartbeat_watchdog() -> None:
     """Shut down the server when the browser stops pinging (tab/window closed)."""
     while True:
         await asyncio.sleep(_HEARTBEAT_POLL)
-        if last_ping_age() > _HEARTBEAT_TIMEOUT:
+        if _should_watchdog_fire():
             os.kill(os.getpid(), signal.SIGTERM)
             return
 
@@ -68,6 +76,8 @@ async def lifespan(app: FastAPI):
     routes_startup()
     task = asyncio.create_task(_heartbeat_watchdog())
     yield
+    # Clean shutdown: stop clock first, then audio engine, before the process exits.
+    routes_shutdown()
     task.cancel()
     try:
         await task

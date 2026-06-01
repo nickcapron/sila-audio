@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from sila.api.routes import AppState, get_state
 from sila.engine.audio_loader import load_audio_mono_f32
+from sila.engine.midi import get_midi_input_names
 from sila.export.digitakt import export_for_digitakt, export_result_summary
 from sila.library.browser import (
     PackInfo,
@@ -81,6 +82,45 @@ async def add_library_sample(
 # ---------------------------------------------------------------------------
 # Heartbeat
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# MIDI
+# ---------------------------------------------------------------------------
+
+@router.get("/midi/status")
+async def midi_status(state: AppState = Depends(get_state)) -> dict:
+    return {
+        "devices": get_midi_input_names(),
+        "active": state.midi_listener.active,
+        "learning": state.midi_learn_track_id,
+        "note_map": {str(k): v for k, v in state.midi_note_map.items()},
+    }
+
+
+@router.post("/midi/learn/{track_id}")
+async def midi_learn(track_id: str, state: AppState = Depends(get_state)) -> dict:
+    state.midi_learn_track_id = track_id
+    return {"learning": track_id}
+
+
+@router.post("/midi/cancel_learn")
+async def midi_cancel_learn(state: AppState = Depends(get_state)) -> dict:
+    state.midi_learn_track_id = None
+    return {"learning": None}
+
+
+@router.delete("/midi/mapping/{note}")
+async def midi_delete_mapping(note: int, state: AppState = Depends(get_state)) -> dict:
+    state.midi_note_map.pop(note, None)
+    return {"ok": True}
+
+
+@router.post("/midi/open/{device_index}")
+async def midi_open_device(device_index: int, state: AppState = Depends(get_state)) -> dict:
+    state.midi_listener.close()
+    ok = state.midi_listener.open(device_index)
+    return {"ok": ok, "device_index": device_index}
+
 
 @router.post("/ping")
 async def ping(state: AppState = Depends(get_state)) -> dict[str, bool]:

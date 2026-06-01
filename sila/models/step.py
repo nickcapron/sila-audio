@@ -14,6 +14,14 @@ class TrigCondition(StrEnum):
     NOT_FILL = "not_fill"
 
 
+class StepLength(float):
+    """Step note-length as a multiplier of the 16th-note interval."""
+    HALF   = 0.5   # 1/32
+    NORMAL = 1.0   # 1/16
+    DOUBLE = 2.0   # 1/8
+    TRIPLE = 3.0   # dotted 1/16
+
+
 class Step(BaseModel):
     active: bool = False
     velocity: int = Field(default=100, ge=0, le=127)
@@ -22,5 +30,7 @@ class Step(BaseModel):
     # 0–100 percent chance the step fires.
     probability: int = Field(default=100, ge=0, le=100)
     trig_condition: TrigCondition = TrigCondition.ALWAYS
+    # Note-length multiplier: 0.5=half, 1.0=normal, 2.0=double, 3.0=triple
+    length: float = Field(default=1.0, gt=0, le=8.0)
     # Parameter locks: any param name → value. Validated at engine level.
     p_locks: dict[str, Any] = Field(default_factory=dict)

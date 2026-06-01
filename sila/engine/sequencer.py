@@ -27,6 +27,7 @@ class TrigEvent:
     velocity: int
     pitch_offset: int
     p_locks: dict
+    length: float = 1.0  # step note-length multiplier
 
 
 class Sequencer:
@@ -126,6 +127,7 @@ class Sequencer:
             velocity=step.velocity,
             pitch_offset=step.pitch_offset,
             p_locks=dict(step.p_locks),
+            length=step.length,
         )
 
     def _trig_condition_passes(self, step: Step) -> bool:

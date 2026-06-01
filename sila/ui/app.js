@@ -87,9 +87,30 @@ async function boot() {
   document.getElementById("step-end").addEventListener("change", function () {
     _saveStepPlocks("end", parseInt(this.value) / 100);
   });
+
+  document.getElementById("lfo-shape").addEventListener("change", function () { _saveLfo("shape", this.value); });
+  document.getElementById("lfo-rate").addEventListener("input",  function () { _saveLfo("rate",  parseInt(this.value) / 10); });
+  document.getElementById("lfo-depth").addEventListener("input", function () { _saveLfo("depth", parseInt(this.value) / 100); });
+  document.getElementById("lfo-dest").addEventListener("change", function () { _saveLfo("destination", this.value); });
+
+  document.getElementById("fx-volume").addEventListener("input",    function () { _saveFx("volume",           parseInt(this.value) / 100); });
+  document.getElementById("fx-pan").addEventListener("input",       function () { _saveFx("pan",              parseInt(this.value) / 100); });
+  document.getElementById("fx-cutoff").addEventListener("input",    function () { _saveFx("filter_cutoff",    parseInt(this.value) / 100); });
+  document.getElementById("fx-resonance").addEventListener("input", function () { _saveFx("filter_resonance", parseInt(this.value) / 100); });
+
+  document.getElementById("step-length").addEventListener("change", async function () {
+    if (selectedTrackId === null || selectedStepIdx === null) return;
+    const track = project.tracks.find(t => t.id === selectedTrackId);
+    if (!track) return;
+    const step = track.steps[selectedStepIdx];
+    if (!step) return;
+    step.length = parseFloat(this.value);
+    await PUT(`/tracks/${selectedTrackId}/steps/${selectedStepIdx}`, { step });
+  });
   renderTracks();
   await syncPlayState();
   await initSongBar();
+  _startMidiPoll();
   status("Ready");
 
   // Live BPM: send change to server on every committed value (blur / Enter).
@@ -176,8 +197,9 @@ function buildTrackRow(track) {
   const nameEl = document.createElement("div");
   nameEl.className = "track-name";
   nameEl.textContent = track.name;
-  nameEl.title = "Click to rename";
-  nameEl.onclick = () => startRenameTrack(track.id, nameEl);
+  nameEl.title = "Click to inspect · Double-click to rename";
+  nameEl.onclick    = () => selectTrack(track.id);
+  nameEl.ondblclick = () => startRenameTrack(track.id, nameEl);
 
   const grid = document.createElement("div");
   grid.className = "step-grid";
@@ -185,7 +207,11 @@ function buildTrackRow(track) {
     const cell = document.createElement("div");
     cell.className = "step" + (step.active ? " on" : "");
     cell.dataset.stepIdx = idx;
-    cell.onclick = () => toggleStep(track.id, idx);
+    cell.onclick = () => {
+      toggleStep(track.id, idx);
+      const fresh = project.tracks.find(t => t.id === track.id)?.steps[idx];
+      if (fresh) selectStep(track.id, idx, fresh);
+    };
     cell.oncontextmenu = (e) => { e.preventDefault(); selectStep(track.id, idx, step); };
     grid.appendChild(cell);
   });
@@ -196,6 +222,12 @@ function buildTrackRow(track) {
   sampleSlot.textContent = sampleName ? sampleName.replace(/\.[^.]+$/, "") : "no sample";
   sampleSlot.title = sampleName || "Click to assign a sample";
   sampleSlot.onclick = (e) => { e.stopPropagation(); openSamplePicker(track.id, sampleSlot); };
+
+  const euclidBtn = document.createElement("button");
+  euclidBtn.className = "euclid-btn";
+  euclidBtn.textContent = "E";
+  euclidBtn.title = "Euclidean rhythm (click to enter hits/steps)";
+  euclidBtn.onclick = () => applyEuclidean(track.id, track.steps.length);
 
   const diceBtn = document.createElement("button");
   diceBtn.className = "dice-btn";
@@ -222,6 +254,7 @@ function buildTrackRow(track) {
 
   row.appendChild(muteBtn);
   row.appendChild(soloBtn);
+  row.appendChild(euclidBtn);
   row.appendChild(diceBtn);
   row.appendChild(nameEl);
   row.appendChild(sampleSlot);
@@ -277,6 +310,28 @@ async function pastePattern(trackId) {
   } catch { status("Paste failed"); }
 }
 
+async function applyEuclidean(trackId, currentSteps) {
+  const input = prompt(`Euclidean rhythm\nHits (pulses): e.g. 3\nSteps: e.g. 8\n\nEnter as "hits steps"`, `3 ${currentSteps}`);
+  if (!input) return;
+  const parts = input.trim().split(/\s+/);
+  const hits  = parseInt(parts[0]);
+  const steps = parseInt(parts[1] || currentSteps);
+  if (isNaN(hits) || isNaN(steps)) return;
+  try {
+    const res = await POST(`/tracks/${trackId}/euclidean`, { hits, steps });
+    const track = project.tracks.find(t => t.id === trackId);
+    if (track && res.steps) {
+      while (track.steps.length < res.steps.length)
+        track.steps.push({ active: false, velocity: 100, pitch_offset: 0, probability: 100, trig_condition: "always", length: 1.0, p_locks: {} });
+      track.steps.forEach((s, i) => { if (res.steps[i] !== undefined) s.active = res.steps[i].active; });
+      track.step_count = res.steps.length;
+      track.steps = track.steps.slice(0, res.steps.length);
+    }
+    renderTracks();
+    status(`Euclidean E(${hits},${steps}) applied`);
+  } catch { status("Euclidean failed"); }
+}
+
 async function randomizeTrack(trackId, density) {
   try {
     const res = await POST(`/tracks/${trackId}/randomize`, { density });
@@ -302,13 +357,115 @@ async function changeStepCount(trackId, stepCount) {
   } catch { status("Failed to change step count"); }
 }
 
-function selectTrack(trackId) {
-  selectedTrackId = trackId;
-  const track = project.tracks.find(t => t.id === trackId);
-  if (track) {
-    document.getElementById("track-notes").value = track.notes || "";
-    document.getElementById("track-humanize").value = Math.round((track.humanize || 0) * 100);
+// ---------------------------------------------------------------------------
+// Inspector panel management
+// ---------------------------------------------------------------------------
+
+function _inspectorSetMode(mode, trackName, stepLabel) {
+  const modeEl = document.getElementById("insp-mode");
+  const subEl  = document.getElementById("insp-sub");
+  const empty  = document.getElementById("insp-empty");
+  const stepP  = document.getElementById("insp-step");
+  const trackP = document.getElementById("insp-track");
+
+  if (mode === "step") {
+    modeEl.textContent = stepLabel || "Step";
+    subEl.textContent  = trackName ? `Track: ${trackName}` : "";
+    empty.style.display = "none";
+    stepP.style.display  = "";
+    trackP.style.display = "none";
+  } else if (mode === "track") {
+    modeEl.textContent = "Track";
+    subEl.textContent  = trackName || "";
+    empty.style.display = "none";
+    stepP.style.display  = "none";
+    trackP.style.display = "";
+  } else {
+    modeEl.textContent = "Nothing selected";
+    subEl.textContent  = "";
+    empty.style.display = "";
+    stepP.style.display  = "none";
+    trackP.style.display = "none";
   }
+}
+
+function selectTrack(trackId) {
+  try {
+    _doSelectTrack(trackId);
+  } catch (e) {
+    // Inspector DOM access failure must not propagate and break button clicks.
+    selectedTrackId = trackId;
+  }
+}
+
+function _doSelectTrack(trackId) {
+  selectedTrackId = trackId;
+  selectedStepIdx = null;
+  const track = project && project.tracks.find(t => t.id === trackId);
+  if (!track) { _inspectorSetMode("none"); return; }
+
+  _inspectorSetMode("track", track.name);
+
+  document.getElementById("track-notes").value    = track.notes || "";
+  document.getElementById("track-humanize").value = Math.round((track.humanize || 0) * 100);
+
+  const fx = track.fx || {};
+  document.getElementById("fx-volume").value    = Math.round((fx.volume          ?? 1.0) * 100);
+  document.getElementById("fx-pan").value       = Math.round((fx.pan            ?? 0.0) * 100);
+  document.getElementById("fx-cutoff").value    = Math.round((fx.filter_cutoff  ?? 1.0) * 100);
+  document.getElementById("fx-resonance").value = Math.round((fx.filter_resonance ?? 0.0) * 100);
+
+  const lfo = track.lfo || {};
+  document.getElementById("lfo-shape").value = lfo.shape  || "sine";
+  document.getElementById("lfo-rate").value  = Math.round((lfo.rate  || 1.0) * 10);
+  document.getElementById("lfo-depth").value = Math.round((lfo.depth || 0.5) * 100);
+  document.getElementById("lfo-dest").value  = lfo.destination || "volume";
+
+  if (track.samples && track.samples.length) {
+    loadTrimmer(trackId);
+  } else {
+    document.getElementById("trimmer-section").style.display = "none";
+  }
+}
+
+function selectStep(trackId, idx, step) {
+  selectedTrackId = trackId;
+  selectedStepIdx = idx;
+  const track = project.tracks.find(t => t.id === trackId);
+  const trackName = track ? track.name : "";
+  _inspectorSetMode("step", trackName, `Step ${idx + 1}`);
+
+  document.getElementById("step-vel").value   = step.velocity;
+  document.getElementById("step-pitch").value = step.pitch_offset;
+  document.getElementById("step-prob").value  = step.probability;
+  document.getElementById("step-trig").value  = step.trig_condition;
+  document.getElementById("step-length").value = String(step.length ?? 1.0);
+
+  const pl = step.p_locks || {};
+  document.getElementById("step-start").value = Math.round((pl.start ?? 0)   * 100);
+  document.getElementById("step-end").value   = Math.round((pl.end   ?? 1.0) * 100);
+
+  // P-lock indicators: lit when a custom value overrides the track default
+  document.getElementById("plk-start").classList.toggle("on", pl.start !== undefined);
+  document.getElementById("plk-end").classList.toggle("on",   pl.end   !== undefined);
+}
+
+async function _saveLfo(field, value) {
+  if (!selectedTrackId) return;
+  const track = project.tracks.find(t => t.id === selectedTrackId);
+  if (!track) return;
+  if (!track.lfo) track.lfo = {};
+  track.lfo[field] = value;
+  try { await PUT(`/tracks/${selectedTrackId}/lfo`, { [field]: value }); } catch { /* ignore */ }
+}
+
+async function _saveFx(field, value) {
+  if (!selectedTrackId) return;
+  const track = project.tracks.find(t => t.id === selectedTrackId);
+  if (!track) return;
+  if (!track.fx) track.fx = {};
+  track.fx[field] = value;
+  try { await PUT(`/tracks/${selectedTrackId}/fx`, { [field]: value }); } catch { /* ignore */ }
 }
 
 document.addEventListener("change", async (e) => {
@@ -362,8 +519,9 @@ function selectStep(trackId, idx, step) {
   document.getElementById("step-prob").value  = step.probability;
   document.getElementById("step-trig").value  = step.trig_condition;
   const pl = step.p_locks || {};
-  document.getElementById("step-start").value = Math.round((pl.start ?? 0)   * 100);
-  document.getElementById("step-end").value   = Math.round((pl.end   ?? 1.0) * 100);
+  document.getElementById("step-start").value  = Math.round((pl.start ?? 0)   * 100);
+  document.getElementById("step-end").value    = Math.round((pl.end   ?? 1.0) * 100);
+  document.getElementById("step-length").value = String(step.length ?? 1.0);
 }
 
 async function _saveStepPlocks(field, value) {
@@ -535,10 +693,16 @@ async function toggleFill() {
 // ---------------------------------------------------------------------------
 
 async function addTrack() {
-  const name = `Track ${project.tracks.length + 1}`;
-  const track = await POST("/tracks", { name, step_count: 16 });
-  project.tracks.push(track);
-  renderTracks();
+  if (!project) { status("No project loaded — reload the page"); return; }
+  try {
+    const name = `Track ${project.tracks.length + 1}`;
+    const track = await POST("/tracks", { name, step_count: 16 });
+    project.tracks.push(track);
+    renderTracks();
+    status(`Added track: ${name}`);
+  } catch (e) {
+    status("Failed to add track: " + (e.message || String(e)));
+  }
 }
 
 async function saveProject() {
@@ -588,6 +752,27 @@ async function saveNotes() {
   status("Notes saved");
 }
 
+let _perfMode = false;
+
+function togglePerfMode() {
+  _perfMode = !_perfMode;
+  document.body.classList.toggle("perf-mode", _perfMode);
+  status(_perfMode ? "Performance mode — press F to exit" : "Ready");
+}
+
+let _metronomeOn = false;
+
+async function toggleMetronome() {
+  _metronomeOn = !_metronomeOn;
+  const btn = document.getElementById("btn-metro");
+  btn.classList.toggle("active", _metronomeOn);
+  try {
+    await fetch("/api/sequencer/metronome?active=" + _metronomeOn, {
+      method: "PUT", headers: { "X-SILA-Token": TOKEN },
+    });
+  } catch { /* ignore */ }
+}
+
 async function exportDigitakt() {
   const dir = prompt("Output folder path:");
   if (!dir) return;
@@ -610,6 +795,59 @@ function status(msg) {
 
 // Keep the server alive while the tab is open; server shuts down when pings stop.
 setInterval(() => { POST("/ping").catch(() => {}); }, 5000);
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+
+document.addEventListener("keydown", async (e) => {
+  // Never intercept when user is typing in an input/textarea/select
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+  if (e.key === " ") {
+    e.preventDefault();
+    togglePlay();
+    return;
+  }
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    e.preventDefault();
+    const inp = document.getElementById("bpm-input");
+    const delta = (e.shiftKey ? 10 : 1) * (e.key === "ArrowRight" ? 1 : -1);
+    const bpm = Math.max(20, Math.min(300, parseFloat(inp.value || 120) + delta));
+    inp.value = bpm;
+    inp.dispatchEvent(new Event("change"));
+    return;
+  }
+  if (e.key === "c" || e.key === "C") {
+    if (!selectedTrackId) return;
+    const track = project.tracks.find(t => t.id === selectedTrackId);
+    if (!track) return;
+    track.steps.forEach(s => { s.active = false; });
+    // Bulk-clear via paste with all-inactive steps
+    try {
+      await PUT(`/tracks/${selectedTrackId}/pattern`, { steps: track.steps });
+      renderTracks();
+      status("Track cleared");
+    } catch { /* ignore */ }
+    return;
+  }
+  if (e.key === "r" || e.key === "R") {
+    if (!selectedTrackId) return;
+    randomizeTrack(selectedTrackId, 0.5);
+    return;
+  }
+  if (e.key === "f" || e.key === "F") {
+    togglePerfMode();
+    return;
+  }
+  // 1-8: mute/unmute track N
+  const n = parseInt(e.key);
+  if (n >= 1 && n <= 8) {
+    const track = project.tracks[n - 1];
+    if (track) toggleMute(track.id);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Project switcher
@@ -663,6 +901,141 @@ async function loadProjectByName(name) {
     document.getElementById("bpm-input").value = project.bpm;
     status(`Loaded: ${project.name}`);
   } catch { status("Failed to load project"); }
+}
+
+// ---------------------------------------------------------------------------
+// Sample trimmer
+// ---------------------------------------------------------------------------
+
+let _trimmerTrackId = null;
+let _trimStart = 0.0;
+let _trimEnd   = 1.0;
+
+async function loadTrimmer(trackId) {
+  _trimmerTrackId = trackId;
+  const section = document.getElementById("trimmer-section");
+  try {
+    const data = await GET(`/tracks/${trackId}/waveform?points=600`);
+    if (!data.waveform || !data.waveform.length) { section.style.display = "none"; return; }
+    _trimStart = data.start;
+    _trimEnd   = data.end;
+    section.style.display = "";
+    _drawWaveform(data.waveform);
+    _updateTrimHandles();
+  } catch { section.style.display = "none"; }
+}
+
+function _drawWaveform(peaks) {
+  const canvas = document.getElementById("trimmer-canvas");
+  const wrap   = document.getElementById("trimmer-wrap");
+  canvas.width  = wrap.clientWidth  || 200;
+  canvas.height = wrap.clientHeight || 60;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#333";
+  const mid = canvas.height / 2;
+  const w   = canvas.width / peaks.length;
+  for (let i = 0; i < peaks.length; i++) {
+    const h = peaks[i] * mid;
+    ctx.fillRect(i * w, mid - h, Math.max(1, w - 0.5), h * 2);
+  }
+}
+
+function _updateTrimHandles() {
+  document.getElementById("trimmer-start-handle").style.left = (_trimStart * 100) + "%";
+  document.getElementById("trimmer-end-handle").style.left   = (_trimEnd   * 100) + "%";
+  const region = document.getElementById("trimmer-region");
+  region.style.left  = (_trimStart * 100) + "%";
+  region.style.width = ((_trimEnd - _trimStart) * 100) + "%";
+}
+
+async function _saveTrim() {
+  if (!_trimmerTrackId) return;
+  const track = project.tracks.find(t => t.id === _trimmerTrackId);
+  if (!track || !track.samples.length) return;
+  const layer = { ...track.samples[0], start: _trimStart, end: _trimEnd };
+  try {
+    await PUT(`/tracks/${_trimmerTrackId}/samples`, { samples: [layer] });
+    track.samples[0].start = _trimStart;
+    track.samples[0].end   = _trimEnd;
+  } catch { /* ignore */ }
+}
+
+// Drag handlers for trim handles
+(function() {
+  let _dragging = null;
+  function _startDrag(e, which) {
+    e.preventDefault(); _dragging = which;
+    document.addEventListener("mousemove", _doDrag);
+    document.addEventListener("mouseup", _endDrag);
+  }
+  function _doDrag(e) {
+    if (!_dragging) return;
+    const wrap = document.getElementById("trimmer-wrap");
+    const rect = wrap.getBoundingClientRect();
+    const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    if (_dragging === "start") {
+      _trimStart = Math.min(pct, _trimEnd - 0.01);
+    } else {
+      _trimEnd = Math.max(pct, _trimStart + 0.01);
+    }
+    _updateTrimHandles();
+  }
+  function _endDrag() {
+    if (_dragging) { _dragging = null; _saveTrim(); }
+    document.removeEventListener("mousemove", _doDrag);
+    document.removeEventListener("mouseup", _endDrag);
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("trimmer-start-handle")
+      .addEventListener("mousedown", e => _startDrag(e, "start"));
+    document.getElementById("trimmer-end-handle")
+      .addEventListener("mousedown", e => _startDrag(e, "end"));
+  });
+})();
+
+// ---------------------------------------------------------------------------
+// MIDI
+// ---------------------------------------------------------------------------
+
+let _midiLearning = false;
+let _midiPollId = null;
+
+function toggleMidiLearn() {
+  if (_midiLearning) {
+    _midiLearning = false;
+    document.getElementById("btn-midi-learn").classList.remove("active");
+    POST("/midi/cancel_learn").catch(() => {});
+    status("MIDI learn cancelled");
+    return;
+  }
+  if (!selectedTrackId) {
+    status("Select a track first, then click MIDI to learn");
+    return;
+  }
+  _midiLearning = true;
+  document.getElementById("btn-midi-learn").classList.add("active");
+  POST(`/midi/learn/${selectedTrackId}`).catch(() => {});
+  status("Press a key on your MIDI device to map it to this track…");
+}
+
+async function _pollMidi() {
+  try {
+    const s = await GET("/midi/status");
+    const ind = document.getElementById("midi-indicator");
+    ind.style.background = s.active ? "#5f5" : "#333";
+    // If learn finished server-side, clear local state
+    if (_midiLearning && !s.learning) {
+      _midiLearning = false;
+      document.getElementById("btn-midi-learn").classList.remove("active");
+      status("MIDI mapped");
+    }
+  } catch { /* ignore */ }
+}
+
+function _startMidiPoll() {
+  if (_midiPollId) return;
+  _midiPollId = setInterval(_pollMidi, 150);
 }
 
 // ---------------------------------------------------------------------------

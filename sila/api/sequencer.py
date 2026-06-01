@@ -6,6 +6,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+import numpy as np
+
 from sila.api.routes import AppState, get_state
 from sila.engine.clock import PlaybackClock
 
@@ -37,6 +39,7 @@ async def start_sequencer(
     seq = state.get_seq()
     seq.reset()
     state.clock = PlaybackClock(seq, state.sample_players, state.audio_engine)
+    state.clock.metronome = getattr(state, "metronome_active", False)
     state.clock.start(bpm)
     state.autosave()
     return {"ok": True, "bpm": bpm, "started_at": state.clock.start_time}
@@ -75,6 +78,17 @@ async def sequencer_status(state: AppState = Depends(get_state)) -> dict[str, An
         "error": error,
         "bpm": bpm,
     }
+
+
+@router.put("/sequencer/metronome")
+async def set_metronome(
+    active: bool, state: AppState = Depends(get_state)
+) -> dict[str, bool]:
+    if state.clock is not None:
+        state.clock.metronome = active
+    # Store preference on state so new clocks inherit it
+    state.metronome_active = active
+    return {"metronome": active}
 
 
 @router.post("/sequencer/reset")

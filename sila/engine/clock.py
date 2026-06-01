@@ -9,8 +9,18 @@ import random
 import threading
 import time
 
+import numpy as np
+
 from sila.engine.audio import AudioEngine
 from sila.engine.fx import apply_lowpass
+
+
+def _make_click(freq: float = 1000.0, amp: float = 0.3, sr: int = 48_000) -> np.ndarray:
+    """Generate a short percussive click — exponentially decaying sine burst."""
+    dur = 0.012  # 12 ms
+    t = np.linspace(0, dur, int(sr * dur), endpoint=False)
+    click = amp * np.sin(2.0 * np.pi * freq * t) * np.exp(-t * 400.0)
+    return click.astype(np.float32)
 from sila.engine.lfo import compute_lfo_value
 from sila.engine.sampler import SamplePlayer
 from sila.engine.sequencer import Sequencer
@@ -35,6 +45,9 @@ class PlaybackClock:
         self._interval: float = 0.0  # seconds per 16th-note; written by start()/set_bpm()
         # Per-track LFO phase (radians).  Initialised to 0; advances each tick.
         self._lfo_phases: dict[str, float] = {}
+        self.metronome: bool = False
+        self._click_beat1 = _make_click(freq=1200.0, amp=0.35)
+        self._click_beat3 = _make_click(freq=900.0,  amp=0.22)
 
     @property
     def running(self) -> bool:
@@ -116,6 +129,14 @@ class PlaybackClock:
                     self._running = False
                     break
 
+            # Metronome: beat 1 (tick 0 mod 16) and beat 3 (tick 8 mod 16)
+            if self.metronome:
+                beat = tick_count % 16
+                if beat == 0:
+                    self._audio.play(self._click_beat1)
+                elif beat == 8:
+                    self._audio.play(self._click_beat3)
+
             for event in self._seq.tick():
                 player = self._players.get(event.track_id)
                 if player is None:
@@ -139,6 +160,12 @@ class PlaybackClock:
                     volume, pan, cutoff, resonance = self._effective_fx(track)
                     if cutoff < 0.999:
                         audio = apply_lowpass(audio, cutoff, resonance)
+                    # Step length: truncate audio to note-length × interval
+                    step_len = event.length
+                    if step_len != 1.0 and step_len < 4.0:
+                        max_samp = int(step_len * self._interval * 48_000)
+                        if 0 < max_samp < len(audio):
+                            audio = audio[:max_samp]
                     # Humanize: velocity variation + micro-timing jitter
                     h = getattr(track, "humanize", 0.0)
                     if h > 0.0:

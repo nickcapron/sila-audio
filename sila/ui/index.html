@@ -170,6 +170,18 @@
       display: flex; align-items: center; justify-content: center;
     }
     .dice-btn:hover { color: var(--text); border-color: #444; }
+    .euclid-btn {
+      width: 22px; height: 22px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 10px;
+      color: var(--text-dim);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700;
+    }
+    .euclid-btn:hover { color: var(--text); border-color: #444; }
 
     .sample-slot {
       width: 96px;
@@ -398,13 +410,39 @@
 
     /* ── Sidebar (inspector) ─────────────────────────────────── */
     #sidebar {
-      width: 220px;
+      width: 230px;
       border-left: 1px solid var(--border);
-      padding: 12px;
       overflow-y: auto;
       flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
     }
-    .inspector-section { margin-bottom: 16px; }
+    .insp-header {
+      padding: 8px 12px 6px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .insp-mode {
+      font-size: 10px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .insp-submode {
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+    .insp-empty {
+      padding: 24px 12px;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-style: italic;
+      line-height: 1.6;
+    }
+    .insp-panel { padding: 10px 12px; }
+    .inspector-section { margin-bottom: 14px; }
     .inspector-title {
       color: var(--text-dim);
       font-size: 10px;
@@ -413,7 +451,13 @@
       margin-bottom: 8px;
     }
     .field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
-    .field label { color: var(--text-dim); font-size: 11px; }
+    .field label {
+      color: var(--text-dim);
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
     .field input, .field select, .field textarea {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -425,6 +469,64 @@
       width: 100%;
     }
     .field textarea { resize: vertical; height: 60px; }
+    /* P-lock indicator dot */
+    .plk {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--border);
+      flex-shrink: 0;
+      transition: background 0.1s;
+    }
+    .plk.on { background: var(--accent); }
+
+    /* ── Sample trimmer ─────────────────────────────────────── */
+    .trimmer-wrap {
+      position: relative;
+      height: 60px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      cursor: crosshair;
+      margin-bottom: 6px;
+    }
+    .trimmer-canvas { display: block; width: 100%; height: 100%; }
+    .trimmer-handle {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 3px;
+      background: var(--accent);
+      cursor: ew-resize;
+      z-index: 10;
+    }
+    .trimmer-region {
+      position: absolute;
+      top: 0; bottom: 0;
+      background: rgba(232,99,42,0.12);
+      pointer-events: none;
+    }
+
+    /* ── Performance mode ───────────────────────────────────── */
+    body.perf-mode header > *:not(#btn-perf-exit) { display: none !important; }
+    body.perf-mode #btn-perf-exit { display: flex !important; }
+    body.perf-mode #lib-panel { display: none !important; }
+    body.perf-mode #sidebar    { display: none !important; }
+    body.perf-mode #song-bar   { display: none !important; }
+    body.perf-mode #tracks-container { padding: 8px !important; }
+    body.perf-mode .mute-btn, body.perf-mode .solo-btn,
+    body.perf-mode .dice-btn,  body.perf-mode .euclid-btn,
+    body.perf-mode .step-count-sel, body.perf-mode .sample-slot { display: none !important; }
+    body.perf-mode .track-name { color: var(--text) !important; font-size: 12px !important; width: 60px; }
+    body.perf-mode .step { width: 36px; height: 36px; }
+    #btn-perf-exit {
+      display: none;
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-size: 11px;
+      padding: 4px 8px;
+    }
 
     /* ── Status bar ──────────────────────────────────────────── */
     footer {
@@ -439,6 +541,7 @@
 <body>
 
 <header>
+  <button class="btn" id="btn-perf-exit" onclick="togglePerfMode()" title="Exit performance mode">✕ PERF</button>
   <button class="btn" id="btn-library" onclick="toggleBrowser()" title="Sample library">LIBRARY</button>
   <span class="logo">SILA</span>
   <div class="proj-menu-wrap">
@@ -459,9 +562,15 @@
   <button class="btn" onclick="undo()">UNDO</button>
   <button class="btn" onclick="redo()">REDO</button>
   <div class="spacer"></div>
+  <button class="btn" id="btn-metro" onclick="toggleMetronome()">METRO</button>
   <button class="btn" onclick="addTrack()">+ TRACK</button>
   <button class="btn" onclick="saveProject()">SAVE</button>
   <button class="btn primary" onclick="exportDigitakt()">EXPORT FOR DIGITAKT</button>
+  <div id="midi-wrap" style="display:flex;align-items:center;gap:6px">
+    <span id="midi-indicator" title="MIDI activity"
+      style="width:10px;height:10px;border-radius:50%;background:#333;border:1px solid #444;flex-shrink:0;transition:background 0.15s"></span>
+    <button class="btn" id="btn-midi-learn" onclick="toggleMidiLearn()" title="MIDI learn — select a track then click this and press a key">MIDI</button>
+  </div>
 </header>
 
 <main>
@@ -484,56 +593,154 @@
   </div>
 
   <div id="sidebar">
-    <div class="inspector-section">
-      <div class="inspector-title">Step</div>
-      <div class="field">
-        <label>Velocity</label>
-        <input type="range" id="step-vel" min="0" max="127" value="100">
-      </div>
-      <div class="field">
-        <label>Pitch offset</label>
-        <input type="range" id="step-pitch" min="-24" max="24" value="0">
-      </div>
-      <div class="field">
-        <label>Probability %</label>
-        <input type="range" id="step-prob" min="0" max="100" value="100">
-      </div>
-      <div class="field">
-        <label>Trig condition</label>
-        <select id="step-trig">
-          <option value="always">Always</option>
-          <option value="1:2">1:2</option>
-          <option value="1:4">1:4</option>
-          <option value="fill">Fill</option>
-          <option value="not_fill">Not fill</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>Sample start</label>
-        <input type="range" id="step-start" min="0" max="100" value="0">
-      </div>
-      <div class="field">
-        <label>Sample end</label>
-        <input type="range" id="step-end" min="0" max="100" value="100">
+
+    <!-- ── Inspector header (always visible) ──────────── -->
+    <div class="insp-header">
+      <div class="insp-mode" id="insp-mode">Nothing selected</div>
+      <div class="insp-submode" id="insp-sub"></div>
+    </div>
+
+    <!-- ── Empty state ───────────────────────────────── -->
+    <div class="insp-empty" id="insp-empty">
+      Click a track name for track controls.<br>
+      Click a step to edit that step.
+    </div>
+
+    <!-- ── STEP panel ────────────────────────────────── -->
+    <div class="insp-panel" id="insp-step" style="display:none">
+      <div class="inspector-section">
+        <div class="inspector-title">Step parameters</div>
+        <div class="field">
+          <label>Velocity</label>
+          <input type="range" id="step-vel" min="0" max="127" value="100">
+        </div>
+        <div class="field">
+          <label>Pitch offset</label>
+          <input type="range" id="step-pitch" min="-24" max="24" value="0">
+        </div>
+        <div class="field">
+          <label>Probability %</label>
+          <input type="range" id="step-prob" min="0" max="100" value="100">
+        </div>
+        <div class="field">
+          <label>Trig condition</label>
+          <select id="step-trig">
+            <option value="always">Always</option>
+            <option value="1:2">1:2</option>
+            <option value="1:4">1:4</option>
+            <option value="fill">Fill</option>
+            <option value="not_fill">Not fill</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Step length</label>
+          <select id="step-length">
+            <option value="0.5">½ (1/32)</option>
+            <option value="1.0" selected>1× (1/16)</option>
+            <option value="2.0">2× (1/8)</option>
+            <option value="3.0">3× (dotted)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>
+            <span class="plk" id="plk-start" title="P-locked start"></span>
+            Sample start
+          </label>
+          <input type="range" id="step-start" min="0" max="100" value="0">
+        </div>
+        <div class="field">
+          <label>
+            <span class="plk" id="plk-end" title="P-locked end"></span>
+            Sample end
+          </label>
+          <input type="range" id="step-end" min="0" max="100" value="100">
+        </div>
       </div>
     </div>
 
-    <div class="inspector-section">
-      <div class="inspector-title">Track</div>
-      <div class="field">
-        <label>Humanize</label>
-        <input type="range" id="track-humanize" min="0" max="100" value="0">
-      </div>
-    </div>
+    <!-- ── TRACK panel ───────────────────────────────── -->
+    <div class="insp-panel" id="insp-track" style="display:none">
 
-    <div class="inspector-section">
-      <div class="inspector-title">Track notes</div>
-      <div class="field">
-        <textarea id="track-notes" placeholder="What is this track for?"></textarea>
+      <!-- Sample trimmer (shown when track has a sample) -->
+      <div id="trimmer-section" style="display:none">
+        <div class="inspector-title">Sample trim</div>
+        <div class="trimmer-wrap" id="trimmer-wrap">
+          <canvas class="trimmer-canvas" id="trimmer-canvas"></canvas>
+          <div class="trimmer-region" id="trimmer-region"></div>
+          <div class="trimmer-handle" id="trimmer-start-handle" style="left:0%"></div>
+          <div class="trimmer-handle" id="trimmer-end-handle"   style="left:100%"></div>
+        </div>
       </div>
-      <button class="btn" onclick="saveNotes()">Save notes</button>
-    </div>
-  </div>
+
+      <div class="inspector-section">
+        <div class="inspector-title">Sound</div>
+        <div class="field">
+          <label>Volume</label>
+          <input type="range" id="fx-volume" min="0" max="200" value="100">
+        </div>
+        <div class="field">
+          <label>Pan</label>
+          <input type="range" id="fx-pan" min="-100" max="100" value="0">
+        </div>
+        <div class="field">
+          <label>Filter cutoff</label>
+          <input type="range" id="fx-cutoff" min="0" max="100" value="100">
+        </div>
+        <div class="field">
+          <label>Resonance</label>
+          <input type="range" id="fx-resonance" min="0" max="100" value="0">
+        </div>
+      </div>
+
+      <div class="inspector-section">
+        <div class="inspector-title">Dynamics</div>
+        <div class="field">
+          <label>Humanize</label>
+          <input type="range" id="track-humanize" min="0" max="100" value="0">
+        </div>
+      </div>
+
+      <div class="inspector-section">
+        <div class="inspector-title">LFO</div>
+        <div class="field">
+          <label>Shape</label>
+          <select id="lfo-shape">
+            <option value="sine">Sine</option>
+            <option value="triangle">Triangle</option>
+            <option value="square">Square</option>
+            <option value="sawtooth">Sawtooth</option>
+            <option value="random">Random</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Rate (Hz)</label>
+          <input type="range" id="lfo-rate" min="1" max="200" value="10" step="1">
+        </div>
+        <div class="field">
+          <label>Depth</label>
+          <input type="range" id="lfo-depth" min="0" max="100" value="50">
+        </div>
+        <div class="field">
+          <label>Destination</label>
+          <select id="lfo-dest">
+            <option value="volume">Volume</option>
+            <option value="pan">Pan</option>
+            <option value="filter_cutoff">Filter cutoff</option>
+            <option value="filter_resonance">Resonance</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="inspector-section">
+        <div class="inspector-title">Notes</div>
+        <div class="field">
+          <textarea id="track-notes" placeholder="What is this track for?"></textarea>
+        </div>
+        <button class="btn" onclick="saveNotes()">Save notes</button>
+      </div>
+
+    </div><!-- end insp-track -->
+  </div><!-- end sidebar -->
 </main>
 
 <footer id="status">Ready</footer>

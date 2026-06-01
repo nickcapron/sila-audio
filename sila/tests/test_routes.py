@@ -91,6 +91,62 @@ def test_status_not_playing_on_fresh_server():
 # AppState startup
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Startup project-loading behaviour
+# ---------------------------------------------------------------------------
+
+def test_startup_loads_most_recent_project_for_returning_user(tmp_path, monkeypatch):
+    """Returning user: startup() must load the most recently saved project."""
+    import sila.storage.project_store as ps
+    import sila.library.browser as lb
+    from sila.api.routes import AppState
+
+    monkeypatch.setattr(ps, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(lb, "LIBRARY_ROOT",  tmp_path / "library")
+
+    # Simulate saved work from a previous session
+    seed_store = ps.ProjectStore()
+    seed_store.new_project("MySavedProject")
+
+    # Server restart — fresh AppState + startup()
+    state = AppState()
+    state.startup()
+
+    assert state.store.project.name == "MySavedProject", (
+        "startup() did not restore the most recently saved project"
+    )
+
+
+def test_startup_creates_untitled_for_first_time_user(tmp_path, monkeypatch):
+    """First-time user: startup() must create an 'Untitled' project automatically."""
+    import sila.storage.project_store as ps
+    import sila.library.browser as lb
+    from sila.api.routes import AppState
+
+    monkeypatch.setattr(ps, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(lb, "LIBRARY_ROOT",  tmp_path / "library")
+
+    # No projects on disk at all
+    state = AppState()
+    state.startup()
+
+    assert state.store.project.name == "Untitled", (
+        "startup() must create an Untitled project for first-time users"
+    )
+    assert (tmp_path / "projects" / "Untitled" / "project.json").exists(), (
+        "the default project must be persisted so it survives the next restart"
+    )
+
+
+def test_startup_project_always_accessible_via_api(client):
+    """GET /project must return 200 after startup — 'No project loaded' must never happen."""
+    resp = client.get("/api/project", headers=_h())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"], "project name must be non-empty"
+    assert isinstance(data["tracks"], list)
+
+
 def test_startup_sets_recent_last_ping(client):
     """startup() must set last_ping or the heartbeat watchdog fires immediately."""
     import sila.api.routes as routes_mod
@@ -146,10 +202,13 @@ def test_bpm_change_is_persisted_in_project(client):
 # /projects management endpoints
 # ---------------------------------------------------------------------------
 
-def test_list_projects_empty_before_any_save(client):
+def test_list_projects_includes_default_after_startup(client):
+    """Startup always creates 'Untitled' on first run, so the list is never empty."""
     resp = client.get("/api/projects", headers=_h())
     assert resp.status_code == 200
-    assert resp.json()["projects"] == []
+    projects = resp.json()["projects"]
+    # The default "Untitled" project created by startup must be present
+    assert "Untitled" in projects
 
 
 def test_list_projects_includes_saved_project(client):
@@ -195,6 +254,60 @@ def test_add_track_creates_correct_number_of_steps(client):
     data = resp.json()
     assert data["name"] == "HH"
     assert len(data["steps"]) == 32
+
+
+# ---------------------------------------------------------------------------
+# + TRACK regression tests
+# ---------------------------------------------------------------------------
+
+def test_add_track_returns_valid_track_with_correct_defaults(client):
+    """POST /tracks must return a fully-formed track so the UI can render it."""
+    _new_project(client)
+    resp = client.post("/api/tracks", json={"name": "Kick", "step_count": 16}, headers=_h())
+    assert resp.status_code == 200
+    t = resp.json()
+    # Identity and naming
+    assert t["id"]   # non-empty UUID
+    assert t["name"] == "Kick"
+    # Steps initialised to the requested count — this is what the UI renders
+    assert len(t["steps"]) == 16
+    assert all(s["active"] is False for s in t["steps"])
+    # Default FX values (sliders must not be None in the UI)
+    assert t["fx"]["volume"]           == 1.0
+    assert t["fx"]["pan"]              == 0.0
+    assert t["fx"]["filter_cutoff"]    == 1.0
+    assert t["fx"]["filter_resonance"] == 0.0
+    # Default LFO present
+    assert t["lfo"]["shape"]       == "sine"
+    assert t["lfo"]["destination"] == "volume"
+    # Structural fields used by the inspector
+    assert t["muted"] is False
+    assert t["solo"]  is False
+    assert isinstance(t["color"], str)   # palette color assigned
+    assert t["humanize"] == 0.0
+
+
+def test_add_multiple_tracks_each_has_unique_id(client):
+    """Every added track must have a unique ID and sequential naming."""
+    _new_project(client)
+    tracks = [_add_track(client, f"T{i}") for i in range(4)]
+    ids    = [t["id"] for t in tracks]
+    assert len(set(ids)) == 4, "duplicate track IDs — UI would render the wrong track"
+    # Project must contain all four tracks
+    proj = client.get("/api/project", headers=_h()).json()
+    proj_ids = {t["id"] for t in proj["tracks"]}
+    assert set(ids) <= proj_ids
+
+
+def test_add_track_autosaves_so_it_survives_reload(client):
+    """Adding a track must persist without an explicit Save click."""
+    _new_project(client, "P")
+    track = _add_track(client, "AutoSaved")
+    # Force-reload from disk by loading the project again
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    assert any(t["id"] == track["id"] for t in reloaded["tracks"]), (
+        "track was lost on reload — autosave after add_track is broken"
+    )
 
 
 def test_remove_track_removes_it_from_project(client):

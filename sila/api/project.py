@@ -177,8 +177,27 @@ class RandomizeRequest(BaseModel):
     density: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class EuclideanRequest(BaseModel):
+    hits:  int = Field(ge=0, le=256)
+    steps: int = Field(ge=1, le=256)
+
+
 class HumanizeRequest(BaseModel):
     amount: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class FxRequest(BaseModel):
+    filter_cutoff:    float | None = None
+    filter_resonance: float | None = None
+    volume:           float | None = None
+    pan:              float | None = None
+
+
+class LfoRequest(BaseModel):
+    shape:       str   | None = None
+    rate:        float | None = None
+    depth:       float | None = None
+    destination: str   | None = None
 
 
 class UpdateTrackNameRequest(BaseModel):
@@ -335,6 +354,42 @@ async def get_patterns(state: AppState = Depends(get_state)) -> dict[str, Any]:
     }
 
 
+@router.get("/tracks/{track_id}/waveform")
+async def get_waveform(
+    track_id: str,
+    points: int = 600,
+    state: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Return a downsampled waveform for display in the sample trimmer.
+
+    *points* is the number of peak-envelope samples to return (default 600).
+    Returns peak absolute values per window so the shape is readable even
+    at low resolution.
+    """
+    import numpy as np
+    player = state.sample_players.get(track_id)
+    if player is None or not player._layers:
+        return {"waveform": [], "length": 0}
+    audio = player._layers[0].audio  # mono float32
+    n = len(audio)
+    if n == 0:
+        return {"waveform": [], "length": 0}
+    pts = max(1, min(points, n))
+    window = max(1, n // pts)
+    peaks = []
+    for i in range(pts):
+        chunk = audio[i * window: (i + 1) * window]
+        peaks.append(float(np.max(np.abs(chunk))) if len(chunk) else 0.0)
+    track = _find_track(state, track_id)
+    layer = track.samples[0] if track.samples else None
+    return {
+        "waveform": peaks,
+        "length": n,
+        "start": layer.start if layer else 0.0,
+        "end":   layer.end   if layer else 1.0,
+    }
+
+
 @router.put("/tracks/{track_id}/pattern")
 async def paste_pattern(
     track_id: str,
@@ -350,6 +405,46 @@ async def paste_pattern(
     return {"steps": len(track.steps)}
 
 
+@router.put("/tracks/{track_id}/fx")
+async def update_track_fx(
+    track_id: str,
+    req: FxRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Update FX parameters (filter, volume, pan) on a track."""
+    track = _find_track(state, track_id)
+    if req.filter_cutoff    is not None: track.fx.filter_cutoff    = max(0.0, min(1.0, req.filter_cutoff))
+    if req.filter_resonance is not None: track.fx.filter_resonance = max(0.0, min(1.0, req.filter_resonance))
+    if req.volume           is not None: track.fx.volume           = max(0.0, min(2.0, req.volume))
+    if req.pan              is not None: track.fx.pan              = max(-1.0, min(1.0, req.pan))
+    state.autosave()
+    return {"fx": track.fx.model_dump()}
+
+
+@router.put("/tracks/{track_id}/lfo")
+async def update_lfo(
+    track_id: str,
+    req: LfoRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Update one or more LFO parameters on a track."""
+    from sila.models.project import LFOModel
+    track = _find_track(state, track_id)
+    lfo = track.lfo
+    _VALID_SHAPES = {"sine", "triangle", "square", "sawtooth", "random"}
+    _VALID_DESTS  = {"volume", "pan", "filter_cutoff", "filter_resonance"}
+    if req.shape is not None and req.shape in _VALID_SHAPES:
+        lfo.shape = req.shape  # type: ignore[assignment]
+    if req.rate is not None:
+        lfo.rate = max(0.01, min(20.0, req.rate))
+    if req.depth is not None:
+        lfo.depth = max(0.0, min(1.0, req.depth))
+    if req.destination is not None and req.destination in _VALID_DESTS:
+        lfo.destination = req.destination
+    state.autosave()
+    return {"lfo": lfo.model_dump()}
+
+
 @router.put("/tracks/{track_id}/humanize")
 async def set_humanize(
     track_id: str,
@@ -360,6 +455,45 @@ async def set_humanize(
     track.humanize = req.amount
     state.autosave()
     return {"humanize": track.humanize}
+
+
+@router.post("/tracks/{track_id}/euclidean")
+async def euclidean_track(
+    track_id: str,
+    req: EuclideanRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Apply a Euclidean (Bjorklund) rhythm to a track's steps."""
+    track = _find_track(state, track_id)
+    state.store.snapshot()
+    steps  = max(1, min(req.steps, 256))
+    hits   = max(0, min(req.hits, steps))
+
+    # Bjorklund / Euclidean rhythm algorithm
+    def _euclidean(h: int, s: int) -> list[bool]:
+        if h == 0:  return [False] * s
+        if h == s:  return [True]  * s
+        groups_a: list[list[bool]] = [[True]]  * h
+        groups_b: list[list[bool]] = [[False]] * (s - h)
+        while len(groups_b) > 1:
+            n = min(len(groups_a), len(groups_b))
+            new_a = [groups_a[i] + groups_b[i] for i in range(n)]
+            rest  = (groups_a[n:] if len(groups_a) > len(groups_b)
+                     else groups_b[n:])
+            groups_a = new_a
+            groups_b = rest
+        flat: list[bool] = [v for g in groups_a + groups_b for v in g]
+        return flat
+
+    pattern = _euclidean(hits, steps)
+
+    # Resize track steps to match requested step count
+    track.step_count = steps
+    track.ensure_steps()
+    for i, step in enumerate(track.steps):
+        step.active = pattern[i] if i < len(pattern) else False
+    state.autosave()
+    return {"ok": True, "steps": [{"active": s.active} for s in track.steps]}
 
 
 @router.post("/tracks/{track_id}/randomize")
