@@ -8,7 +8,10 @@ token-protected router from the four domain modules.  main.py imports
 """
 from __future__ import annotations
 
+import logging
 import time
+
+_log = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends
 
@@ -42,6 +45,10 @@ class AppState:
         self.clock: PlaybackClock | None = None
         self.last_ping: float = 0.0
         self.metronome_active: bool = False
+        # Set during startup() if the most recent project could not be loaded.
+        # Cleared by the sequencer-status endpoint after the first read so the
+        # warning surfaces exactly once in the UI status bar.
+        self.startup_warning: str | None = None
         # MIDI
         self.midi_listener: MidiListener = MidiListener(self._on_midi_note)
         self.midi_note_map: dict[int, str] = {}   # MIDI note → track_id
@@ -52,14 +59,26 @@ class AppState:
         ensure_my_samples()
 
         # Returning user: load the most recently modified project.
-        # Any exception (corrupt JSON, new validator rejecting old data, etc.)
-        # is caught so the server always starts with a usable project.
         loaded = False
         try:
             if self.store.load_latest() is not None:
                 loaded = True
-        except Exception:
-            pass  # fall through — create a fresh default below
+        except Exception as exc:
+            # The project JSON is corrupt or a Pydantic validator rejected it.
+            # Find the name of the failing project for the warning message, then
+            # fall through to create a blank session rather than crashing.
+            try:
+                names = self.store.list_projects()
+                failed_name = names[0] if names else "unknown"
+            except Exception:
+                failed_name = "unknown"
+            warning = (
+                f"Project \"{failed_name}\" could not be loaded "
+                f"({type(exc).__name__}: {exc}). "
+                f"Starting with a blank session — your data is still on disk."
+            )
+            _log.error("SILA startup: %s", warning)
+            self.startup_warning = warning
 
         # First-time user (or unrecoverable load): create a blank "Untitled" session.
         if not loaded:

@@ -144,5 +144,18 @@ async def export_digitakt(
     out = Path(req.output_dir)
     if not out.is_absolute():
         raise HTTPException(status_code=400, detail="output_dir must be an absolute path")
+    # Restrict exports to inside the user's home directory so the endpoint
+    # cannot write to arbitrary system paths.
+    try:
+        from sila.security import safe_path as _safe_path
+        out = _safe_path(Path.home(), out)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "output_dir must be inside your home directory "
+                f"({Path.home()})"
+            ),
+        )
     result = export_for_digitakt(state.store.project, state.store.samples_dir, out)
     return {"summary": export_result_summary(result)}

@@ -1,6 +1,8 @@
 """Project, track, and samples routes."""
 from __future__ import annotations
 
+import shutil as _shutil
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -14,7 +16,7 @@ from sila.api.routes import AppState, get_state
 from sila.engine.sampler import SamplePlayer
 from sila.models.project import ProjectModel, SampleLayer, TrackModel
 from sila.models.step import Step
-from sila.security import sanitize_notes, sanitize_project_name
+from sila.security import sanitize_notes, sanitize_project_name, safe_path
 
 router = APIRouter()
 
@@ -91,8 +93,11 @@ class SwingRequest(BaseModel):
 async def new_project(
     req: NewProjectRequest, state: AppState = Depends(get_state)
 ) -> ProjectModel:
+    safe_name = sanitize_project_name(req.name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Project name is empty after sanitization")
     state.reset_seq()
-    project = state.store.new_project(req.name)
+    project = state.store.new_project(safe_name)
     state.load_sample_players()
     return project
 
@@ -101,8 +106,11 @@ async def new_project(
 async def load_project(
     req: LoadProjectRequest, state: AppState = Depends(get_state)
 ) -> ProjectModel:
+    safe_name = sanitize_project_name(req.name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Project name is empty after sanitization")
     state.reset_seq()
-    project = state.store.load(req.name)
+    project = state.store.load(safe_name)
     state.load_sample_players()
     return project
 
@@ -332,6 +340,9 @@ async def set_song_chain(
     req: SongChainRequest, state: AppState = Depends(get_state)
 ) -> dict[str, Any]:
     state.store.project.song_chain = req.chain
+    # Chain changed — reset position so next play starts from the beginning.
+    if state.clock is not None:
+        state.clock.reset_song_pos()
     state.autosave()
     return {"chain": req.chain}
 
@@ -341,6 +352,9 @@ async def set_song_mode(
     active: bool, state: AppState = Depends(get_state)
 ) -> dict[str, bool]:
     state.store.project.song_mode = active
+    if active and state.clock is not None:
+        # Activating song mode — restart from slot 0 of the chain.
+        state.clock.reset_song_pos()
     state.autosave()
     return {"song_mode": active}
 
@@ -574,21 +588,66 @@ async def toggle_mute(
     return {"muted": track.muted}
 
 
+def _resolve_sample_layer(layer: SampleLayer, samples_dir: Path) -> SampleLayer:
+    """Ensure *layer.path* is project-samples-relative (just a filename).
+
+    If the path contains directory components AND the file does not already
+    exist inside *samples_dir*, we treat it as a library-relative path, copy
+    the file into *samples_dir*, and return a new layer whose path is the bare
+    filename.  This fixes Issue B: clients sending paths like
+    ``"My Samples/01. Kick/kick.wav"`` instead of ``"kick.wav"``.
+    """
+    import sila.library.browser as _lb  # accessed at call time so test patches apply
+
+    path = layer.path
+    # A purely project-relative path has no directory separator.
+    if "/" not in path and "\\" not in path:
+        return layer  # already a bare filename — nothing to do
+
+    # Multi-component path: check whether the file is already in samples_dir.
+    try:
+        candidate = safe_path(samples_dir, path)
+        if candidate.exists():
+            return layer  # it's there — accept as-is
+    except ValueError:
+        pass  # path traversal attempt — fall through; sampler will log & skip
+
+    # Try to find it under LIBRARY_ROOT (accessed via module ref so tests can patch).
+    try:
+        lib_src = safe_path(_lb.LIBRARY_ROOT, path)
+        if lib_src.is_file():
+            dest = samples_dir / lib_src.name
+            if not dest.exists():
+                _shutil.copy2(lib_src, dest)
+            return layer.model_copy(update={"path": lib_src.name})
+    except (ValueError, Exception):
+        pass  # library resolution failed — leave the path unchanged; sampler will log
+
+    return layer  # unchanged; sampler will log the skip when it can't find the file
+
+
 @router.put("/tracks/{track_id}/samples")
 async def set_track_samples(
     track_id: str,
     req: SetSamplesRequest,
     state: AppState = Depends(get_state),
 ) -> dict[str, Any]:
-    """Assign sample layers to a track and reload its sample player."""
+    """Assign sample layers to a track and reload its sample player.
+
+    Library-relative paths (e.g. ``"Pack/Cat/kick.wav"``) are detected,
+    copied into the project's samples/ directory, and stored as bare filenames
+    so the project stays self-contained.
+    """
     track = _find_track(state, track_id)
+    samples_dir = state.store.samples_dir
+    resolved = [_resolve_sample_layer(lyr, samples_dir) for lyr in req.samples]
     state.store.snapshot()
-    track.samples = req.samples
+    track.samples = resolved
     player = SamplePlayer()
-    player.load(state.store.samples_dir, track.samples)
+    player.load(samples_dir, track.samples)
     state.sample_players[track_id] = player
     state.autosave()
-    return {"track_id": track_id, "sample_count": len(req.samples)}
+    return {"track_id": track_id, "sample_count": len(resolved)}
 
 
 # ---------------------------------------------------------------------------

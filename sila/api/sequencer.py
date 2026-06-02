@@ -72,11 +72,16 @@ async def sequencer_status(state: AppState = Depends(get_state)) -> dict[str, An
         bpm: float | None = state.store.project.bpm
     except RuntimeError:
         bpm = None
+    # Consume startup_warning — send it once then clear so the UI sees it exactly once.
+    startup_warning = state.startup_warning
+    if startup_warning:
+        state.startup_warning = None
     return {
         "playing": playing,
         "healthy": state.clock.healthy if state.clock is not None else True,
         "error": error,
         "bpm": bpm,
+        "startup_warning": startup_warning,
     }
 
 

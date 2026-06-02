@@ -48,6 +48,9 @@ class PlaybackClock:
         self.metronome: bool = False
         self._click_beat1 = _make_click(freq=1200.0, amp=0.35)
         self._click_beat3 = _make_click(freq=900.0,  amp=0.22)
+        # Song mode chain position — persists across stop/play so playback resumes
+        # at the correct slot instead of always restarting from slot 0.
+        self._song_chain_pos: int = 0
 
     @property
     def running(self) -> bool:
@@ -83,6 +86,14 @@ class PlaybackClock:
         """Update tempo during live playback; takes effect on the next tick."""
         self._interval = 60.0 / bpm / 4.0
 
+    def reset_song_pos(self) -> None:
+        """Reset the song-chain position to slot 0.
+
+        Call this when the chain is replaced or song mode is first activated
+        so the next bar starts from the beginning of the chain.
+        """
+        self._song_chain_pos = 0
+
     def stop(self) -> None:
         self._running = False
         if self._thread is not None:
@@ -116,7 +127,6 @@ class PlaybackClock:
         next_tick = time.perf_counter()
         two_pi = 2.0 * math.pi
         tick_count = 0
-        song_chain_pos = 0  # index into song_chain list
 
         while self._running:
             # If the stream died unexpectedly, attempt one restart before
@@ -194,8 +204,8 @@ class PlaybackClock:
                     lengths = [len(t.steps) for t in proj.tracks if t.steps]
                     bar_len = max(lengths, default=16)
                     if tick_count > 0 and tick_count % bar_len == 0:
-                        song_chain_pos = (song_chain_pos + 1) % len(chain)
-                        slot = chain[song_chain_pos]
+                        self._song_chain_pos = (self._song_chain_pos + 1) % len(chain)
+                        slot = chain[self._song_chain_pos]
                         snapshot = proj.pattern_bank.slots.get(slot)
                         if snapshot:
                             for track in proj.tracks:

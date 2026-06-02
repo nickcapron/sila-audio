@@ -143,7 +143,9 @@ async function syncPlayState() {
     btn.classList.remove("active");
     btn.classList.add("primary");
   }
-  if (s.error) {
+  if (s.startup_warning) {
+    status("⚠ " + s.startup_warning);
+  } else if (s.error) {
     status("Audio error: " + s.error + " — click PLAY to retry");
   }
 }
@@ -1062,15 +1064,35 @@ function renderPatternSlots() {
   const wrap = document.getElementById("pattern-slots");
   wrap.innerHTML = "";
   for (let i = 0; i < 8; i++) {
-    const slot = document.createElement("div");
     const label = String.fromCharCode(65 + i);  // A-H
+    const chainIdx = _songChain.indexOf(i);      // -1 if not in chain
+    const inChain  = chainIdx >= 0;
+
+    const slot = document.createElement("div");
     slot.className = "pattern-slot" +
       (_savedSlots.has(i) ? " saved" : "") +
-      (_songChain.includes(i) ? " in-chain" : "");
-    slot.title = `Right-click to save; click to add/remove from chain`;
-    slot.textContent = label;
-    slot.onclick = () => toggleChainSlot(i);
-    slot.oncontextmenu = (e) => { e.preventDefault(); savePatternSlot(i); };
+      (inChain ? " in-chain" : "");
+    slot.title = "Left-click to save · Right-click to add/remove from chain";
+
+    // Slot letter (A-H)
+    const letterEl = document.createElement("span");
+    letterEl.textContent = label;
+    slot.appendChild(letterEl);
+
+    // Chain-order badge: shows the 1-based position in the chain
+    if (inChain) {
+      const badge = document.createElement("span");
+      badge.textContent = chainIdx + 1;
+      badge.style.cssText =
+        "font-size:9px;color:#fff;background:var(--accent);" +
+        "border-radius:3px;padding:0 3px;margin-left:2px;line-height:1.4;";
+      slot.appendChild(badge);
+    }
+
+    // Left-click → save current pattern into this slot
+    slot.onclick = () => savePatternSlot(i);
+    // Right-click → toggle slot in/out of the playback chain
+    slot.oncontextmenu = (e) => { e.preventDefault(); toggleChainSlot(i); };
     wrap.appendChild(slot);
   }
 }
@@ -1086,7 +1108,7 @@ async function savePatternSlot(slot) {
 
 async function toggleChainSlot(slot) {
   if (!_savedSlots.has(slot)) {
-    // Auto-save first if empty
+    // Slot is empty — save the current pattern into it first
     await savePatternSlot(slot);
   }
   const idx = _songChain.indexOf(slot);
@@ -1103,7 +1125,17 @@ async function toggleSongMode() {
   const btn = document.getElementById("btn-song-mode");
   btn.textContent = "SONG " + (_songMode ? "ON" : "OFF");
   btn.classList.toggle("active", _songMode);
-  try { await fetch("/api/song/mode?active=" + _songMode, { method: "PUT", headers: { "X-SILA-Token": TOKEN } }); } catch { /* ignore */ }
+  try {
+    await fetch("/api/song/mode?active=" + _songMode, {
+      method: "PUT", headers: { "X-SILA-Token": TOKEN },
+    });
+  } catch (e) {
+    // Roll back the local toggle so UI stays in sync with the server
+    _songMode = !_songMode;
+    btn.textContent = "SONG " + (_songMode ? "ON" : "OFF");
+    btn.classList.toggle("active", _songMode);
+    status("Failed to toggle song mode: " + (e.message || e));
+  }
 }
 
 async function newProjectFromMenu() {

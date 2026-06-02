@@ -485,6 +485,66 @@ def test_sample_assignment_persists_without_explicit_save(client, tmp_path):
     assert t["samples"][0]["path"] == "kick.wav"
 
 
+def test_library_relative_sample_path_is_copied_and_stored_as_filename(client, tmp_path):
+    """Issue B: a library-relative path like 'Pack/Cat/kick.wav' must be copied
+    into the project's samples/ dir and stored as just 'kick.wav'."""
+    # Plant a sample file in the (patched) library
+    lib_sample = tmp_path / "library" / "My Pack" / "Kicks" / "kick.wav"
+    lib_sample.parent.mkdir(parents=True, exist_ok=True)
+    lib_sample.write_bytes(b"\x00" * 44)
+
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    layer = {"path": "My Pack/Kicks/kick.wav",
+             "velocity_min": 0, "velocity_max": 127,
+             "start": 0.0, "end": 1.0, "loop": False, "rr_group": 0}
+    resp = client.put(f"/api/tracks/{track['id']}/samples",
+                      json={"samples": [layer]}, headers=_h())
+    assert resp.status_code == 200
+
+    # File must be copied into the project's own samples/ directory
+    samples_dir = tmp_path / "projects" / "P" / "samples"
+    assert (samples_dir / "kick.wav").exists(), (
+        "file should be copied from library into project samples/"
+    )
+
+    # Stored path must be the bare filename, not the library-relative path
+    project = client.get("/api/project", headers=_h()).json()
+    t = next(t for t in project["tracks"] if t["id"] == track["id"])
+    assert t["samples"][0]["path"] == "kick.wav", (
+        "SampleLayer.path must be project-samples-relative after resolution"
+    )
+
+
+def test_library_relative_path_not_copied_if_already_in_samples(client, tmp_path):
+    """If a file with the same name already exists in the project's samples/ dir,
+    no copy is made and the bare filename is still stored."""
+    # File exists in library AND already in project samples (e.g. a previous copy)
+    lib_sample = tmp_path / "library" / "Pack" / "Cat" / "snare.wav"
+    lib_sample.parent.mkdir(parents=True, exist_ok=True)
+    lib_sample.write_bytes(b"\x01" * 44)
+
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    # Pre-place the file in the project's samples/ dir with different content
+    proj_sample = tmp_path / "projects" / "P" / "samples" / "snare.wav"
+    proj_sample.parent.mkdir(parents=True, exist_ok=True)
+    proj_sample.write_bytes(b"\x02" * 44)
+
+    layer = {"path": "Pack/Cat/snare.wav",
+             "velocity_min": 0, "velocity_max": 127,
+             "start": 0.0, "end": 1.0, "loop": False, "rr_group": 0}
+    client.put(f"/api/tracks/{track['id']}/samples",
+               json={"samples": [layer]}, headers=_h())
+
+    # Existing file must NOT be overwritten
+    assert proj_sample.read_bytes() == b"\x02" * 44, (
+        "existing project sample must not be overwritten"
+    )
+
+
 def test_track_notes_persist_without_explicit_save(client):
     """Track notes must survive a project reload with no manual Save."""
     _new_project(client, "P")

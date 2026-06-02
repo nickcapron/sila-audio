@@ -149,6 +149,15 @@ def sila_randomize_track(track_id: str, density: float = 0.5) -> dict:
 
 
 def sila_assign_sample(track_id: str, path: str) -> dict:
+    # Reject obviously bad paths before hitting the HTTP API.
+    # The HTTP endpoint handles library-relative resolution, but we do not
+    # want the MCP layer passing traversal attempts or absolute paths through.
+    if ".." in path or path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+        raise ValueError(
+            f"sila_assign_sample: path {path!r} must be a bare filename or "
+            "library-relative path (e.g. 'kick.wav' or 'Pack/Cat/kick.wav'). "
+            "Path separators indicating traversal (.. or absolute paths) are not allowed."
+        )
     layer = {
         "path": path,
         "velocity_min": 0,
@@ -302,12 +311,23 @@ _TOOLS = [
     },
     {
         "name": "sila_assign_sample",
-        "description": "Assign a sample file to a track (relative to project samples/).",
+        "description": (
+            "Assign a sample file to a track. "
+            "path must be a bare filename ('kick.wav') already in the project's samples/ "
+            "directory, or a library-relative path ('Pack/Cat/kick.wav') which will be "
+            "copied automatically. Traversal sequences (..) and absolute paths are rejected."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "track_id": {"type": "string"},
-                "path": {"type": "string", "description": "Filename in project samples/ dir"},
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Bare filename ('kick.wav') or library-relative path "
+                        "('Pack/Cat/kick.wav'). Must not contain '..' or start with '/'."
+                    ),
+                },
             },
             "required": ["track_id", "path"],
         },

@@ -76,6 +76,12 @@ def sanitize_filename(name: str) -> str:
     return name[:16] if name else "untitled"
 
 
+_WIN_RESERVED = re.compile(
+    r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$",
+    re.IGNORECASE,
+)
+
+
 def sanitize_project_name(name: str) -> str:
     """
     Return a filesystem-safe project directory name.
@@ -83,11 +89,16 @@ def sanitize_project_name(name: str) -> str:
     Same rules as sanitize_filename but with a 64-character limit instead of
     16, since project names are not constrained by Digitakt hardware limits.
     Spaces become underscores; non-ASCII and OS-reserved characters are stripped.
+    Returns "" if the result is empty or matches a Windows reserved device name
+    (CON, NUL, COM1-COM9, LPT1-LPT9 with or without extension).
     """
     name = name.replace(" ", "_")
     name = re.sub(r"[^A-Za-z0-9_\-.]", "", name)
     name = name.strip("._")
-    return name[:64]  # returns "" if nothing survived sanitization
+    name = name[:64]
+    if _WIN_RESERVED.match(name):
+        return ""
+    return name
 
 
 def sanitize_library_filename(name: str) -> str:
