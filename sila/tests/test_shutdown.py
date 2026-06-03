@@ -12,6 +12,73 @@ from sila.api.routes import AppState
 
 
 # ---------------------------------------------------------------------------
+# Regression guards for the "Failed to fetch" connection-drop bug
+#
+# Root cause 1 — Chrome background-tab throttling:
+#   When a browser tab loses focus, Chrome clamps setInterval to ~60 s minimum.
+#   The ping fires every 5 s while the tab is active, but only ~once per minute
+#   when backgrounded.  _HEARTBEAT_TIMEOUT must be comfortably above 60 s so
+#   the watchdog does not kill the server while the user simply has another
+#   window focused.  120 s was chosen to give a ~60 s buffer above the ceiling.
+#
+# Root cause 2 — MIDI poll connection saturation:
+#   The 150 ms MIDI poll can fill all 6 HTTP/1.1 connection slots the browser
+#   allows to a single origin.  That blocks the ping from ever reaching the
+#   server, causing last_ping_age() to grow until the watchdog fires.
+#   The JS fix (_midiPollInFlight guard) is not testable in Python; the tests
+#   below cover the server-side invariant: the watchdog must never fire during
+#   Chrome's worst-case throttle window.
+# ---------------------------------------------------------------------------
+
+def test_heartbeat_timeout_is_at_least_120_seconds():
+    """_HEARTBEAT_TIMEOUT must stay above Chrome's ~60 s background throttle.
+
+    Chrome clamps setInterval to ≥60 s when the tab is in the background.
+    A timeout ≤60 s would kill the server every time the user switches tabs.
+    120 s gives a comfortable buffer; this test will break if the constant is
+    reduced below that threshold.
+    """
+    import sila.main as m
+    assert m._HEARTBEAT_TIMEOUT >= 120.0, (
+        f"_HEARTBEAT_TIMEOUT is {m._HEARTBEAT_TIMEOUT} s — must be ≥120 s to survive "
+        "Chrome's background-tab timer throttling (~60 s minimum interval)."
+    )
+
+
+def test_watchdog_does_not_fire_during_chrome_throttle_window(monkeypatch):
+    """Watchdog must NOT fire when ping age is within Chrome's throttle ceiling.
+
+    Chrome's worst-case background-tab throttle is ~60 s.  If the watchdog
+    fires at ping_age=60 s the server kills itself every time the user leaves
+    the tab.  This test uses the *real* _HEARTBEAT_TIMEOUT so any future
+    reduction of that constant will immediately break this test.
+    """
+    import sila.main as m
+    # Use the real constant — do NOT monkeypatch it here.
+    monkeypatch.setattr(m, "last_ping_age", lambda: 60.0)
+    assert m._should_watchdog_fire() is False, (
+        "Watchdog fired at ping_age=60 s (Chrome's throttle ceiling). "
+        "_HEARTBEAT_TIMEOUT must be raised above 60 s."
+    )
+
+
+def test_watchdog_still_fires_well_after_timeout(monkeypatch):
+    """Watchdog must still fire when the session is genuinely abandoned.
+
+    Guards the other direction: raising _HEARTBEAT_TIMEOUT should not disable
+    the watchdog entirely — it must still fire when pings have been absent for
+    much longer than the throttle window.
+    """
+    import sila.main as m
+    # Use the real constant — do NOT monkeypatch it.
+    monkeypatch.setattr(m, "last_ping_age", lambda: m._HEARTBEAT_TIMEOUT + 60.0)
+    assert m._should_watchdog_fire() is True, (
+        "Watchdog did not fire after an extended absence. "
+        "Check that _HEARTBEAT_TIMEOUT is not set to an unreachably large value."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Watchdog decision helper
 # ---------------------------------------------------------------------------
 

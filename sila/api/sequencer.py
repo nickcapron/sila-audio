@@ -76,12 +76,24 @@ async def sequencer_status(state: AppState = Depends(get_state)) -> dict[str, An
     startup_warning = state.startup_warning
     if startup_warning:
         state.startup_warning = None
+    # Active song-mode slot: the chain index currently playing, or null.
+    current_song_slot: int | None = None
+    if (
+        playing
+        and state.clock is not None
+        and getattr(state.store.project, "song_mode", False)
+    ):
+        chain = getattr(state.store.project, "song_chain", [])
+        pos = state.clock._song_chain_pos
+        if chain and 0 <= pos < len(chain):
+            current_song_slot = chain[pos]
     return {
         "playing": playing,
         "healthy": state.clock.healthy if state.clock is not None else True,
         "error": error,
         "bpm": bpm,
         "startup_warning": startup_warning,
+        "current_song_slot": current_song_slot,
     }
 
 

@@ -125,6 +125,8 @@ async function boot() {
 }
 
 // Fetch real sequencer state from the server and reconcile UI.
+let _currentSongSlot = null;  // tracks which slot is live so renderPatternSlots can highlight it
+
 async function syncPlayState() {
   let s;
   try {
@@ -143,10 +145,38 @@ async function syncPlayState() {
     btn.classList.remove("active");
     btn.classList.add("primary");
   }
+  // Update the active slot indicator if it changed.
+  const newSlot = s.current_song_slot ?? null;
+  if (newSlot !== _currentSongSlot) {
+    _currentSongSlot = newSlot;
+    renderPatternSlots();
+    _updateActivePatternLabel();
+    // Load the newly active slot's steps into the live tracks so the grid
+    // always shows what's actually playing.
+    if (newSlot !== null) {
+      try {
+        await POST(`/patterns/${newSlot}/load`);
+        project = await GET("/project");
+        renderTracks();
+      } catch { /* ignore — grid stays stale rather than crashing */ }
+    }
+  }
   if (s.startup_warning) {
     status("⚠ " + s.startup_warning);
   } else if (s.error) {
     status("Audio error: " + s.error + " — click PLAY to retry");
+  }
+}
+
+function _updateActivePatternLabel() {
+  const el = document.getElementById("active-pattern-label");
+  if (!el) return;
+  if (_currentSongSlot !== null && _songMode) {
+    el.textContent = "PATTERN: " + String.fromCharCode(65 + _currentSongSlot);
+    el.classList.add("visible");
+  } else {
+    el.textContent = "";
+    el.classList.remove("visible");
   }
 }
 
@@ -618,6 +648,15 @@ async function toggleStep(trackId, idx) {
   const cell = document.querySelector(`[data-track-id="${trackId}"] .step[data-step-idx="${idx}"]`);
   if (cell) cell.classList.toggle("on", step.active);
   await PUT(`/tracks/${trackId}/steps/${idx}`, { step });
+  // In song mode, write the edit back into the active slot immediately so the
+  // pattern stays in sync with what you're looking at.
+  _syncEditToActiveSongSlot();
+}
+
+function _syncEditToActiveSongSlot() {
+  if (_songMode && _currentSongSlot !== null) {
+    POST(`/patterns/${_currentSongSlot}/save`).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,7 +1060,11 @@ function toggleMidiLearn() {
   status("Press a key on your MIDI device to map it to this track…");
 }
 
+let _midiPollInFlight = false;  // prevents overlapping polls from filling connection slots
+
 async function _pollMidi() {
+  if (_midiPollInFlight) return;  // skip this tick — previous request still in-flight
+  _midiPollInFlight = true;
   try {
     const s = await GET("/midi/status");
     const ind = document.getElementById("midi-indicator");
@@ -1032,7 +1075,9 @@ async function _pollMidi() {
       document.getElementById("btn-midi-learn").classList.remove("active");
       status("MIDI mapped");
     }
-  } catch { /* ignore */ }
+  } catch { /* ignore */ } finally {
+    _midiPollInFlight = false;
+  }
 }
 
 function _startMidiPoll() {
@@ -1068,10 +1113,12 @@ function renderPatternSlots() {
     const chainIdx = _songChain.indexOf(i);      // -1 if not in chain
     const inChain  = chainIdx >= 0;
 
+    const isPlaying = i === _currentSongSlot;
     const slot = document.createElement("div");
     slot.className = "pattern-slot" +
       (_savedSlots.has(i) ? " saved" : "") +
-      (inChain ? " in-chain" : "");
+      (inChain ? " in-chain" : "") +
+      (isPlaying ? " playing" : "");
     slot.title = "Left-click to save · Right-click to add/remove from chain";
 
     // Slot letter (A-H)
@@ -1125,6 +1172,12 @@ async function toggleSongMode() {
   const btn = document.getElementById("btn-song-mode");
   btn.textContent = "SONG " + (_songMode ? "ON" : "OFF");
   btn.classList.toggle("active", _songMode);
+  if (!_songMode) {
+    // Leaving song mode — clear the active slot label.
+    _currentSongSlot = null;
+    _updateActivePatternLabel();
+    renderPatternSlots();
+  }
   try {
     await fetch("/api/song/mode?active=" + _songMode, {
       method: "PUT", headers: { "X-SILA-Token": TOKEN },
