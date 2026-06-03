@@ -464,6 +464,62 @@ def test_step_toggle_persists_without_explicit_save(client):
     assert t["steps"][0]["active"] is True
 
 
+def test_step_velocity_persists(client):
+    """Velocity edited via inspector must survive a project reload."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    step = {"active": True, "velocity": 64, "pitch_offset": 0,
+            "probability": 100, "trig_condition": "always", "p_locks": {}}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0]["velocity"] == 64
+
+
+def test_step_pitch_offset_persists(client):
+    """Pitch offset edited via inspector must survive a project reload."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    step = {"active": True, "velocity": 100, "pitch_offset": -7,
+            "probability": 100, "trig_condition": "always", "p_locks": {}}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0]["pitch_offset"] == -7
+
+
+def test_step_probability_persists(client):
+    """Probability edited via inspector must survive a project reload."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    step = {"active": True, "velocity": 100, "pitch_offset": 0,
+            "probability": 50, "trig_condition": "always", "p_locks": {}}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0]["probability"] == 50
+
+
+def test_step_trig_condition_persists(client):
+    """Trig condition edited via inspector must survive a project reload."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    step = {"active": True, "velocity": 100, "pitch_offset": 0,
+            "probability": 100, "trig_condition": "1:2", "p_locks": {}}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0]["trig_condition"] == "1:2"
+
+
 def test_sample_assignment_persists_without_explicit_save(client, tmp_path):
     """Sample assignment must survive a project reload with no manual Save."""
     _new_project(client, "P")

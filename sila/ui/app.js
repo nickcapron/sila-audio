@@ -81,6 +81,19 @@ async function boot() {
     try { await PUT("/project/swing", { swing }); } catch { /* ignore */ }
   });
 
+  document.getElementById("step-vel").addEventListener("input", function () {
+    _saveStepField("velocity", parseInt(this.value));
+  });
+  document.getElementById("step-pitch").addEventListener("input", function () {
+    _saveStepField("pitch_offset", parseInt(this.value));
+  });
+  document.getElementById("step-prob").addEventListener("input", function () {
+    _saveStepField("probability", parseInt(this.value));
+  });
+  document.getElementById("step-trig").addEventListener("change", function () {
+    _saveStepField("trig_condition", this.value);
+  });
+
   document.getElementById("step-start").addEventListener("change", function () {
     _saveStepPlocks("start", parseInt(this.value) / 100);
   });
@@ -543,17 +556,14 @@ function startRenameTrack(trackId, nameEl) {
   };
 }
 
-function selectStep(trackId, idx, step) {
-  selectedTrackId = trackId;
-  selectedStepIdx = idx;
-  document.getElementById("step-vel").value   = step.velocity;
-  document.getElementById("step-pitch").value = step.pitch_offset;
-  document.getElementById("step-prob").value  = step.probability;
-  document.getElementById("step-trig").value  = step.trig_condition;
-  const pl = step.p_locks || {};
-  document.getElementById("step-start").value  = Math.round((pl.start ?? 0)   * 100);
-  document.getElementById("step-end").value    = Math.round((pl.end   ?? 1.0) * 100);
-  document.getElementById("step-length").value = String(step.length ?? 1.0);
+async function _saveStepField(field, value) {
+  if (selectedTrackId === null || selectedStepIdx === null) return;
+  const track = project.tracks.find(t => t.id === selectedTrackId);
+  if (!track) return;
+  const step = track.steps[selectedStepIdx];
+  if (!step) return;
+  step[field] = value;
+  await PUT(`/tracks/${selectedTrackId}/steps/${selectedStepIdx}`, { step });
 }
 
 async function _saveStepPlocks(field, value) {
