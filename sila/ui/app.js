@@ -951,6 +951,7 @@ async function loadProjectByName(name) {
 let _trimmerTrackId = null;
 let _trimStart = 0.0;
 let _trimEnd   = 1.0;
+let _trimPeaks = [];   // stored so _updateTrimHandles can redraw after each drag tick
 
 async function loadTrimmer(trackId) {
   _trimmerTrackId = trackId;
@@ -958,11 +959,19 @@ async function loadTrimmer(trackId) {
   try {
     const data = await GET(`/tracks/${trackId}/waveform?points=600`);
     if (!data.waveform || !data.waveform.length) { section.style.display = "none"; return; }
-    _trimStart = data.start;
-    _trimEnd   = data.end;
+    _trimStart = data.start ?? 0.0;
+    _trimEnd   = data.end   ?? 1.0;
+    _trimPeaks = data.waveform;
     section.style.display = "";
-    _drawWaveform(data.waveform);
+    _drawWaveform(_trimPeaks);
     _updateTrimHandles();
+    // Bind mousedown directly here — the DOMContentLoaded approach is broken
+    // because the script runs after the DOM is already ready, so that event
+    // never fires.  Rebinding on every load is safe and always correct.
+    const startEl = document.getElementById("trimmer-start-handle");
+    const endEl   = document.getElementById("trimmer-end-handle");
+    startEl.onmousedown = e => _startTrimDrag(e, "start");
+    endEl.onmousedown   = e => _startTrimDrag(e, "end");
   } catch { section.style.display = "none"; }
 }
 
@@ -973,21 +982,31 @@ function _drawWaveform(peaks) {
   canvas.height = wrap.clientHeight || 60;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#333";
-  const mid = canvas.height / 2;
-  const w   = canvas.width / peaks.length;
+  const mid        = canvas.height / 2;
+  const w          = canvas.width / peaks.length;
+  const startPx    = Math.round(_trimStart * canvas.width);
+  const endPx      = Math.round(_trimEnd   * canvas.width);
   for (let i = 0; i < peaks.length; i++) {
-    const h = peaks[i] * mid;
-    ctx.fillRect(i * w, mid - h, Math.max(1, w - 0.5), h * 2);
+    const x      = i * w;
+    const h      = peaks[i] * mid;
+    const active = x >= startPx && x < endPx;
+    // Active region: bright bar; muted regions: dark
+    ctx.fillStyle = active ? "#a0a0a0" : "#2a2a2a";
+    ctx.fillRect(x, mid - h, Math.max(1, w - 0.5), h * 2);
   }
 }
 
 function _updateTrimHandles() {
   document.getElementById("trimmer-start-handle").style.left = (_trimStart * 100) + "%";
-  document.getElementById("trimmer-end-handle").style.left   = (_trimEnd   * 100) + "%";
+  // Right edge of end handle aligns to _trimEnd — keeps the 3px handle body
+  // fully inside the container so overflow:hidden doesn't clip it.
+  document.getElementById("trimmer-end-handle").style.left =
+    `calc(${(_trimEnd * 100).toFixed(4)}% - 3px)`;
   const region = document.getElementById("trimmer-region");
   region.style.left  = (_trimStart * 100) + "%";
   region.style.width = ((_trimEnd - _trimStart) * 100) + "%";
+  // Redraw waveform so the active/muted colouring tracks the handles in real time.
+  if (_trimPeaks.length) _drawWaveform(_trimPeaks);
 }
 
 async function _saveTrim() {
@@ -1002,38 +1021,36 @@ async function _saveTrim() {
   } catch { /* ignore */ }
 }
 
-// Drag handlers for trim handles
-(function() {
-  let _dragging = null;
-  function _startDrag(e, which) {
-    e.preventDefault(); _dragging = which;
-    document.addEventListener("mousemove", _doDrag);
-    document.addEventListener("mouseup", _endDrag);
+// Drag handlers — module-scoped so _doDrag / _endDrag can be removed by name.
+let _trimDragging = null;
+
+function _startTrimDrag(e, which) {
+  e.preventDefault();
+  _trimDragging = which;
+  document.addEventListener("mousemove", _doDrag);
+  document.addEventListener("mouseup",   _endDrag);
+}
+
+function _doDrag(e) {
+  if (!_trimDragging) return;
+  const wrap = document.getElementById("trimmer-wrap");
+  const rect = wrap.getBoundingClientRect();
+  const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  if (_trimDragging === "start") {
+    // Left handle: can move right up to (but not past) the right handle minus the gap.
+    _trimStart = Math.min(pct, _trimEnd - 0.01);
+  } else {
+    // Right handle: can move left up to (but not past) the left handle plus the gap.
+    _trimEnd = Math.max(pct, _trimStart + 0.01);
   }
-  function _doDrag(e) {
-    if (!_dragging) return;
-    const wrap = document.getElementById("trimmer-wrap");
-    const rect = wrap.getBoundingClientRect();
-    const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    if (_dragging === "start") {
-      _trimStart = Math.min(pct, _trimEnd - 0.01);
-    } else {
-      _trimEnd = Math.max(pct, _trimStart + 0.01);
-    }
-    _updateTrimHandles();
-  }
-  function _endDrag() {
-    if (_dragging) { _dragging = null; _saveTrim(); }
-    document.removeEventListener("mousemove", _doDrag);
-    document.removeEventListener("mouseup", _endDrag);
-  }
-  document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("trimmer-start-handle")
-      .addEventListener("mousedown", e => _startDrag(e, "start"));
-    document.getElementById("trimmer-end-handle")
-      .addEventListener("mousedown", e => _startDrag(e, "end"));
-  });
-})();
+  _updateTrimHandles();
+}
+
+function _endDrag() {
+  if (_trimDragging) { _trimDragging = null; _saveTrim(); }
+  document.removeEventListener("mousemove", _doDrag);
+  document.removeEventListener("mouseup",   _endDrag);
+}
 
 // ---------------------------------------------------------------------------
 // MIDI
