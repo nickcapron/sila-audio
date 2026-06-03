@@ -93,6 +93,11 @@ async function boot() {
   document.getElementById("step-trig").addEventListener("change", function () {
     _saveStepField("trig_condition", this.value);
   });
+  document.getElementById("step-mt").addEventListener("input", function () {
+    const val = parseInt(this.value);
+    document.getElementById("step-mt-val").textContent = val > 0 ? "+" + val : String(val);
+    _saveStepField("micro_timing", val);
+  });
 
   document.getElementById("step-start").addEventListener("change", function () {
     _saveStepPlocks("start", parseInt(this.value) / 100);
@@ -485,6 +490,9 @@ function selectStep(trackId, idx, step) {
   document.getElementById("step-prob").value  = step.probability;
   document.getElementById("step-trig").value  = step.trig_condition;
   document.getElementById("step-length").value = String(step.length ?? 1.0);
+  const mt = step.micro_timing ?? 0;
+  document.getElementById("step-mt").value = mt;
+  document.getElementById("step-mt-val").textContent = mt > 0 ? "+" + mt : String(mt);
 
   const pl = step.p_locks || {};
   document.getElementById("step-start").value = Math.round((pl.start ?? 0)   * 100);

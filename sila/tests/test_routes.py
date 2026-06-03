@@ -520,6 +520,51 @@ def test_step_trig_condition_persists(client):
     assert t["steps"][0]["trig_condition"] == "1:2"
 
 
+def test_step_micro_timing_persists(client):
+    """Micro-timing edited via inspector must survive a project reload."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    step = {"active": True, "velocity": 100, "pitch_offset": 0,
+            "probability": 100, "trig_condition": "always", "p_locks": {},
+            "micro_timing": 5}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0]["micro_timing"] == 5
+
+
+def test_step_micro_timing_negative_persists(client):
+    """Negative micro-timing (early trigger) must also round-trip correctly."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    step = {"active": True, "velocity": 100, "pitch_offset": 0,
+            "probability": 100, "trig_condition": "always", "p_locks": {},
+            "micro_timing": -7}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0]["micro_timing"] == -7
+
+
+def test_step_micro_timing_default_for_existing_projects(client):
+    """Steps created without micro_timing (existing projects) default to 0."""
+    _new_project(client, "P")
+    track = _add_track(client)
+
+    # Write a step without the micro_timing key — simulates a pre-feature project.
+    step = {"active": True, "velocity": 100, "pitch_offset": 0,
+            "probability": 100, "trig_condition": "always", "p_locks": {}}
+    client.put(f"/api/tracks/{track['id']}/steps/0", json={"step": step}, headers=_h())
+
+    reloaded = client.post("/api/project/load", json={"name": "P"}, headers=_h()).json()
+    t = next(t for t in reloaded["tracks"] if t["id"] == track["id"])
+    assert t["steps"][0].get("micro_timing", 0) == 0
+
+
 def test_sample_assignment_persists_without_explicit_save(client, tmp_path):
     """Sample assignment must survive a project reload with no manual Save."""
     _new_project(client, "P")

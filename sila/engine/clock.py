@@ -123,6 +123,44 @@ class PlaybackClock:
 
         return volume, pan, cutoff, resonance
 
+    def _fire_event(self, event) -> None:
+        """Resolve a TrigEvent to audio and hand it to the audio engine."""
+        player = self._players.get(event.track_id)
+        if player is None:
+            return
+        pl = event.p_locks
+        try:
+            raw_s = pl.get("start") if pl else None
+            raw_e = pl.get("end")   if pl else None
+            p_start = float(raw_s) if raw_s is not None else None
+            p_end   = float(raw_e) if raw_e is not None else None
+        except (TypeError, ValueError):
+            p_start = p_end = None
+        if p_start is not None or p_end is not None:
+            audio = player.get_with_offset(event.velocity, p_start, p_end)
+        else:
+            audio = player.get(event.velocity)
+        if audio is None:
+            return
+        track = self._seq.get_track(event.track_id)
+        if track:
+            volume, pan, cutoff, resonance = self._effective_fx(track)
+            if cutoff < 0.999:
+                audio = apply_lowpass(audio, cutoff, resonance)
+            step_len = event.length
+            if step_len != 1.0 and step_len < 4.0:
+                max_samp = int(step_len * self._interval * 48_000)
+                if 0 < max_samp < len(audio):
+                    audio = audio[:max_samp]
+            h = getattr(track, "humanize", 0.0)
+            if h > 0.0:
+                volume = max(0.01, volume + h * 0.3 * (2.0 * random.random() - 1.0))
+                if h > 0.05:
+                    time.sleep(random.random() * h * self._interval * 0.06)
+        else:
+            volume, pan = 1.0, 0.0
+        self._audio.play(audio, volume=volume, pan=pan)
+
     def _run(self) -> None:
         next_tick = time.perf_counter()
         two_pi = 2.0 * math.pi
@@ -148,44 +186,16 @@ class PlaybackClock:
                     self._audio.play(self._click_beat3)
 
             for event in self._seq.tick():
-                player = self._players.get(event.track_id)
-                if player is None:
-                    continue
-                pl = event.p_locks
-                try:
-                    raw_s = pl.get("start") if pl else None
-                    raw_e = pl.get("end")   if pl else None
-                    p_start = float(raw_s) if raw_s is not None else None
-                    p_end   = float(raw_e) if raw_e is not None else None
-                except (TypeError, ValueError):
-                    p_start = p_end = None
-                if p_start is not None or p_end is not None:
-                    audio = player.get_with_offset(event.velocity, p_start, p_end)
+                # Micro-timing: positive offset fires late via a daemon timer so
+                # the clock thread is not blocked.  Negative (early) fires at
+                # tick time — true early-fire requires lookahead not yet implemented.
+                mt_offset = event.micro_timing * self._interval / 6.0
+                if mt_offset > 0:
+                    t = threading.Timer(mt_offset, self._fire_event, args=[event])
+                    t.daemon = True
+                    t.start()
                 else:
-                    audio = player.get(event.velocity)
-                if audio is None:
-                    continue
-                track = self._seq.get_track(event.track_id)
-                if track:
-                    volume, pan, cutoff, resonance = self._effective_fx(track)
-                    if cutoff < 0.999:
-                        audio = apply_lowpass(audio, cutoff, resonance)
-                    # Step length: truncate audio to note-length × interval
-                    step_len = event.length
-                    if step_len != 1.0 and step_len < 4.0:
-                        max_samp = int(step_len * self._interval * 48_000)
-                        if 0 < max_samp < len(audio):
-                            audio = audio[:max_samp]
-                    # Humanize: velocity variation + micro-timing jitter
-                    h = getattr(track, "humanize", 0.0)
-                    if h > 0.0:
-                        vel_var = int(h * 20 * (2.0 * random.random() - 1.0))
-                        volume = max(0.01, volume + h * 0.3 * (2.0 * random.random() - 1.0))
-                        if h > 0.05:
-                            time.sleep(random.random() * h * self._interval * 0.06)
-                else:
-                    volume, pan = 1.0, 0.0
-                self._audio.play(audio, volume=volume, pan=pan)
+                    self._fire_event(event)
 
             # Advance each track's LFO phase by one 16th-note worth of time.
             for track in list(self._seq._project.tracks):

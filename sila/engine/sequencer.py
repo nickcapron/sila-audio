@@ -27,7 +27,8 @@ class TrigEvent:
     velocity: int
     pitch_offset: int
     p_locks: dict
-    length: float = 1.0  # step note-length multiplier
+    length: float = 1.0        # step note-length multiplier
+    micro_timing: int = 0      # ±23 micro-steps; applied by the clock layer
 
 
 class Sequencer:
@@ -128,6 +129,7 @@ class Sequencer:
             pitch_offset=step.pitch_offset,
             p_locks=dict(step.p_locks),
             length=step.length,
+            micro_timing=step.micro_timing,
         )
 
     def _trig_condition_passes(self, step: Step) -> bool:

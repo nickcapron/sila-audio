@@ -32,5 +32,8 @@ class Step(BaseModel):
     trig_condition: TrigCondition = TrigCondition.ALWAYS
     # Note-length multiplier: 0.5=half, 1.0=normal, 2.0=double, 3.0=triple
     length: float = Field(default=1.0, gt=0, le=8.0)
+    # Digitakt-compatible micro-timing: ±23 micro-steps at 1/96th-note resolution.
+    # Positive = late, negative = early.  1 step = 6 micro-steps, 1 beat = 24.
+    micro_timing: int = Field(default=0, ge=-23, le=23)
     # Parameter locks: any param name → value. Validated at engine level.
     p_locks: dict[str, Any] = Field(default_factory=dict)
