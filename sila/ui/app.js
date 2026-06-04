@@ -353,6 +353,16 @@ function _showTrackMenu(trackId, e) {
     addItem("Paste pattern", () => pastePattern(trackId));
   }
   _addTrackColorPicker(menu, trackId);
+
+  // Destructive action, set apart at the bottom.
+  const del = document.createElement("div");
+  del.textContent = "Delete track";
+  del.style.cssText = "padding:6px 12px;font-size:12px;cursor:pointer;color:#ff6b6b;border-top:1px solid var(--border)";
+  del.onmouseenter = () => del.style.background = "var(--step-hover)";
+  del.onmouseleave = () => del.style.background = "";
+  del.onclick = () => { menu.remove(); deleteTrack(trackId); };
+  menu.appendChild(del);
+
   document.body.appendChild(menu);
   setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
 }
@@ -408,6 +418,21 @@ async function setTrackColor(trackId, color) {
     status(color ? `Track colour set` : "Track colour reset");
   } catch (e) {
     status("Failed to set colour: " + (e.message || e));
+  }
+}
+
+async function deleteTrack(trackId) {
+  const t = project.tracks.find(t => t.id === trackId);
+  const name = t ? t.name : "this track";
+  if (!confirm(`Delete "${name}"? This removes the track and its pattern.`)) return;
+  try {
+    await DEL(`/tracks/${trackId}`);
+    project.tracks = project.tracks.filter(t => t.id !== trackId);
+    if (selectedTrackId === trackId) { selectedTrackId = null; selectedStepIdx = null; }
+    renderTracks();
+    status(`Deleted track "${name}"`);
+  } catch (e) {
+    status("Failed to delete track: " + (e.message || e));
   }
 }
 
