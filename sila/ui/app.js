@@ -906,8 +906,80 @@ function status(msg) {
 // Init
 // ---------------------------------------------------------------------------
 
-// Keep the server alive while the tab is open; server shuts down when pings stop.
-setInterval(() => { POST("/ping").catch(() => {}); }, 5000);
+// Connection heartbeat. Doubles as the keep-alive (the server self-stops when
+// pings stop) and as session-end detection: if the server stops, is killed, or
+// the token goes stale, we show a blocking overlay and fail nicely instead of
+// throwing opaque errors on every click.
+let _connState = "ok";        // "ok" | "lost" | "expired"
+let _heartbeatMisses = 0;
+const _MISS_LIMIT = 2;        // consecutive failures (~10s) before declaring "lost"
+
+async function _heartbeat() {
+  try {
+    const res = await fetch("/api/ping", {
+      method: "POST", headers: { "X-SILA-Token": TOKEN },
+    });
+    if (res.status === 401) { _setConnection("expired"); return; }
+    if (!res.ok) { _onHeartbeatMiss(); return; }
+    _heartbeatMisses = 0;
+    _setConnection("ok");
+  } catch {
+    _onHeartbeatMiss();       // network error → server unreachable
+  }
+}
+
+function _onHeartbeatMiss() {
+  _heartbeatMisses++;
+  if (_heartbeatMisses >= _MISS_LIMIT) _setConnection("lost");
+}
+
+function _setConnection(state) {
+  if (state === _connState) return;
+  const recovering = state === "ok" && _connState !== "ok";
+  _connState = state;
+  if (state === "ok") {
+    _hideConnOverlay();
+    // Server may have restarted with fresh state — reload to resync cleanly.
+    if (recovering) location.reload();
+    return;
+  }
+  const msg = state === "expired"
+    ? "The server restarted with a new token. Reopen SILA using the link printed "
+      + "in the server console (http://127.0.0.1:8765/#token=…)."
+    : "The SILA server isn't responding — it may have stopped. Restart it "
+      + "(python -m sila.main) and this page will reconnect automatically.";
+  _showConnOverlay(msg);
+}
+
+function _showConnOverlay(msg) {
+  let el = document.getElementById("conn-overlay");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "conn-overlay";
+    el.style.cssText = "position:fixed;inset:0;z-index:9999;display:flex;"
+      + "align-items:center;justify-content:center;background:rgba(10,10,12,0.86)";
+    el.innerHTML =
+      '<div style="max-width:460px;padding:28px 32px;background:#1b1b1f;color:#eee;'
+      + 'border:1px solid #3a3a3a;border-radius:8px;text-align:center;'
+      + 'box-shadow:0 8px 30px rgba(0,0,0,0.6);font-size:13px;line-height:1.5">'
+      + '<div style="font-size:15px;font-weight:600;margin-bottom:10px">⚠ Session disconnected</div>'
+      + '<div id="conn-msg" style="color:#bbb;margin-bottom:18px"></div>'
+      + '<button id="conn-reload" style="padding:8px 18px;font:inherit;cursor:pointer;'
+      + 'background:#2a7;border:none;border-radius:4px;color:#06120c;font-weight:600">Reload</button>'
+      + '</div>';
+    document.body.appendChild(el);
+    document.getElementById("conn-reload").onclick = () => location.reload();
+  }
+  document.getElementById("conn-msg").textContent = msg;
+  el.style.display = "flex";
+}
+
+function _hideConnOverlay() {
+  const el = document.getElementById("conn-overlay");
+  if (el) el.style.display = "none";
+}
+
+setInterval(_heartbeat, 5000);
 
 // Stop the sequencer immediately when the tab is closed or navigated away.
 // sendBeacon is fire-and-forget and survives page teardown; fetch() does not.
