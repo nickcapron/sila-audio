@@ -39,6 +39,35 @@ def test_verify_token_wrong():
     assert verify_token("wrong-token") is False
 
 
+def test_token_persists_across_processes(tmp_path, monkeypatch):
+    """A token written to disk must be reused on the next 'start' (reset cache),
+    so restarting the server doesn't invalidate an open browser tab's token."""
+    import sila.security as sec
+    token_file = tmp_path / "SILA" / ".session_token"
+    monkeypatch.setattr(sec, "_TOKEN_FILE", token_file)
+
+    monkeypatch.setattr(sec, "_SESSION_TOKEN", None)  # simulate a fresh process
+    first = sec.generate_session_token()
+    assert token_file.is_file()
+
+    monkeypatch.setattr(sec, "_SESSION_TOKEN", None)  # simulate a restart
+    second = sec.generate_session_token()
+    assert second == first  # reused from disk, not regenerated
+
+
+def test_token_falls_back_when_unwritable(tmp_path, monkeypatch):
+    """If the token file can't be written, fall back to an in-memory token
+    instead of crashing startup."""
+    import sila.security as sec
+    # Point at a path whose parent is a file, so mkdir/write fails.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")
+    monkeypatch.setattr(sec, "_TOKEN_FILE", blocker / "nested" / ".session_token")
+    monkeypatch.setattr(sec, "_SESSION_TOKEN", None)
+    token = sec.generate_session_token()
+    assert isinstance(token, str) and len(token) > 0
+
+
 def test_verify_token_empty():
     assert verify_token("") is False
 

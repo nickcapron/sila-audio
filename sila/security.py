@@ -5,6 +5,7 @@ prevention, notes sanitization, backup-before-write, and filename safety.
 """
 
 import hmac
+import os
 import re
 import secrets
 import shutil
@@ -13,18 +14,53 @@ from pathlib import Path
 
 from fastapi import Header, HTTPException, status
 
-# Generated once at process startup — never logged, never persisted.
-_SESSION_TOKEN: str = secrets.token_urlsafe(32)
+# The session token is persisted under ~/SILA and reused across restarts. This
+# app binds to 127.0.0.1 only, so the token is a local-process guard rather
+# than a network secret; persisting it means restarting the server no longer
+# invalidates the token an already-open browser tab is holding (otherwise every
+# request 401s and the UI looks broken — projects "vanish", saves fail).
+_TOKEN_FILE = Path.home() / "SILA" / ".session_token"
+_SESSION_TOKEN: str | None = None  # lazily loaded so import has no FS side effect
+
+
+def _load_or_create_token() -> str:
+    """Return the persisted token, or mint one and write it to ~/SILA.
+
+    Falls back to an in-memory token (regenerated each start, the old behaviour)
+    if the file can't be read or written for any reason.
+    """
+    try:
+        if _TOKEN_FILE.is_file():
+            existing = _TOKEN_FILE.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+    except OSError:
+        pass
+
+    token = secrets.token_urlsafe(32)
+    try:
+        _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TOKEN_FILE.write_text(token, encoding="utf-8")
+        try:
+            os.chmod(_TOKEN_FILE, 0o600)  # best-effort: owner-only
+        except OSError:
+            pass
+    except OSError:
+        pass  # non-persistent fallback
+    return token
 
 
 def generate_session_token() -> str:
-    """Return the session token for this process run."""
+    """Return the session token, loading or creating it on first use."""
+    global _SESSION_TOKEN
+    if _SESSION_TOKEN is None:
+        _SESSION_TOKEN = _load_or_create_token()
     return _SESSION_TOKEN
 
 
 def verify_token(token: str) -> bool:
     """Constant-time comparison against the session token."""
-    return hmac.compare_digest(token, _SESSION_TOKEN)
+    return hmac.compare_digest(token, generate_session_token())
 
 
 def safe_path(base: str | Path, untrusted: str | Path) -> Path:

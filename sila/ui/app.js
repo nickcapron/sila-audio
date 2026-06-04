@@ -32,6 +32,14 @@ async function api(method, path, body) {
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch("/api" + path, opts);
   if (!res.ok) {
+    if (res.status === 401) {
+      // Stale/invalid token — almost always a server restart. Tell the user
+      // exactly how to recover instead of failing silently (which looked like
+      // lost projects). With the persisted token this should be a one-time fix.
+      status("Session token invalid (server restarted?). Reload with the link "
+           + "from the server console: http://127.0.0.1:8765/#token=SILA_TOKEN");
+      throw new Error("401 unauthorized");
+    }
     const text = await res.text();
     status(`Error ${res.status}: ${text}`);
     throw new Error(text);
