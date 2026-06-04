@@ -9,6 +9,7 @@ Samples live at ~/SILA/projects/<name>/samples/.
 from __future__ import annotations
 
 import json
+import os
 from collections import deque
 from pathlib import Path
 
@@ -55,6 +56,47 @@ class ProjectStore:
         self._undo_stack.clear()
         self._redo_stack.clear()
         return self._project
+
+    def rename(self, old_name: str, new_name: str) -> Path:
+        """Rename a project directory and its stored name field.
+
+        Works whether or not the project is the one currently loaded. Raises
+        FileNotFoundError if *old_name* has no project, FileExistsError if a
+        different project already uses *new_name*. Returns the new directory.
+        """
+        old_dir = safe_path(PROJECTS_ROOT, old_name)
+        if not (old_dir / "project.json").exists():
+            raise FileNotFoundError(old_name)
+        new_dir = safe_path(PROJECTS_ROOT, new_name)
+
+        def _norm(p: Path) -> str:
+            return os.path.normcase(os.path.normpath(str(p)))
+
+        case_only = _norm(old_dir) == _norm(new_dir)  # e.g. "Test" -> "test"
+        if new_dir.exists() and not case_only:
+            raise FileExistsError(new_name)
+
+        was_current = self._project_dir is not None and _norm(self._project_dir) == _norm(old_dir)
+
+        if case_only:
+            # Case-insensitive filesystems won't rename in place — go via a temp.
+            tmp = old_dir.with_name(old_dir.name + ".__rename__")
+            old_dir.rename(tmp)
+            tmp.rename(new_dir)
+        else:
+            old_dir.rename(new_dir)
+
+        # Update the name stored inside project.json so it matches the folder.
+        json_path = new_dir / "project.json"
+        proj = ProjectModel.model_validate_json(json_path.read_text(encoding="utf-8"))
+        proj.name = new_name
+        json_path.write_text(proj.model_dump_json(indent=2), encoding="utf-8")
+
+        if was_current:
+            self._project_dir = new_dir
+            if self._project is not None:
+                self._project.name = new_name
+        return new_dir
 
     def save(self) -> Path:
         if self._project is None or self._project_dir is None:

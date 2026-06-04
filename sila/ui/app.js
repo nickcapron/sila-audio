@@ -1050,6 +1050,12 @@ async function toggleProjectMenu() {
     dd.classList.remove("open");
     return;
   }
+  await _populateProjectMenu(dd);
+  dd.classList.add("open");
+  setTimeout(() => document.addEventListener("click", _closeProjectMenu, { once: true }), 0);
+}
+
+async function _populateProjectMenu(dd) {
   dd.innerHTML = "";
   let projects = [];
   try {
@@ -1060,8 +1066,21 @@ async function toggleProjectMenu() {
   projects.forEach(name => {
     const item = document.createElement("div");
     item.className = "proj-item" + (project && name === project.name ? " active" : "");
-    item.textContent = name;
-    item.onclick = () => { dd.classList.remove("open"); loadProjectByName(name); };
+    item.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px";
+
+    const label = document.createElement("span");
+    label.textContent = name;
+    label.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    label.onclick = () => { dd.classList.remove("open"); loadProjectByName(name); };
+
+    const ren = document.createElement("button");
+    ren.textContent = "✎";
+    ren.title = "Rename project";
+    ren.style.cssText = "background:none;border:none;color:#9aa;cursor:pointer;font:inherit;padding:0 4px";
+    ren.onclick = (e) => { e.stopPropagation(); renameProjectFromMenu(name, dd); };
+
+    item.appendChild(label);
+    item.appendChild(ren);
     dd.appendChild(item);
   });
 
@@ -1070,9 +1089,22 @@ async function toggleProjectMenu() {
   newItem.textContent = "+ New project…";
   newItem.onclick = () => { dd.classList.remove("open"); newProjectFromMenu(); };
   dd.appendChild(newItem);
+}
 
-  dd.classList.add("open");
-  setTimeout(() => document.addEventListener("click", _closeProjectMenu, { once: true }), 0);
+async function renameProjectFromMenu(oldName, dd) {
+  const input = prompt(`Rename project "${oldName}" to:`, oldName);
+  if (input === null) return;                       // cancelled
+  const newName = input.trim();
+  if (!newName || newName === oldName) return;
+  try {
+    const res = await PUT(`/projects/${encodeURIComponent(oldName)}/rename`, { new_name: newName });
+    // If the open project was the one renamed, keep local state in sync.
+    if (project && project.name === oldName) project.name = res.new_name;
+    status(`Renamed "${oldName}" → "${res.new_name}"`);
+    await _populateProjectMenu(dd);                 // refresh the open menu in place
+  } catch (e) {
+    status("Rename failed: " + (e.message || e));
+  }
 }
 
 function _closeProjectMenu(e) {

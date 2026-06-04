@@ -69,6 +69,34 @@ async def load_named_project(
     return project
 
 
+class RenameProjectRequest(BaseModel):
+    new_name: str
+
+
+@router.put("/projects/{name}/rename")
+async def rename_project(
+    name: str,
+    req: RenameProjectRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, str]:
+    """Rename a saved project's folder and stored name. If it is the project
+    currently open, the in-memory project is updated to match."""
+    safe_new = sanitize_project_name(req.new_name)
+    if not safe_new:
+        raise HTTPException(status_code=400, detail="Project name is empty after sanitization")
+    try:
+        state.store.rename(name, safe_new)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project {name!r} not found")
+    except FileExistsError:
+        raise HTTPException(
+            status_code=409, detail=f"A project named {safe_new!r} already exists"
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"old_name": name, "new_name": safe_new}
+
+
 # ---------------------------------------------------------------------------
 # Project endpoints (legacy — kept for UI backward compat)
 # ---------------------------------------------------------------------------

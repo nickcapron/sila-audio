@@ -220,6 +220,40 @@ def test_new_project_clears_song_mode_and_chain(client):
     assert patterns["slots_used"] == []
 
 
+def test_rename_project_changes_listing_and_name(client):
+    """Renaming moves the folder, updates the stored name, and (since it's the
+    open project) updates the in-memory project too."""
+    _new_project(client, "OldName")
+    r = client.put("/api/projects/OldName/rename", json={"new_name": "NewName"}, headers=_h())
+    assert r.status_code == 200 and r.json()["new_name"] == "NewName"
+
+    names = client.get("/api/projects", headers=_h()).json()["projects"]
+    assert "NewName" in names and "OldName" not in names
+    # The open project's name updated, and loading by the new name works.
+    assert client.get("/api/project", headers=_h()).json()["name"] == "NewName"
+    loaded = client.post("/api/project/load", json={"name": "NewName"}, headers=_h())
+    assert loaded.status_code == 200 and loaded.json()["name"] == "NewName"
+
+
+def test_rename_project_collision_returns_409(client):
+    _new_project(client, "Alpha")
+    _new_project(client, "Beta")
+    r = client.put("/api/projects/Alpha/rename", json={"new_name": "Beta"}, headers=_h())
+    assert r.status_code == 409
+
+
+def test_rename_missing_project_returns_404(client):
+    _new_project(client, "Real")
+    r = client.put("/api/projects/Ghost/rename", json={"new_name": "Whatever"}, headers=_h())
+    assert r.status_code == 404
+
+
+def test_rename_empty_name_returns_400(client):
+    _new_project(client, "Keep")
+    r = client.put("/api/projects/Keep/rename", json={"new_name": "***"}, headers=_h())
+    assert r.status_code == 400
+
+
 def test_bpm_change_is_persisted_in_project(client):
     _new_project(client)
     client.put("/api/project/bpm", json={"bpm": 140.0}, headers=_h())
