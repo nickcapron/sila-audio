@@ -214,7 +214,8 @@
       color: var(--text-dim);
     }
     .sample-slot:hover { border-color: #444; color: var(--text); }
-    .sample-slot.loaded { color: var(--accent); border-color: var(--accent-dim); }
+    /* tint the loaded sample name with the track's colour (default teal) */
+    .sample-slot.loaded { color: var(--track-col, var(--accent)); border-color: var(--track-col, var(--accent-dim)); }
 
     .sample-picker {
       position: fixed;
