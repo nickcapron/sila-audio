@@ -1418,4 +1418,186 @@ async function addSample(path, filename) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Import wizard
+// ---------------------------------------------------------------------------
+
+const _IMPORT_CATEGORIES = [
+  "01. Kick", "02. Snare", "03. Clap", "04. Hi-Hat Closed",
+  "05. Hi-Hat Open", "06. Cymbal", "07. Ride", "08. Crash",
+  "09. Tom", "10. Rimshot", "11. Sidestick", "12. Cowbell",
+  "13. Conga", "14. Bongo", "15. Tambourine", "16. Shaker",
+  "17. Cabasa", "18. Maracas", "19. Triangle", "20. Electronic Perc",
+  "21. Bass - Sub", "22. Bass - Synth", "23. Bass - 808",
+  "24. Bass - Acoustic", "25. Lead - Saw", "26. Lead - Square",
+  "27. Lead - Pluck", "28. Lead - Acid", "29. Pad - Warm",
+  "30. Pad - Strings", "31. Pad - Atmosphere", "32. Pad - Choir",
+  "33. Keys - Piano", "34. Keys - Electric Piano", "35. Keys - Organ",
+  "36. Keys - Rhodes", "37. Stab", "38. Brass",
+  "39. Strings - Solo", "40. Strings - Ensemble",
+  "41. Pluck - Guitar", "42. Pluck - Synth", "43. Pluck - Harp",
+  "44. Arp", "45. Drone", "46. Texture", "47. Basic Waveforms",
+  "48. Vocal - Chops", "49. Vocal - One Shots", "50. Vocal - Phrases",
+  "51. Vocal - Harmony", "52. Vocal - Ad Libs",
+  "53. FX - Rise", "54. FX - Fall", "55. FX - Impact",
+  "56. FX - Noise", "57. FX - Glitch", "58. Foley",
+  "59. Field Recording",
+];
+
+let _importSourcePath = null;
+
+function openImportWizard() {
+  _importSourcePath = null;
+  document.getElementById("import-pack-name").value = "";
+  document.getElementById("import-path-input").value = "";
+  _showImportStep("browse");
+  document.getElementById("import-overlay").style.display = "flex";
+}
+
+function closeImportWizard() {
+  document.getElementById("import-overlay").style.display = "none";
+}
+
+function _showImportStep(step) {
+  ["browse", "map", "done"].forEach(s => {
+    document.getElementById(`import-step-${s}`).style.display = s === step ? "" : "none";
+  });
+}
+
+async function importBrowse() {
+  const btn = document.getElementById("import-browse-btn");
+  btn.disabled = true;
+  btn.textContent = "Waiting for folder dialog…";
+  try {
+    const res = await POST("/import/browse", {});
+    if (res.path) {
+      document.getElementById("import-path-input").value = res.path;
+      if (!document.getElementById("import-pack-name").value) {
+        const parts = res.path.replace(/\\/g, "/").split("/").filter(Boolean);
+        document.getElementById("import-pack-name").value = parts[parts.length - 1] || "";
+      }
+    }
+  } catch {
+    status("Folder picker unavailable");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Browse…";
+  }
+}
+
+async function importScan() {
+  const path = document.getElementById("import-path-input").value.trim();
+  if (!path) { status("Enter a folder path first"); return; }
+
+  const btn = document.getElementById("import-scan-btn");
+  btn.disabled = true;
+  btn.textContent = "Scanning…";
+  try {
+    const result = await POST("/import/scan", { path });
+    _importSourcePath = path;
+
+    if (!document.getElementById("import-pack-name").value) {
+      const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+      document.getElementById("import-pack-name").value = parts[parts.length - 1] || "";
+    }
+
+    _renderImportMap(result);
+    _showImportStep("map");
+  } catch {
+    status("Scan failed — check the path and try again");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Scan Folder →";
+  }
+}
+
+function _renderImportMap(result) {
+  const n = result.groups.length;
+  document.getElementById("import-map-title").textContent =
+    `${result.total_files} files in ${n} group${n !== 1 ? "s" : ""} — assign categories or skip.`;
+
+  const tbody = document.getElementById("import-map-tbody");
+  tbody.innerHTML = "";
+
+  for (const group of result.groups) {
+    const tr = document.createElement("tr");
+    tr.dataset.group = group.name;
+
+    const tdName = document.createElement("td");
+    tdName.textContent = group.name;
+    tdName.style.cssText = "max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    tr.appendChild(tdName);
+
+    const tdCount = document.createElement("td");
+    tdCount.textContent = group.file_count;
+    tdCount.style.cssText = "color:var(--text-dim);text-align:right;padding-right:12px";
+    tr.appendChild(tdCount);
+
+    const tdCat = document.createElement("td");
+    const sel = document.createElement("select");
+    sel.dataset.group = group.name;
+
+    const skipOpt = document.createElement("option");
+    skipOpt.value = "";
+    skipOpt.textContent = "— Skip —";
+    sel.appendChild(skipOpt);
+
+    for (const cat of _IMPORT_CATEGORIES) {
+      const opt = document.createElement("option");
+      opt.value = cat;
+      opt.textContent = cat;
+      if (cat === group.suggestion) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    tdCat.appendChild(sel);
+    tr.appendChild(tdCat);
+    tbody.appendChild(tr);
+  }
+
+  const mapped = result.groups.filter(g => g.suggestion).length;
+  document.getElementById("import-exec-btn").textContent =
+    `Import ${mapped} group${mapped !== 1 ? "s" : ""}`;
+}
+
+async function importExecute() {
+  const packName = document.getElementById("import-pack-name").value.trim();
+  if (!packName) { status("Enter a pack name"); return; }
+
+  const mappings = {};
+  document.querySelectorAll("#import-map-tbody select").forEach(sel => {
+    if (sel.value) mappings[sel.dataset.group] = sel.value;
+  });
+  if (!Object.keys(mappings).length) { status("Assign at least one category"); return; }
+
+  const btn     = document.getElementById("import-exec-btn");
+  const backBtn = document.getElementById("import-back-btn");
+  btn.disabled     = true;
+  backBtn.disabled = true;
+  btn.textContent  = "Copying files into library…";
+  try {
+    const result = await POST("/import/execute", {
+      source_path: _importSourcePath,
+      pack_name: packName,
+      mappings,
+    });
+
+    const imported = result.imported;
+    const cats     = result.categories_created;
+    const skipped  = result.skipped;
+    document.getElementById("import-done-text").innerHTML =
+      `<strong>${imported}</strong> file${imported !== 1 ? "s" : ""} copied into library<br>` +
+      `<strong>${cats}</strong> categor${cats !== 1 ? "ies" : "y"} created` +
+      (skipped ? `<br><span style="color:var(--text-dim);font-size:11px">${skipped} skipped (already in library)</span>` : "");
+
+    _showImportStep("done");
+    _libraryLoaded = false;
+    loadLibrary();
+  } catch {
+    status("Import failed");
+    btn.disabled     = false;
+    backBtn.disabled = false;
+    btn.textContent  = "Import";
+  }
+}
+
 boot();
