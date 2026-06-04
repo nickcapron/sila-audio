@@ -205,6 +205,21 @@ def test_save_and_load_round_trip_preserves_tracks(client):
     assert any(t["name"] == "KickDrum" for t in resp.json()["tracks"])
 
 
+def test_new_project_clears_song_mode_and_chain(client):
+    """A freshly created project must not inherit song-mode state from the
+    previous one — the client re-syncs the song bar from this contract."""
+    _new_project(client, "WithSong")
+    client.put("/api/song/mode?active=true", headers=_h())
+    client.put("/api/song/chain", json={"chain": [0, 2, 1]}, headers=_h())
+
+    # Create a brand-new project; it must report a clean song state.
+    client.post("/api/projects", json={"name": "Fresh"}, headers=_h())
+    patterns = client.get("/api/patterns", headers=_h()).json()
+    assert patterns["song_mode"] is False
+    assert patterns["chain"] == []
+    assert patterns["slots_used"] == []
+
+
 def test_bpm_change_is_persisted_in_project(client):
     _new_project(client)
     client.put("/api/project/bpm", json={"bpm": 140.0}, headers=_h())

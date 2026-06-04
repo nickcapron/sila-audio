@@ -1008,8 +1008,7 @@ async function loadProjectByName(name) {
     });
     if (!res.ok) { status("Failed to load project"); return; }
     project = await res.json();
-    renderTracks();
-    document.getElementById("bpm-input").value = project.bpm;
+    await _applyProjectSwitch();
     status(`Loaded: ${project.name}`);
   } catch { status("Failed to load project"); }
 }
@@ -1188,8 +1187,9 @@ async function initSongBar() {
     _songMode = res.song_mode || false;
   } catch { /* ignore */ }
   renderPatternSlots();
-  document.getElementById("btn-song-mode").textContent = "SONG " + (_songMode ? "ON" : "OFF");
-  if (_songMode) document.getElementById("btn-song-mode").classList.add("active");
+  const songBtn = document.getElementById("btn-song-mode");
+  songBtn.textContent = "SONG " + (_songMode ? "ON" : "OFF");
+  songBtn.classList.toggle("active", _songMode);  // toggle (not add) so it clears when off
 }
 
 function renderPatternSlots() {
@@ -1278,14 +1278,25 @@ async function toggleSongMode() {
   }
 }
 
+// Re-sync all project-dependent UI after creating or loading a project, so no
+// settings (song mode, swing, bpm, active slot) leak in from the old project.
+async function _applyProjectSwitch() {
+  document.getElementById("bpm-input").value = project.bpm;
+  const swingPct = Math.round((project.swing || 0) * 100);
+  document.getElementById("swing-input").value = swingPct;
+  document.getElementById("swing-pct").textContent = swingPct + "%";
+  _currentSongSlot = null;
+  renderTracks();
+  await initSongBar();  // refetches /patterns → resets _songMode/_songChain + song-bar UI
+}
+
 async function newProjectFromMenu() {
   const name = prompt("Project name:");
   if (!name || !name.trim()) return;
   try {
     const res = await POST("/projects", { name: name.trim() });
     project = res;
-    renderTracks();
-    document.getElementById("bpm-input").value = project.bpm;
+    await _applyProjectSwitch();
     status(`Created: ${project.name}`);
   } catch { status("Failed to create project"); }
 }
