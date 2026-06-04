@@ -72,15 +72,18 @@ def _find_output_device() -> int | None:
 
 
 class _Voice:
-    __slots__ = ("audio", "pos", "volume", "pan_l", "pan_r")
+    __slots__ = ("audio", "pos", "volume", "pan_l", "pan_r", "delay_frames", "frames_remaining")
 
-    def __init__(self, audio: np.ndarray, volume: float, pan: float) -> None:
+    def __init__(self, audio: np.ndarray, volume: float, pan: float,
+                 delay_frames: int = 0, frames_remaining: int = -1) -> None:
         self.audio = np.ascontiguousarray(audio, dtype=np.float32)
         self.pos = 0
         self.volume = float(volume)
         angle = (pan + 1.0) * 0.5 * (math.pi / 2.0)
         self.pan_l = float(math.cos(angle))
         self.pan_r = float(math.sin(angle))
+        self.delay_frames = int(delay_frames)
+        self.frames_remaining = int(frames_remaining)  # -1 = play to end
 
 
 class AudioEngine:
@@ -276,9 +279,11 @@ class AudioEngine:
         if not self._stopping_intentionally:
             self._stream_died.set()
 
-    def play(self, audio: np.ndarray, volume: float = 1.0, pan: float = 0.0) -> None:
+    def play(self, audio: np.ndarray, volume: float = 1.0, pan: float = 0.0,
+             delay_frames: int = 0, max_frames: int | None = None) -> None:
+        frames_remaining = -1 if max_frames is None else int(max_frames)
         with self._lock:
-            self._voices.append(_Voice(audio, volume, pan))
+            self._voices.append(_Voice(audio, volume, pan, delay_frames, frames_remaining))
 
     def _callback(
         self,
@@ -287,17 +292,29 @@ class AudioEngine:
         time_info: object,
         status: sd.CallbackFlags,
     ) -> None:
-        out = np.zeros((frames, 2), dtype=np.float32)
+        outdata.fill(0.0)
         with self._lock:
-            alive: list[_Voice] = []
-            for v in self._voices:
-                n = min(frames, len(v.audio) - v.pos)
+            for i in range(len(self._voices) - 1, -1, -1):
+                v = self._voices[i]
+
+                if v.delay_frames >= frames:
+                    v.delay_frames -= frames
+                    continue
+
+                out_offset = max(0, v.delay_frames)
+                v.delay_frames = 0
+                frames_to_mix = frames - out_offset
+                n = min(frames_to_mix, len(v.audio) - v.pos)
+
+                if v.frames_remaining > 0:
+                    n = min(n, v.frames_remaining)
+                    v.frames_remaining -= n
+
                 chunk = v.audio[v.pos : v.pos + n] * v.volume
-                out[:n, 0] += v.pan_l * chunk
-                out[:n, 1] += v.pan_r * chunk
+                outdata[out_offset : out_offset + n, 0] += v.pan_l * chunk
+                outdata[out_offset : out_offset + n, 1] += v.pan_r * chunk
                 v.pos += n
-                if v.pos < len(v.audio):
-                    alive.append(v)
-            self._voices = alive
-        np.clip(out, -1.0, 1.0, out=out)
-        outdata[:] = out
+
+                if v.pos >= len(v.audio) or v.frames_remaining == 0:
+                    self._voices.pop(i)
+        np.clip(outdata, -1.0, 1.0, out=outdata)

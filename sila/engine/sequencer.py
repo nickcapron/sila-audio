@@ -45,6 +45,8 @@ class Sequencer:
         self._project = project
         # Per-track step counters, keyed by track.id.
         self._counters: dict[str, int] = {t.id: 0 for t in project.tracks}
+        # Per-track pattern-loop counts — used by deterministic A:B trig conditions.
+        self._iterations: dict[str, int] = {t.id: 0 for t in project.tracks}
         self.on_trig: Callable[[TrigEvent], None] | None = None
         self._fill_active: bool = project.fill_active
 
@@ -83,21 +85,25 @@ class Sequencer:
         return events
 
     def reset(self) -> None:
-        """Reset all track counters to step 0."""
+        """Reset all track counters and iteration counts to zero."""
         for track in self._project.tracks:
             self._counters[track.id] = 0
+            self._iterations[track.id] = 0
 
     def reset_track(self, track_id: str) -> None:
         self._counters[track_id] = 0
+        self._iterations[track_id] = 0
 
     def add_track(self, track: TrackModel) -> None:
         track.ensure_steps()
         self._project.tracks.append(track)
         self._counters[track.id] = 0
+        self._iterations[track.id] = 0
 
     def remove_track(self, track_id: str) -> None:
         self._project.tracks = [t for t in self._project.tracks if t.id != track_id]
         self._counters.pop(track_id, None)
+        self._iterations.pop(track_id, None)
 
     def get_track(self, track_id: str) -> TrackModel | None:
         for t in self._project.tracks:
@@ -110,14 +116,14 @@ class Sequencer:
     # ------------------------------------------------------------------
 
     def _evaluate_track(self, track: TrackModel) -> TrigEvent | None:
-        idx = self._counters[track.id] % max(len(track.steps), 1)
         if not track.steps:
             return None
+        idx = self._counters[track.id] % len(track.steps)
         step = track.steps[idx]
 
         if not step.active:
             return None
-        if not self._trig_condition_passes(step):
+        if not self._trig_condition_passes(step, track.id):
             return None
         if not self._probability_passes(step.probability):
             return None
@@ -132,7 +138,7 @@ class Sequencer:
             micro_timing=step.micro_timing,
         )
 
-    def _trig_condition_passes(self, step: Step) -> bool:
+    def _trig_condition_passes(self, step: Step, track_id: str) -> bool:
         tc = step.trig_condition
         if tc == TrigCondition.ALWAYS:
             return True
@@ -141,9 +147,9 @@ class Sequencer:
         elif tc == TrigCondition.NOT_FILL:
             return not self._fill_active
         elif tc == TrigCondition.ONE_IN_2:
-            return random.random() < 0.5
+            return (self._iterations.get(track_id, 0) % 2) == 0
         elif tc == TrigCondition.ONE_IN_4:
-            return random.random() < 0.25
+            return (self._iterations.get(track_id, 0) % 4) == 0
         return False
 
     @staticmethod
@@ -155,5 +161,10 @@ class Sequencer:
         return random.randint(1, 100) <= probability
 
     def _advance(self, track: TrackModel) -> None:
-        step_count = max(len(track.steps), 1)
-        self._counters[track.id] = (self._counters[track.id] + 1) % step_count
+        step_count = len(track.steps)
+        if step_count == 0:
+            return
+        new_counter = (self._counters[track.id] + 1) % step_count
+        if new_counter == 0:
+            self._iterations[track.id] = self._iterations.get(track.id, 0) + 1
+        self._counters[track.id] = new_counter

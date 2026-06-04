@@ -123,7 +123,7 @@ class PlaybackClock:
 
         return volume, pan, cutoff, resonance
 
-    def _fire_event(self, event) -> None:
+    def _fire_event(self, event, base_delay_frames: int = 0) -> None:
         """Resolve a TrigEvent to audio and hand it to the audio engine."""
         player = self._players.get(event.track_id)
         if player is None:
@@ -143,6 +143,8 @@ class PlaybackClock:
         if audio is None:
             return
         track = self._seq.get_track(event.track_id)
+        max_frames = None
+        humanize_delay = 0
         if track:
             volume, pan, cutoff, resonance = self._effective_fx(track)
             if cutoff < 0.999:
@@ -151,15 +153,16 @@ class PlaybackClock:
             if step_len != 1.0 and step_len < 4.0:
                 max_samp = int(step_len * self._interval * 48_000)
                 if 0 < max_samp < len(audio):
-                    audio = audio[:max_samp]
+                    max_frames = max_samp
             h = getattr(track, "humanize", 0.0)
             if h > 0.0:
                 volume = max(0.01, volume + h * 0.3 * (2.0 * random.random() - 1.0))
                 if h > 0.05:
-                    time.sleep(random.random() * h * self._interval * 0.06)
+                    humanize_delay = int(random.random() * h * self._interval * 0.06 * 48_000)
         else:
             volume, pan = 1.0, 0.0
-        self._audio.play(audio, volume=volume, pan=pan)
+        total_delay = base_delay_frames + humanize_delay
+        self._audio.play(audio, volume=volume, pan=pan, delay_frames=total_delay, max_frames=max_frames)
 
     def _run(self) -> None:
         next_tick = time.perf_counter()
@@ -177,36 +180,8 @@ class PlaybackClock:
                     self._running = False
                     break
 
-            # Metronome: beat 1 (tick 0 mod 16) and beat 3 (tick 8 mod 16)
-            if self.metronome:
-                beat = tick_count % 16
-                if beat == 0:
-                    self._audio.play(self._click_beat1)
-                elif beat == 8:
-                    self._audio.play(self._click_beat3)
-
-            for event in self._seq.tick():
-                # Micro-timing: positive offset fires late via a daemon timer so
-                # the clock thread is not blocked.  Negative (early) fires at
-                # tick time — true early-fire requires lookahead not yet implemented.
-                mt_offset = event.micro_timing * self._interval / 6.0
-                if mt_offset > 0:
-                    t = threading.Timer(mt_offset, self._fire_event, args=[event])
-                    t.daemon = True
-                    t.start()
-                else:
-                    self._fire_event(event)
-
-            # Advance each track's LFO phase by one 16th-note worth of time.
-            for track in list(self._seq._project.tracks):
-                phase = self._lfo_phases.get(track.id, 0.0)
-                self._lfo_phases[track.id] = (
-                    phase + two_pi * track.lfo.rate * self._interval
-                ) % two_pi
-
-            # Song mode: advance chain after each 16-step bar if all tracks have
-            # completed a full loop.  We advance when the global tick count is a
-            # multiple of the longest track's step count.
+            # Song mode: swap pattern before the sequencer evaluates this tick so
+            # the new pattern's step 0 plays on the bar boundary, not the old one.
             proj = self._seq._project
             if getattr(proj, "song_mode", False):
                 chain = getattr(proj, "song_chain", [])
@@ -221,6 +196,26 @@ class PlaybackClock:
                             for track in proj.tracks:
                                 if track.id in snapshot:
                                     track.steps = list(snapshot[track.id])
+
+            # Metronome: beat 1 (tick 0 mod 16) and beat 3 (tick 8 mod 16)
+            if self.metronome:
+                beat = tick_count % 16
+                if beat == 0:
+                    self._audio.play(self._click_beat1)
+                elif beat == 8:
+                    self._audio.play(self._click_beat3)
+
+            for event in self._seq.tick():
+                mt_offset = event.micro_timing * self._interval / 6.0
+                delay_frames = int(mt_offset * 48_000) if mt_offset > 0 else 0
+                self._fire_event(event, base_delay_frames=delay_frames)
+
+            # Advance each track's LFO phase by one 16th-note worth of time.
+            for track in list(self._seq._project.tracks):
+                phase = self._lfo_phases.get(track.id, 0.0)
+                self._lfo_phases[track.id] = (
+                    phase + two_pi * track.lfo.rate * self._interval
+                ) % two_pi
 
             # Swing: shift odd-numbered 16th-notes late, even ones early so the
             # average tempo stays exactly correct.  swing=0 = straight;
