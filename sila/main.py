@@ -5,11 +5,14 @@ Binds exclusively to 127.0.0.1. Prints the session token to stdout once on
 startup so the UI and test harness can pick it up. Never logged.
 """
 
+import argparse
 import asyncio
 import os
 import signal
 import subprocess
 import sys
+import threading
+import webbrowser
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -82,6 +85,13 @@ async def _heartbeat_watchdog() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     routes_startup()
+    # --open: launch the browser at the token URL once the server is up. The
+    # token lives in the URL hash (#token=), which app.js reads then stores.
+    # Done in a daemon thread so webbrowser.open() never blocks startup. Read
+    # from the env (set by main()) so it survives uvicorn's app re-import.
+    if os.environ.get("SILA_OPEN") == "1":
+        url = f"http://127.0.0.1:{_PORT}/#token={generate_session_token()}"
+        threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
     task = asyncio.create_task(_heartbeat_watchdog())
     yield
     # Clean shutdown: stop clock first, then audio engine, before the process exits.
@@ -110,10 +120,23 @@ app.mount("/", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="sila", description="SILA step sequencer server"
+    )
+    parser.add_argument(
+        "--open", action="store_true",
+        help="Open SILA in your default browser (at the token URL) once it's up",
+    )
+    args = parser.parse_args()
+
     _kill_port(_PORT)
     token = generate_session_token()
     # Print token once for the UI/harness to read. Not logged anywhere else.
     print(f"SILA_TOKEN={token}", flush=True)
+    if args.open:
+        # Signal the lifespan hook (which runs in the re-imported app module).
+        os.environ["SILA_OPEN"] = "1"
+        print(f"Opening http://127.0.0.1:{_PORT}/ in your browser…", flush=True)
     uvicorn.run(
         "sila.main:app",
         host="127.0.0.1",  # never 0.0.0.0
