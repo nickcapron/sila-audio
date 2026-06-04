@@ -855,6 +855,12 @@ function status(msg) {
 // Keep the server alive while the tab is open; server shuts down when pings stop.
 setInterval(() => { POST("/ping").catch(() => {}); }, 5000);
 
+// Stop the sequencer immediately when the tab is closed or navigated away.
+// sendBeacon is fire-and-forget and survives page teardown; fetch() does not.
+window.addEventListener("beforeunload", () => {
+  navigator.sendBeacon("/api/sequencer/stop");
+});
+
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts
 // ---------------------------------------------------------------------------

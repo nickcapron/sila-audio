@@ -55,6 +55,21 @@ class AppState:
         self.midi_learn_track_id: str | None = None
 
     def startup(self) -> None:
+        # Wire up a dedicated handler for sila.engine.clock so dropped-trig
+        # debug messages reach the console even after uvicorn resets the root
+        # logger.  propagate=False bypasses root's WARNING filter entirely.
+        import sys as _sys
+        _clock_log = logging.getLogger("sila.engine.clock")
+        _clock_log.setLevel(logging.DEBUG)
+        if not _clock_log.handlers:
+            _h = logging.StreamHandler(_sys.stderr)
+            _h.setLevel(logging.DEBUG)
+            _h.setFormatter(logging.Formatter(
+                "%(asctime)s [%(name)s] %(message)s", "%H:%M:%S"
+            ))
+            _clock_log.addHandler(_h)
+        _clock_log.propagate = False
+
         self.last_ping = time.monotonic()
         ensure_my_samples()
 

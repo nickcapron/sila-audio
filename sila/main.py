@@ -6,7 +6,6 @@ startup so the UI and test harness can pick it up. Never logged.
 """
 
 import asyncio
-import logging
 import os
 import signal
 import subprocess
@@ -23,9 +22,9 @@ from sila.security import generate_session_token
 
 _PORT = 8765
 _HEARTBEAT_TIMEOUT = 120.0  # shut down if no browser ping for this many seconds
-# 120 s gives headroom for Chrome's background-tab timer throttling (~1 min)
+# 120 s gives headroom for Chrome's background-tab timer throttling (~60 s)
 # while still cleaning up if the user genuinely closes the app.
-_HEARTBEAT_POLL = 5.0      # how often the watchdog checks
+_HEARTBEAT_POLL = 5.0       # how often the watchdog checks
 
 
 def _should_watchdog_fire() -> bool:
@@ -70,6 +69,10 @@ async def _heartbeat_watchdog() -> None:
     while True:
         await asyncio.sleep(_HEARTBEAT_POLL)
         if _should_watchdog_fire():
+            # Stop clock and audio explicitly before killing so cleanup runs
+            # even on Windows where os.kill(SIGTERM) = TerminateProcess and
+            # the lifespan finally-block never executes.
+            routes_shutdown()
             os.kill(os.getpid(), signal.SIGTERM)
             return
 
@@ -105,16 +108,6 @@ app.mount("/", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
 
 def main() -> None:
-    # Root handler at WARNING keeps uvicorn HTTP traffic quiet.
-    # sila.engine.clock is promoted to DEBUG so dropped-trig messages
-    # surface in the console for polyphony debugging.
-    logging.basicConfig(
-        level=logging.WARNING,
-        format="%(asctime)s [%(name)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    logging.getLogger("sila.engine.clock").setLevel(logging.DEBUG)
-
     _kill_port(_PORT)
     token = generate_session_token()
     # Print token once for the UI/harness to read. Not logged anywhere else.
