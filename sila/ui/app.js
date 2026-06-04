@@ -965,7 +965,7 @@ function _showConnOverlay(msg) {
       + '<div style="font-size:15px;font-weight:600;margin-bottom:10px">⚠ Session disconnected</div>'
       + '<div id="conn-msg" style="color:#bbb;margin-bottom:18px"></div>'
       + '<button id="conn-reload" style="padding:8px 18px;font:inherit;cursor:pointer;'
-      + 'background:#2a7;border:none;border-radius:4px;color:#06120c;font-weight:600">Reload</button>'
+      + 'background:#34e3c4;border:none;border-radius:4px;color:#04110d;font-weight:600">Reload</button>'
       + '</div>';
     document.body.appendChild(el);
     document.getElementById("conn-reload").onclick = () => location.reload();

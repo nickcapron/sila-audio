@@ -20,9 +20,11 @@ from sila.security import sanitize_notes, sanitize_project_name, safe_path
 
 router = APIRouter()
 
+# Aurora spectrum — cool arctic tones so new tracks fit the SILA palette.
+# (Existing projects keep whatever colour was saved with each track.)
 _TRACK_PALETTE = [
-    "#e8632a", "#2ae8c6", "#8b2ae8", "#2ae83c",
-    "#2a68e8", "#e82a4e", "#e8d82a", "#e82aab",
+    "#34e3c4", "#3ef0a6", "#5fd0e0", "#6fa8ff",
+    "#8b6cf0", "#b58bf5", "#e06ad0", "#9ad94f",
 ]
 
 

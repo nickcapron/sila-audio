@@ -8,20 +8,25 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #111;
-      --surface: #1a1a1a;
-      --border: #2a2a2a;
-      --accent: #e8632a;
-      --accent-dim: #6b3015;
-      --text: #d4d4d4;
-      --text-dim: #666;
-      --step-off: #222;
-      --step-on: #e8632a;
-      --step-hover: #333;
+      /* SILA Aurora — arctic night sky + aurora borealis (breath of the air) */
+      --bg: #0a0e14;            /* cold near-black, blue-tinted */
+      --surface: #121823;
+      --border: #233040;
+      --accent: #34e3c4;        /* aurora teal */
+      --accent-2: #8b6cf0;      /* aurora violet */
+      --accent-dim: #15463f;    /* dim teal (active-button fill) */
+      --aurora: linear-gradient(100deg, #34e3c4 0%, #5fd0e0 45%, #8b6cf0 100%);
+      --text: #d7e3e8;          /* frost white */
+      --text-dim: #6b7c8c;
+      --frost: #eaf4f7;
+      --step-off: #18222f;      /* cold slate */
+      --step-on: #34e3c4;
+      --step-hover: #243245;
     }
 
     body {
-      background: var(--bg);
+      /* faint glow at the horizon, like low arctic light under the night sky */
+      background: radial-gradient(125% 80% at 50% -12%, #101a28 0%, var(--bg) 58%);
       color: var(--text);
       font-family: 'SF Mono', 'Consolas', monospace;
       font-size: 13px;
@@ -39,8 +44,19 @@
       padding: 8px 16px;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+      position: relative;
     }
-    .logo { color: var(--accent); font-weight: 700; font-size: 15px; letter-spacing: 2px; }
+    /* aurora ribbon under the header */
+    header::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+      background: var(--aurora); opacity: 0.55;
+    }
+    .logo {
+      font-weight: 700; font-size: 15px; letter-spacing: 4px;
+      background: var(--aurora);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+    }
     .bpm-display { display: flex; align-items: center; gap: 6px; }
     .bpm-display input {
       background: var(--surface);
@@ -63,9 +79,9 @@
       cursor: pointer;
       transition: background 0.1s;
     }
-    .btn:hover { background: #2a2a2a; }
-    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .btn.primary:hover { background: #d4571f; }
+    .btn:hover { background: #1c2735; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #04110d; font-weight: 600; }
+    .btn.primary:hover { background: #5cead0; }
     .btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
     .spacer { flex: 1; }
 
@@ -242,8 +258,20 @@
       position: relative;
     }
     .step:hover { background: var(--step-hover); }
-    .step.on { background: var(--track-col, var(--step-on)); border-color: var(--track-col, #ff7843); }
-    .step.playing { outline: 2px solid #fff; outline-offset: -2px; }
+    .step.on {
+      background: var(--track-col, var(--step-on));
+      border-color: var(--track-col, var(--step-on));
+      box-shadow: 0 0 8px -1px var(--track-col, var(--step-on));  /* LED glow */
+    }
+    /* the playhead "breathes" — Sila, the breath of the air */
+    @keyframes breathe {
+      0%, 100% { box-shadow: 0 0 3px 0 rgba(234, 244, 247, 0.45); }
+      50%      { box-shadow: 0 0 11px 2px rgba(234, 244, 247, 0.95); }
+    }
+    .step.playing {
+      outline: 1px solid var(--frost); outline-offset: -1px;
+      animation: breathe 1.4s ease-in-out infinite;
+    }
 
     /* ── Library browser panel (left, collapsible) ──────────── */
     #lib-panel {
@@ -384,7 +412,7 @@
     .pattern-slot:hover { border-color: #444; }
     .pattern-slot.saved { border-color: var(--accent-dim); color: var(--accent); }
     .pattern-slot.in-chain { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
-    .pattern-slot.playing { background: var(--accent); color: #fff; }
+    .pattern-slot.playing { background: var(--accent); color: #04110d; }
     #active-pattern-label {
       font-size: 10px;
       letter-spacing: 1px;
