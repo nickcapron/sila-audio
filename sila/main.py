@@ -106,6 +106,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="SILA", version="0.1.0", lifespan=lifespan)
 app.include_router(router, prefix="/api")
 
+
+@app.middleware("http")
+async def _no_cache_ui(request, call_next):
+    """Tell the browser to revalidate UI assets every load.
+
+    Without this, browsers cache app.js/index.html aggressively, so a code
+    change only shows after a manual hard-refresh — a recurring source of
+    "I don't see it". no-cache (not no-store) still lets the server answer 304
+    when nothing changed, so it stays cheap on localhost.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".js", ".html", ".css")):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
 # Serve the UI from the ui/ directory.
 import pathlib
 _UI_DIR = pathlib.Path(__file__).parent / "ui"
