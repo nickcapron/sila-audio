@@ -108,6 +108,21 @@ async def set_metronome(
     return {"metronome": active}
 
 
+@router.put("/sequencer/small-speaker")
+async def set_small_speaker(
+    active: bool, state: AppState = Depends(get_state)
+) -> dict[str, bool]:
+    """Toggle small-speaker monitoring on the live master bus.
+
+    Monitoring-only: it shapes live playback so bass/layered sounds are audible
+    on laptop and built-in speakers. It is never written to the project and
+    never affects the Digitakt export. Off by default → high-end gear is
+    unaffected (the master bus is bit-identical when disabled).
+    """
+    state.audio_engine.small_speaker = active
+    return {"small_speaker": active}
+
+
 @router.post("/sequencer/reset")
 async def reset_sequencer(state: AppState = Depends(get_state)) -> dict[str, bool]:
     state.get_seq().reset()

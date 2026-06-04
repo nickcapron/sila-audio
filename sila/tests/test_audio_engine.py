@@ -310,6 +310,48 @@ def test_callback_frames_remaining_truncates_playback():
     assert len(engine._voices) == 0, "voice must be evicted after frames_remaining hits 0"
 
 
+def test_small_speaker_off_is_bit_identical_default():
+    """Default (small_speaker=False) must leave the master bus untouched —
+    high-end users on proper gear get the raw hard-clipped mix, unchanged."""
+    engine = AudioEngine()
+    assert engine.small_speaker is False
+    engine.play(_ones(), volume=1.0, pan=-1.0)  # full-scale signal
+    buf = _drive(engine)
+    # Full-scale 1.0 passes through exactly (no soft-clip coloration).
+    assert buf[:, 0] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_small_speaker_on_soft_limits_and_stays_finite():
+    """With small-speaker mode on, stacked over-unity transients are soft-limited
+    (never exceed 1.0) and the output is finite."""
+    engine = AudioEngine()
+    engine.small_speaker = True
+    engine.play(_ones(), volume=1.0, pan=-1.0)
+    engine.play(_ones(), volume=1.0, pan=-1.0)  # sums to 2.0 pre-limit
+    buf = _drive(engine)
+    assert np.all(np.abs(buf) <= 1.0 + 1e-6)
+    assert np.all(np.isfinite(buf))
+
+
+def test_small_speaker_filter_state_resets_on_start(monkeypatch):
+    """(Re)opening the stream must clear the master filter memory so playback
+    never starts with stale IIR state from a previous session."""
+    engine = AudioEngine()
+    engine._ms_state[:] = 0.5  # simulate leftover filter memory
+    monkeypatch.setattr("sila.engine.audio.sd.OutputStream", lambda **kw: _FakeStream())
+    monkeypatch.setattr("sila.engine.audio._find_output_device", lambda: None)
+    engine.start()
+    assert np.all(engine._ms_state == 0.0)
+    engine.stop()
+
+
+class _FakeStream:
+    active = True
+    def start(self): pass
+    def stop(self): pass
+    def close(self): pass
+
+
 def test_callback_delay_and_frames_remaining_combined():
     """delay_frames offsets the start; frames_remaining limits the duration."""
     delay, max_f = 200, 100

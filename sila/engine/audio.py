@@ -11,6 +11,52 @@ import sounddevice as sd
 SR = 48_000
 BLOCK = 512  # frames per callback
 
+# --- Small-speaker monitoring (master bus, opt-in) -------------------------
+# Laptop / phone / cheap speakers roll off everything below ~150-200 Hz, so
+# bass-heavy or lowpassed sounds (e.g. a filtered kick) become inaudible and
+# a layered mix can sound like a single voice.  When small-speaker mode is on,
+# the master bus: (1) high-passes the deep sub the speaker can't reproduce,
+# (2) synthesises audible harmonics of the low band so the brain still hears
+# the bass pitch (psychoacoustic bass), and (3) soft-limits so simultaneous
+# transients don't hard-clip and mask each other.  Default OFF → the signal is
+# bit-identical, so high-end users on proper gear are unaffected.
+_SS_FC_SUB = 90.0     # Hz: below this is removed (speaker can't make it anyway)
+_SS_FC_LOW = 150.0    # Hz: low band fed to the harmonic generator
+_SS_DRIVE = 2.5       # harmonic generator drive
+_SS_BASS_GAIN = 0.8   # how much synthesised harmonic bass to add back
+_SS_A_SUB = math.exp(-2.0 * math.pi * _SS_FC_SUB / SR)
+_SS_A_LOW = math.exp(-2.0 * math.pi * _SS_FC_LOW / SR)
+_SS_SOFT_KNEE = 0.8   # soft-limiter threshold (only active in small-speaker mode)
+
+
+def _onepole_lp_block(x: np.ndarray, a: float, state: float) -> tuple[np.ndarray, float]:
+    """One-pole lowpass over a block, carrying IIR state across calls.
+
+    Implements y[n] = a*y[n-1] + (1-a)*x[n] in closed form so it stays fully
+    vectorised (no per-sample Python loop in the real-time callback, and no
+    scipy dependency).  Returns (filtered_block, new_state).
+    """
+    n = len(x)
+    if n == 0:
+        return x, state
+    idx = np.arange(n)
+    apow = a ** idx               # a^n
+    ainv = a ** (-idx)            # a^-n  (bounded for block-sized n)
+    c = np.cumsum(ainv * x)       # Σ a^-i x[i]
+    y = a * apow * state + (1.0 - a) * apow * c
+    return y, float(y[-1])
+
+
+def _soft_clip(buf: np.ndarray, knee: float = _SS_SOFT_KNEE) -> None:
+    """In-place soft limiter: identity below *knee*, smoothly saturating to 1.0
+    above it, so stacked transients round off instead of harshly hard-clipping."""
+    a = np.abs(buf)
+    over = a > knee
+    if over.any():
+        span = 1.0 - knee
+        buf[over] = np.sign(buf[over]) * (knee + span * np.tanh((a[over] - knee) / span))
+    np.clip(buf, -1.0, 1.0, out=buf)
+
 
 def _get_waveout_device_count() -> int:
     """Return the Windows WinMM waveOut device count, or -1 on non-Windows.
@@ -99,6 +145,13 @@ class AudioEngine:
         self._device_idx: int | None = None
         self._watcher_stop = threading.Event()
         self._watcher_thread: threading.Thread | None = None
+        # Small-speaker monitoring (opt-in; see module docstring). When False
+        # the master bus is bit-identical to the raw mix. Read in the callback,
+        # set from the API thread — a plain bool assignment is atomic.
+        self.small_speaker: bool = False
+        # Per-channel IIR state for the master processor: rows = (sub, low,
+        # harmonics), cols = (L, R). Reset whenever the stream (re)starts.
+        self._ms_state = np.zeros((3, 2), dtype=np.float64)
 
     @property
     def healthy(self) -> bool:
@@ -127,6 +180,7 @@ class AudioEngine:
                 self._stream = None
             self._stopping_intentionally = False
             self._stream_died.clear()
+            self._reset_master_state()
             device = _find_output_device()
             self._device_idx = device
             exc_to_raise: Exception | None = None
@@ -246,6 +300,7 @@ class AudioEngine:
             self._device_idx = new_device
             self._stopping_intentionally = False
             self._stream_died.clear()
+            self._reset_master_state()
 
             candidates = [new_device, None] if new_device is not None else [None]
             for dev in candidates:
@@ -317,4 +372,29 @@ class AudioEngine:
 
                 if v.pos >= len(v.audio) or v.frames_remaining == 0:
                     self._voices.pop(i)
-        np.clip(outdata, -1.0, 1.0, out=outdata)
+        if self.small_speaker:
+            self._apply_small_speaker(outdata)
+            _soft_clip(outdata)
+        else:
+            np.clip(outdata, -1.0, 1.0, out=outdata)
+
+    def _reset_master_state(self) -> None:
+        """Clear the small-speaker filter memory so a fresh stream starts clean."""
+        self._ms_state[:] = 0.0
+
+    def _apply_small_speaker(self, outdata: np.ndarray) -> None:
+        """Master-bus small-speaker enhancement, in place (see module docstring).
+
+        Removes the deep sub the speaker can't reproduce and adds synthesised
+        harmonics of the low band so the bass pitch is still perceived.
+        """
+        for ch in (0, 1):
+            x = outdata[:, ch].astype(np.float64)
+            sub, self._ms_state[0, ch] = _onepole_lp_block(x, _SS_A_SUB, self._ms_state[0, ch])
+            low, self._ms_state[1, ch] = _onepole_lp_block(x, _SS_A_LOW, self._ms_state[1, ch])
+            harm_raw = np.tanh(_SS_DRIVE * low)
+            # High-pass the harmonics (drop the inaudible fundamental we just
+            # re-synthesised) by subtracting its lowpassed copy.
+            harm_lp, self._ms_state[2, ch] = _onepole_lp_block(harm_raw, _SS_A_LOW, self._ms_state[2, ch])
+            harm = harm_raw - harm_lp
+            outdata[:, ch] = (x - sub + _SS_BASS_GAIN * harm).astype(np.float32)

@@ -78,6 +78,7 @@ async function boot() {
   });
   document.getElementById("swing-input").addEventListener("change", async function () {
     const swing = parseInt(this.value) / 100;
+    if (project) project.swing = swing;  // keep local copy in sync so the playhead swings too
     try { await PUT("/project/swing", { swing }); } catch { /* ignore */ }
   });
 
@@ -129,6 +130,7 @@ async function boot() {
   await syncPlayState();
   await initSongBar();
   _startMidiPoll();
+  _initSmallSpeaker();
   status("Ready");
 
   // Live BPM: send change to server on every committed value (blur / Enter).
@@ -717,14 +719,32 @@ async function togglePlay() {
 
 let _tickPos = {}; // trackId → current displayed step index
 
+// Which global 16th-note has fired by `elapsed` ms, accounting for swing.
+// Mirrors the server clock (sila/engine/clock.py): even steps fire at
+// n*interval, odd (off-beat) steps fire swing*interval/2 *earlier* than the
+// flat grid, so a pair of steps still spans exactly 2*interval. Without this
+// the playhead runs on a flat grid and drifts ~swing/2 of a step away from the
+// audible hit on every off-beat (most visible on tracks with off-beat trigs).
+function _swungGlobalStep(elapsed) {
+  const interval = _intervalMs;
+  const so = (project.swing || 0) * interval * 0.5;  // swing offset in ms
+  const pairDur = 2 * interval;
+  const pairIndex = Math.floor(elapsed / pairDur);
+  const within = elapsed - pairIndex * pairDur;
+  // On-beat step occupies [0, interval-so); off-beat step occupies the rest.
+  const stepInPair = within < (interval - so) ? 0 : 1;
+  return pairIndex * 2 + stepInPair;
+}
+
 function tickUI() {
   if (!playing || _startedAt === null) return;
   const elapsed = Date.now() - _startedAt;
+  const globalStep = _swungGlobalStep(elapsed);
   for (const track of project.tracks) {
     if (track.muted) continue;
     const stepCount = track.steps.length;
     if (!stepCount) continue;
-    const stepIdx = Math.floor(elapsed / _intervalMs) % stepCount;
+    const stepIdx = globalStep % stepCount;
     if (_tickPos[track.id] !== stepIdx) {
       _tickPos[track.id] = stepIdx;
       const cells = document.querySelectorAll(`[data-track-id="${track.id}"] .step`);
@@ -830,6 +850,32 @@ async function toggleMetronome() {
       method: "PUT", headers: { "X-SILA-Token": TOKEN },
     });
   } catch { /* ignore */ }
+}
+
+// Small-speaker monitoring is a per-listener preference (their speakers, not
+// the project), so it lives in localStorage and never touches project.json.
+let _smallSpeakerOn = false;
+
+async function _setSmallSpeaker(on) {
+  _smallSpeakerOn = on;
+  const btn = document.getElementById("btn-small-spkr");
+  if (btn) btn.classList.toggle("active", on);
+  try {
+    await fetch("/api/sequencer/small-speaker?active=" + on, {
+      method: "PUT", headers: { "X-SILA-Token": TOKEN },
+    });
+  } catch { /* ignore */ }
+}
+
+function toggleSmallSpeaker() {
+  const next = !_smallSpeakerOn;
+  localStorage.setItem("sila_small_speaker", next ? "1" : "0");
+  _setSmallSpeaker(next);
+}
+
+// Restore the saved preference on load and push it to the server.
+function _initSmallSpeaker() {
+  _setSmallSpeaker(localStorage.getItem("sila_small_speaker") === "1");
 }
 
 async function exportDigitakt() {

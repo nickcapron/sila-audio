@@ -61,6 +61,20 @@ def _mock_audio(client):
     routes_mod._state.audio_engine.start = lambda: None
 
 
+def test_small_speaker_toggle_sets_engine_flag(client):
+    """The small-speaker route flips the live audio-engine flag both ways."""
+    import sila.api.routes as routes_mod
+    assert routes_mod._state.audio_engine.small_speaker is False
+
+    r = client.put("/api/sequencer/small-speaker?active=true", headers=_h())
+    assert r.status_code == 200 and r.json() == {"small_speaker": True}
+    assert routes_mod._state.audio_engine.small_speaker is True
+
+    r = client.put("/api/sequencer/small-speaker?active=false", headers=_h())
+    assert r.status_code == 200 and r.json() == {"small_speaker": False}
+    assert routes_mod._state.audio_engine.small_speaker is False
+
+
 # ---------------------------------------------------------------------------
 # Existing auth tests (no fixture — testing global behaviour)
 # ---------------------------------------------------------------------------
