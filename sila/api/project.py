@@ -1,6 +1,7 @@
 """Project, track, and samples routes."""
 from __future__ import annotations
 
+import re as _re
 import shutil as _shutil
 from pathlib import Path
 from typing import Any, Literal
@@ -296,6 +297,26 @@ async def update_track_name(
     track.name = (req.name.strip() or "Track")[:64]
     state.autosave()
     return {"name": track.name}
+
+
+class UpdateTrackColorRequest(BaseModel):
+    color: str  # "#RRGGBB", or "" to reset to the theme default
+
+
+@router.put("/tracks/{track_id}/color")
+async def update_track_color(
+    track_id: str,
+    req: UpdateTrackColorRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, str]:
+    color = req.color.strip()
+    if color and not _re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise HTTPException(status_code=400, detail="color must be #RRGGBB or empty")
+    track = _find_track(state, track_id)
+    state.store.snapshot()
+    track.color = color
+    state.autosave()
+    return {"color": track.color}
 
 
 @router.put("/tracks/{track_id}/notes")

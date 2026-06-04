@@ -334,13 +334,13 @@ function _showTrackMenu(trackId, e) {
   const menu = document.createElement("div");
   menu.id = "track-ctx-menu";
   menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;
-    background:#1e1e1e;border:1px solid #3a3a3a;border-radius:4px;
-    z-index:500;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.5)`;
+    background:var(--surface);border:1px solid var(--border);border-radius:4px;
+    z-index:500;min-width:150px;box-shadow:0 4px 16px rgba(0,0,0,0.6)`;
   const addItem = (label, fn) => {
     const div = document.createElement("div");
     div.textContent = label;
-    div.style.cssText = "padding:6px 12px;font-size:12px;cursor:pointer;color:#d4d4d4";
-    div.onmouseenter = () => div.style.background = "#2a2a2a";
+    div.style.cssText = "padding:6px 12px;font-size:12px;cursor:pointer;color:var(--text)";
+    div.onmouseenter = () => div.style.background = "var(--step-hover)";
     div.onmouseleave = () => div.style.background = "";
     div.onclick = () => { menu.remove(); fn(); };
     menu.appendChild(div);
@@ -352,8 +352,63 @@ function _showTrackMenu(trackId, e) {
   if (_copiedPattern) {
     addItem("Paste pattern", () => pastePattern(trackId));
   }
+  _addTrackColorPicker(menu, trackId);
   document.body.appendChild(menu);
   setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+}
+
+// Aurora swatches + a native custom picker + a reset, added to the track menu.
+const _TRACK_COLORS = ["#34e3c4", "#3ef0a6", "#5fd0e0", "#6fa8ff",
+                       "#8b6cf0", "#b58bf5", "#e06ad0", "#9ad94f"];
+
+function _addTrackColorPicker(menu, trackId) {
+  const label = document.createElement("div");
+  label.textContent = "Track colour";
+  label.style.cssText = "padding:8px 12px 2px;font-size:11px;color:var(--text-dim);border-top:1px solid var(--border)";
+  menu.appendChild(label);
+
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;flex-wrap:wrap;gap:5px;padding:6px 12px 10px;max-width:170px";
+
+  _TRACK_COLORS.forEach(col => {
+    const sw = document.createElement("div");
+    sw.title = col;
+    sw.style.cssText = `width:17px;height:17px;border-radius:3px;cursor:pointer;background:${col};border:1px solid rgba(0,0,0,0.4)`;
+    sw.onclick = () => { menu.remove(); setTrackColor(trackId, col); };
+    row.appendChild(sw);
+  });
+
+  // Native custom picker — stopPropagation so the menu's click-away doesn't close it first.
+  const custom = document.createElement("input");
+  custom.type = "color";
+  custom.title = "Custom colour";
+  custom.style.cssText = "width:17px;height:17px;padding:0;border:none;background:none;cursor:pointer";
+  custom.onclick = (e) => e.stopPropagation();
+  custom.onchange = () => { menu.remove(); setTrackColor(trackId, custom.value); };
+  row.appendChild(custom);
+
+  // Reset to the theme default.
+  const reset = document.createElement("div");
+  reset.textContent = "×";
+  reset.title = "Default colour";
+  reset.style.cssText = "width:17px;height:17px;border-radius:3px;cursor:pointer;border:1px dashed var(--text-dim);"
+    + "color:var(--text-dim);font-size:12px;display:flex;align-items:center;justify-content:center";
+  reset.onclick = () => { menu.remove(); setTrackColor(trackId, ""); };
+  row.appendChild(reset);
+
+  menu.appendChild(row);
+}
+
+async function setTrackColor(trackId, color) {
+  try {
+    const res = await PUT(`/tracks/${trackId}/color`, { color });
+    const track = project.tracks.find(t => t.id === trackId);
+    if (track) track.color = res.color;
+    renderTracks();
+    status(color ? `Track colour set` : "Track colour reset");
+  } catch (e) {
+    status("Failed to set colour: " + (e.message || e));
+  }
 }
 
 async function pastePattern(trackId) {
@@ -1330,7 +1385,7 @@ function renderPatternSlots() {
       const badge = document.createElement("span");
       badge.textContent = chainIdx + 1;
       badge.style.cssText =
-        "font-size:9px;color:#fff;background:var(--accent);" +
+        "font-size:9px;color:#04110d;background:var(--accent);font-weight:700;" +
         "border-radius:3px;padding:0 3px;margin-left:2px;line-height:1.4;";
       slot.appendChild(badge);
     }

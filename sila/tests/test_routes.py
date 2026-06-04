@@ -254,6 +254,23 @@ def test_rename_empty_name_returns_400(client):
     assert r.status_code == 400
 
 
+def test_set_track_color_valid_and_reset(client):
+    _new_project(client, "P")
+    tid = _add_track(client, "Drums")["id"]
+    r = client.put(f"/api/tracks/{tid}/color", json={"color": "#8b6cf0"}, headers=_h())
+    assert r.status_code == 200 and r.json()["color"] == "#8b6cf0"
+    # Empty string resets to the theme default.
+    r = client.put(f"/api/tracks/{tid}/color", json={"color": ""}, headers=_h())
+    assert r.status_code == 200 and r.json()["color"] == ""
+
+
+def test_set_track_color_invalid_returns_400(client):
+    _new_project(client, "P")
+    tid = _add_track(client, "Drums")["id"]
+    r = client.put(f"/api/tracks/{tid}/color", json={"color": "blue"}, headers=_h())
+    assert r.status_code == 400
+
+
 def test_bpm_change_is_persisted_in_project(client):
     _new_project(client)
     client.put("/api/project/bpm", json={"bpm": 140.0}, headers=_h())
