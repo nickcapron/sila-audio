@@ -8,10 +8,12 @@ import threading
 import time
 
 import pytest
+from unittest.mock import patch
 
 from sila.engine.clock import PlaybackClock
 from sila.engine.sequencer import Sequencer
-from sila.models.project import ProjectModel
+from sila.models.project import ProjectModel, TrackModel
+from sila.models.step import Step
 
 
 # ---------------------------------------------------------------------------
@@ -177,3 +179,97 @@ def test_set_bpm_live_halves_interval_when_doubling_tempo():
         assert clock._interval == pytest.approx(original / 2.0)
     finally:
         clock.stop()
+
+
+# ---------------------------------------------------------------------------
+# Song mode — pattern bank advancement
+#
+# The clock's _run() loop swaps track.steps from the pattern bank when
+# tick_count % bar_len == 0 (and tick_count > 0).  The swap must happen
+# BEFORE seq.tick() evaluates that tick, so step 0 of the new pattern
+# plays correctly at the bar boundary.
+#
+# We control iterations by patching time.sleep to count calls and flip
+# _running=False after the desired number of ticks.
+# ---------------------------------------------------------------------------
+
+def _song_project():
+    """Return (project, track, seq) with a 2-step track and two pattern slots."""
+    track = TrackModel(name="T", step_count=2)
+    track.ensure_steps()
+
+    # Slot 0: both steps active; slot 1: both steps inactive
+    slot0 = [Step(active=True),  Step(active=True)]
+    slot1 = [Step(active=False), Step(active=False)]
+
+    project = ProjectModel(bpm=120)
+    project.tracks = [track]
+    project.song_mode = True
+    project.song_chain = [0, 1]
+    project.pattern_bank.slots[0] = {track.id: [s.model_copy() for s in slot0]}
+    project.pattern_bank.slots[1] = {track.id: [s.model_copy() for s in slot1]}
+    track.steps = [s.model_copy() for s in slot0]   # start on slot 0
+
+    seq = Sequencer(project)
+    return project, track, seq
+
+
+def _run_ticks(clock: PlaybackClock, n_ticks: int) -> None:
+    """Drive the clock's _run loop for exactly n_ticks, then stop it."""
+    sleep_calls = [0]
+
+    def fake_sleep(s):
+        sleep_calls[0] += 1
+        if sleep_calls[0] >= n_ticks:
+            clock._running = False
+
+    with patch("sila.engine.clock.time.sleep", fake_sleep), \
+         patch("sila.engine.clock.time.perf_counter", return_value=0.0):
+        clock._running = True
+        t = threading.Thread(target=clock._run)
+        t.start()
+        t.join(timeout=2.0)
+
+    assert not t.is_alive(), "clock thread did not stop within timeout"
+
+
+def test_song_mode_swaps_pattern_at_bar_boundary():
+    """After bar_len ticks the clock must load the next slot's steps."""
+    project, track, seq = _song_project()
+    clock = PlaybackClock(seq, {}, _StubAudio())
+    clock._interval = 0.001
+
+    # bar_len = 2 (track has 2 steps); swap fires at tick_count=2.
+    # We run 3 ticks so the swap at tick_count=2 completes before we stop.
+    _run_ticks(clock, n_ticks=3)
+
+    assert track.steps[0].active is False, "slot 1: step 0 must be inactive"
+    assert track.steps[1].active is False, "slot 1: step 1 must be inactive"
+
+
+def test_song_mode_does_not_swap_before_bar_boundary():
+    """Steps must be unchanged after fewer ticks than bar_len."""
+    project, track, seq = _song_project()
+    clock = PlaybackClock(seq, {}, _StubAudio())
+    clock._interval = 0.001
+
+    # Only 2 ticks (tick_count 0 and 1): 0 > 0 is False, 1 % 2 ≠ 0. No swap.
+    _run_ticks(clock, n_ticks=2)
+
+    assert track.steps[0].active is True,  "slot 0 must still be loaded"
+    assert track.steps[1].active is True,  "slot 0 must still be loaded"
+
+
+def test_song_mode_chain_wraps_back_to_first_slot():
+    """After len(chain) bars the chain position wraps and slot 0 reloads."""
+    project, track, seq = _song_project()
+    clock = PlaybackClock(seq, {}, _StubAudio())
+    clock._interval = 0.001
+
+    # Swap 1 at tick_count=2 → slot 1 (inactive).
+    # Swap 2 at tick_count=4 → wraps to slot 0 (active) again.
+    # Run 5 ticks so both swaps complete.
+    _run_ticks(clock, n_ticks=5)
+
+    assert track.steps[0].active is True,  "chain wrapped: slot 0 must be reloaded"
+    assert track.steps[1].active is True,  "chain wrapped: slot 0 must be reloaded"

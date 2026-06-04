@@ -4,15 +4,21 @@ and routes TrigEvents through the sampler into the audio engine.
 """
 from __future__ import annotations
 
+import logging
 import math
 import random
 import threading
 import time
 
+log = logging.getLogger(__name__)
+
 import numpy as np
 
 from sila.engine.audio import AudioEngine
 from sila.engine.fx import apply_lowpass
+from sila.engine.lfo import compute_lfo_value
+from sila.engine.sampler import SamplePlayer
+from sila.engine.sequencer import Sequencer
 
 
 def _make_click(freq: float = 1000.0, amp: float = 0.3, sr: int = 48_000) -> np.ndarray:
@@ -21,9 +27,6 @@ def _make_click(freq: float = 1000.0, amp: float = 0.3, sr: int = 48_000) -> np.
     t = np.linspace(0, dur, int(sr * dur), endpoint=False)
     click = amp * np.sin(2.0 * np.pi * freq * t) * np.exp(-t * 400.0)
     return click.astype(np.float32)
-from sila.engine.lfo import compute_lfo_value
-from sila.engine.sampler import SamplePlayer
-from sila.engine.sequencer import Sequencer
 
 
 class PlaybackClock:
@@ -127,6 +130,8 @@ class PlaybackClock:
         """Resolve a TrigEvent to audio and hand it to the audio engine."""
         player = self._players.get(event.track_id)
         if player is None:
+            log.debug("dropped trig — no player for track %s (step %d)",
+                      event.track_id, event.step_index)
             return
         pl = event.p_locks
         try:
@@ -141,6 +146,8 @@ class PlaybackClock:
         else:
             audio = player.get(event.velocity)
         if audio is None:
+            log.debug("dropped trig — player returned no audio for track %s (step %d, vel %d)",
+                      event.track_id, event.step_index, event.velocity)
             return
         track = self._seq.get_track(event.track_id)
         max_frames = None

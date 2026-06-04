@@ -29,19 +29,6 @@ _DAW_WRAPPERS = frozenset({
 # BPM folders: "120BPM", "130 BPM", etc.
 _BPM_RE = re.compile(r'^\d+\s*bpm$', re.IGNORECASE)
 
-# Category keyword map: checked in insertion order, so more specific phrases
-# (e.g. "bass drum" in Kick) must appear before shorter overlapping terms
-# (e.g. "bass" in Bass).
-_CATEGORY_KEYWORDS: dict[str, set[str]] = {
-    "Kick":       {"kick", "bd", "bass drum"},
-    "Snare":      {"snare", "sd", "clap", "rim"},
-    "Hihat":      {"hat", "hh", "cymbal", "ride", "crash"},
-    "Percussion": {"perc", "tamb", "shaker", "cowbell"},
-    "Tom":        {"tom"},
-    "Bass":       {"bass", "sub", "808"},
-    "Synth":      {"synth", "chord", "pad"},
-}
-
 # Key folders: "Am", "C#", "Dbm", "F# Major", etc.
 # Requires at least an accidental, a mode letter, or a written-out mode word.
 _KEY_RE = re.compile(
@@ -106,20 +93,6 @@ def _find_audio_files(root: Path) -> list[Path]:
     )
 
 
-def guess_category(file_path: Path) -> str:
-    """Guess the SILA category for an audio file by examining its full path.
-
-    Joins all path components into a single lowercase string so folder names
-    like 'Bass Drums/120BPM/kick01.wav' are considered as a whole, not just
-    the filename.  Returns 'Other' when no keyword matches.
-    """
-    full_path = " ".join(file_path.parts).lower()
-    for category, keywords in _CATEGORY_KEYWORDS.items():
-        if any(kw in full_path for kw in keywords):
-            return category
-    return "Other"
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -152,46 +125,6 @@ def scan_folder(source_path: str) -> ScanResult:
         total_files=len(all_files),
         source_path=str(src),
     )
-
-
-def scan_by_category(root_path: str) -> dict:
-    """Recursively scan *root_path* and auto-group audio files by guessed category.
-
-    Unlike scan_folder(), which groups by directory name and shows them to the
-    user for manual mapping, this function applies guess_category() directly to
-    each file's full path and returns a flat category → paths dict — suitable
-    for deeply nested, messily organised packs (e.g. Samples From Mars).
-
-    Hidden macOS resource-fork files (``._*``) are silently skipped.
-
-    Returns::
-
-        {
-            "total_files": int,
-            "categories": {
-                "Kick": ["/abs/path/kick01.wav", ...],
-                "Snare": [...],
-                ...
-                "Other": [...],
-            }
-        }
-    """
-    root = Path(root_path)
-    categories: dict[str, list[str]] = {}
-    total = 0
-
-    for file_path in root.rglob("*"):
-        if not file_path.is_file():
-            continue
-        if file_path.suffix.lower() not in AUDIO_EXTENSIONS:
-            continue
-        if file_path.name.startswith("._"):
-            continue
-        category = guess_category(file_path)
-        categories.setdefault(category, []).append(str(file_path.resolve()))
-        total += 1
-
-    return {"total_files": total, "categories": categories}
 
 
 def execute_import(

@@ -5,6 +5,10 @@ All tests run without opening a real audio device — they exercise
 the death-detection and flag logic directly.
 """
 
+import math
+
+import numpy as np
+import pytest
 from unittest.mock import patch, call
 
 from sila.engine.audio import AudioEngine
@@ -182,3 +186,138 @@ def test_watcher_restarts_when_specific_device_changes():
          patch.object(engine, "_restart_stream") as mock_restart:
         engine._device_watcher()
     assert mock_restart.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# _callback — DSP mixing logic
+#
+# _callback is called by PortAudio on a real-time thread.  We drive it
+# directly here (no stream needed) by injecting voices via play() and
+# passing a zeroed numpy buffer as the hardware output.
+# ---------------------------------------------------------------------------
+
+BLOCK = 512  # matches AudioEngine's BLOCK constant
+
+
+def _drive(engine: AudioEngine, frames: int = BLOCK) -> np.ndarray:
+    """Call _callback and return the output buffer."""
+    buf = np.zeros((frames, 2), dtype=np.float32)
+    engine._callback(buf, frames, None, None)
+    return buf
+
+
+def _ones(n: int = BLOCK * 2) -> np.ndarray:
+    return np.ones(n, dtype=np.float32)
+
+
+def test_callback_silence_with_no_voices():
+    assert np.all(_drive(AudioEngine()) == 0.0)
+
+
+def test_callback_single_voice_center_pan():
+    engine = AudioEngine()
+    engine.play(_ones(), volume=1.0, pan=0.0)
+    buf = _drive(engine)
+    expected = math.cos(math.pi / 4)  # ≈ 0.7071 for pan=0
+    assert buf[:, 0] == pytest.approx(expected, abs=1e-5)
+    assert buf[:, 1] == pytest.approx(expected, abs=1e-5)
+
+
+def test_callback_pan_hard_left():
+    engine = AudioEngine()
+    engine.play(_ones(), volume=1.0, pan=-1.0)
+    buf = _drive(engine)
+    assert buf[:, 0] == pytest.approx(1.0, abs=1e-5)
+    assert buf[:, 1] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_callback_pan_hard_right():
+    engine = AudioEngine()
+    engine.play(_ones(), volume=1.0, pan=1.0)
+    buf = _drive(engine)
+    assert buf[:, 0] == pytest.approx(0.0, abs=1e-5)
+    assert buf[:, 1] == pytest.approx(1.0, abs=1e-5)
+
+
+def test_callback_volume_scales_output():
+    engine = AudioEngine()
+    engine.play(_ones(), volume=0.5, pan=-1.0)
+    buf = _drive(engine)
+    assert buf[:, 0] == pytest.approx(0.5, abs=1e-5)
+
+
+def test_callback_two_voices_accumulate():
+    """Two simultaneous voices must add, not overwrite."""
+    engine = AudioEngine()
+    engine.play(_ones(), volume=0.3, pan=-1.0)
+    engine.play(_ones(), volume=0.4, pan=-1.0)
+    buf = _drive(engine)
+    assert buf[:, 0] == pytest.approx(0.7, abs=1e-4)
+
+
+def test_callback_clips_to_unity():
+    """Sum exceeding 1.0 must be hard-clipped, not wrapped or saturated differently."""
+    engine = AudioEngine()
+    engine.play(_ones(), volume=1.0, pan=-1.0)
+    engine.play(_ones(), volume=1.0, pan=-1.0)
+    buf = _drive(engine)
+    assert np.all(buf[:, 0] <= 1.0 + 1e-6)
+    assert buf[0, 0] == pytest.approx(1.0, abs=1e-5)
+
+
+def test_callback_evicts_voice_when_audio_exhausted():
+    short = np.ones(BLOCK // 2, dtype=np.float32)  # 256 samples — half a block
+    engine = AudioEngine()
+    engine.play(short, volume=1.0, pan=-1.0)
+    _drive(engine)
+    assert len(engine._voices) == 0, "voice must be evicted once pos >= len(audio)"
+
+
+def test_callback_voice_survives_when_audio_not_exhausted():
+    engine = AudioEngine()
+    engine.play(_ones(BLOCK * 4), volume=1.0, pan=-1.0)
+    _drive(engine)
+    assert len(engine._voices) == 1, "voice with remaining audio must stay alive"
+
+
+def test_callback_delay_larger_than_block_produces_silence():
+    """delay_frames > block: voice deferred entirely, buffer stays silent."""
+    engine = AudioEngine()
+    engine.play(_ones(BLOCK * 4), volume=1.0, pan=-1.0, delay_frames=BLOCK + 50)
+    buf = _drive(engine)
+    assert np.all(buf == 0.0)
+    assert engine._voices[0].delay_frames == 50  # decremented by BLOCK
+
+
+def test_callback_delay_smaller_than_block_starts_mid_block():
+    """delay_frames < block: first delay_frames samples silent, rest mixed."""
+    engine = AudioEngine()
+    delay = 100
+    engine.play(_ones(BLOCK * 4), volume=1.0, pan=-1.0, delay_frames=delay)
+    buf = _drive(engine)
+    assert buf[:delay, 0] == pytest.approx(0.0, abs=1e-5), "delay region must be silent"
+    assert buf[delay:, 0] == pytest.approx(1.0, abs=1e-5), "audio must start after delay"
+
+
+def test_callback_frames_remaining_truncates_playback():
+    """max_frames limits how many samples are mixed; voice evicted afterwards."""
+    max_f = 50
+    engine = AudioEngine()
+    engine.play(_ones(BLOCK * 4), volume=1.0, pan=-1.0, max_frames=max_f)
+    buf = _drive(engine)
+    assert buf[:max_f, 0] == pytest.approx(1.0, abs=1e-5)
+    assert buf[max_f:, 0] == pytest.approx(0.0, abs=1e-5)
+    assert len(engine._voices) == 0, "voice must be evicted after frames_remaining hits 0"
+
+
+def test_callback_delay_and_frames_remaining_combined():
+    """delay_frames offsets the start; frames_remaining limits the duration."""
+    delay, max_f = 200, 100
+    engine = AudioEngine()
+    engine.play(_ones(BLOCK * 4), volume=1.0, pan=-1.0,
+                delay_frames=delay, max_frames=max_f)
+    buf = _drive(engine)
+    assert buf[:delay, 0] == pytest.approx(0.0, abs=1e-5), "delay region silent"
+    assert buf[delay : delay + max_f, 0] == pytest.approx(1.0, abs=1e-5), "audio window"
+    assert buf[delay + max_f :, 0] == pytest.approx(0.0, abs=1e-5), "after truncation"
+    assert len(engine._voices) == 0
