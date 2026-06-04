@@ -100,6 +100,29 @@ async def rename_project(
     return {"old_name": name, "new_name": safe_new}
 
 
+@router.delete("/projects/{name}")
+async def delete_project(
+    name: str, state: AppState = Depends(get_state)
+) -> dict[str, Any]:
+    """Delete a saved project. If it's the one currently open, switch to the
+    most recently modified remaining project, or a fresh blank one if none."""
+    try:
+        was_current = state.store.delete(name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project {name!r} not found")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if was_current:
+        state.reset_seq()
+        remaining = state.store.list_projects()
+        if remaining:
+            state.store.load(remaining[0])
+        else:
+            state.store.new_project("Untitled")
+        state.load_sample_players()
+    return {"deleted": name, "current": state.store.project.name}
+
+
 # ---------------------------------------------------------------------------
 # Project endpoints (legacy — kept for UI backward compat)
 # ---------------------------------------------------------------------------

@@ -254,6 +254,40 @@ def test_rename_empty_name_returns_400(client):
     assert r.status_code == 400
 
 
+def test_delete_non_current_project(client):
+    _new_project(client, "Keeper")
+    _new_project(client, "Doomed")
+    client.post("/api/project/load", json={"name": "Keeper"}, headers=_h())  # Doomed now not current
+    r = client.delete("/api/projects/Doomed", headers=_h())
+    assert r.status_code == 200
+    names = client.get("/api/projects", headers=_h()).json()["projects"]
+    assert "Doomed" not in names and "Keeper" in names
+
+
+def test_delete_current_project_switches_to_remaining(client):
+    _new_project(client, "Alpha")
+    _new_project(client, "Beta")  # Beta is current
+    r = client.delete("/api/projects/Beta", headers=_h())
+    assert r.status_code == 200
+    assert client.get("/api/project", headers=_h()).json()["name"] == "Alpha"
+    names = client.get("/api/projects", headers=_h()).json()["projects"]
+    assert "Beta" not in names
+
+
+def test_delete_last_project_creates_blank(client):
+    _new_project(client, "OnlyOne")
+    r = client.delete("/api/projects/OnlyOne", headers=_h())
+    assert r.status_code == 200
+    # A fresh blank project exists so the app is never left projectless.
+    assert client.get("/api/project", headers=_h()).json()["name"] == "Untitled"
+
+
+def test_delete_missing_project_returns_404(client):
+    _new_project(client, "Solo")
+    r = client.delete("/api/projects/Ghost", headers=_h())
+    assert r.status_code == 404
+
+
 def test_set_track_color_valid_and_reset(client):
     _new_project(client, "P")
     tid = _add_track(client, "Drums")["id"]

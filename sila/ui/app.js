@@ -1131,11 +1131,18 @@ async function _populateProjectMenu(dd) {
     const ren = document.createElement("button");
     ren.textContent = "✎";
     ren.title = "Rename project";
-    ren.style.cssText = "background:none;border:none;color:#9aa;cursor:pointer;font:inherit;padding:0 4px";
+    ren.style.cssText = "background:none;border:none;color:#9aa;cursor:pointer;font:inherit;padding:0 2px";
     ren.onclick = (e) => { e.stopPropagation(); renameProjectFromMenu(name, dd); };
+
+    const del = document.createElement("button");
+    del.textContent = "🗑";
+    del.title = "Delete project";
+    del.style.cssText = "background:none;border:none;color:#9aa;cursor:pointer;font:inherit;padding:0 2px";
+    del.onclick = (e) => { e.stopPropagation(); deleteProjectFromMenu(name, dd); };
 
     item.appendChild(label);
     item.appendChild(ren);
+    item.appendChild(del);
     dd.appendChild(item);
   });
 
@@ -1144,6 +1151,43 @@ async function _populateProjectMenu(dd) {
   newItem.textContent = "+ New project…";
   newItem.onclick = () => { dd.classList.remove("open"); newProjectFromMenu(); };
   dd.appendChild(newItem);
+
+  const recolorItem = document.createElement("div");
+  recolorItem.className = "proj-item new-proj";
+  recolorItem.textContent = "↻ Recolour tracks → aurora";
+  recolorItem.onclick = () => { dd.classList.remove("open"); recolorAllTracks(); };
+  dd.appendChild(recolorItem);
+}
+
+async function deleteProjectFromMenu(name, dd) {
+  if (!confirm(`Delete project "${name}"? This permanently removes it and its samples.`)) return;
+  try {
+    await DEL(`/projects/${encodeURIComponent(name)}`);
+    // If we deleted the open project, the server switched to another — resync.
+    if (project && project.name === name) {
+      project = await GET("/project");
+      await _applyProjectSwitch();
+    }
+    status(`Deleted "${name}"`);
+    await _populateProjectMenu(dd);   // refresh the open menu in place
+  } catch (e) {
+    status("Delete failed: " + (e.message || e));
+  }
+}
+
+async function recolorAllTracks() {
+  if (!project || !project.tracks.length) { status("No tracks to recolour"); return; }
+  try {
+    for (let i = 0; i < project.tracks.length; i++) {
+      const col = _TRACK_COLORS[i % _TRACK_COLORS.length];
+      await PUT(`/tracks/${project.tracks[i].id}/color`, { color: col });
+      project.tracks[i].color = col;
+    }
+    renderTracks();
+    status("Recoloured tracks to aurora");
+  } catch (e) {
+    status("Recolour failed: " + (e.message || e));
+  }
 }
 
 async function renameProjectFromMenu(oldName, dd) {

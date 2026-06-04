@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections import deque
 from pathlib import Path
 
@@ -97,6 +98,25 @@ class ProjectStore:
             if self._project is not None:
                 self._project.name = new_name
         return new_dir
+
+    def delete(self, name: str) -> bool:
+        """Delete a project directory (and its samples). Returns True if it was
+        the currently-loaded project. Raises FileNotFoundError if absent."""
+        project_dir = safe_path(PROJECTS_ROOT, name)
+        if not (project_dir / "project.json").exists():
+            raise FileNotFoundError(name)
+
+        def _norm(p: Path) -> str:
+            return os.path.normcase(os.path.normpath(str(p)))
+
+        was_current = self._project_dir is not None and _norm(self._project_dir) == _norm(project_dir)
+        shutil.rmtree(project_dir)
+        if was_current:
+            self._project = None
+            self._project_dir = None
+            self._undo_stack.clear()
+            self._redo_stack.clear()
+        return was_current
 
     def save(self) -> Path:
         if self._project is None or self._project_dir is None:
