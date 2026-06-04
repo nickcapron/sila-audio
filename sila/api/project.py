@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import shutil as _shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -174,7 +174,7 @@ async def redo(state: AppState = Depends(get_state)) -> dict[str, Any]:
 
 class AddTrackRequest(BaseModel):
     name: str = "Track"
-    step_count: int = 16
+    step_count: int = Field(default=16, ge=1, le=256)
 
 
 class StepCountRequest(BaseModel):
@@ -195,17 +195,17 @@ class HumanizeRequest(BaseModel):
 
 
 class FxRequest(BaseModel):
-    filter_cutoff:    float | None = None
-    filter_resonance: float | None = None
-    volume:           float | None = None
-    pan:              float | None = None
+    filter_cutoff:    float | None = Field(default=None, ge=0.0, le=1.0)
+    filter_resonance: float | None = Field(default=None, ge=0.0, le=1.0)
+    volume:           float | None = Field(default=None, ge=0.0, le=2.0)
+    pan:              float | None = Field(default=None, ge=-1.0, le=1.0)
 
 
 class LfoRequest(BaseModel):
-    shape:       str   | None = None
-    rate:        float | None = None
-    depth:       float | None = None
-    destination: str   | None = None
+    shape:       Literal["sine", "triangle", "square", "sawtooth", "random"] | None = None
+    rate:        float | None = Field(default=None, ge=0.01, le=20.0)
+    depth:       float | None = Field(default=None, ge=0.0, le=1.0)
+    destination: Literal["volume", "pan", "filter_cutoff", "filter_resonance"] | None = None
 
 
 class UpdateTrackNameRequest(BaseModel):
@@ -225,7 +225,7 @@ class SetSamplesRequest(BaseModel):
 
 
 class PastePatternRequest(BaseModel):
-    steps: list[Step]
+    steps: list[Step] = Field(max_length=256)
 
 
 @router.post("/tracks")
@@ -427,10 +427,10 @@ async def update_track_fx(
 ) -> dict[str, Any]:
     """Update FX parameters (filter, volume, pan) on a track."""
     track = _find_track(state, track_id)
-    if req.filter_cutoff    is not None: track.fx.filter_cutoff    = max(0.0, min(1.0, req.filter_cutoff))
-    if req.filter_resonance is not None: track.fx.filter_resonance = max(0.0, min(1.0, req.filter_resonance))
-    if req.volume           is not None: track.fx.volume           = max(0.0, min(2.0, req.volume))
-    if req.pan              is not None: track.fx.pan              = max(-1.0, min(1.0, req.pan))
+    if req.filter_cutoff    is not None: track.fx.filter_cutoff    = req.filter_cutoff
+    if req.filter_resonance is not None: track.fx.filter_resonance = req.filter_resonance
+    if req.volume           is not None: track.fx.volume           = req.volume
+    if req.pan              is not None: track.fx.pan              = req.pan
     state.autosave()
     return {"fx": track.fx.model_dump()}
 
@@ -442,19 +442,12 @@ async def update_lfo(
     state: AppState = Depends(get_state),
 ) -> dict[str, Any]:
     """Update one or more LFO parameters on a track."""
-    from sila.models.project import LFOModel
     track = _find_track(state, track_id)
     lfo = track.lfo
-    _VALID_SHAPES = {"sine", "triangle", "square", "sawtooth", "random"}
-    _VALID_DESTS  = {"volume", "pan", "filter_cutoff", "filter_resonance"}
-    if req.shape is not None and req.shape in _VALID_SHAPES:
-        lfo.shape = req.shape  # type: ignore[assignment]
-    if req.rate is not None:
-        lfo.rate = max(0.01, min(20.0, req.rate))
-    if req.depth is not None:
-        lfo.depth = max(0.0, min(1.0, req.depth))
-    if req.destination is not None and req.destination in _VALID_DESTS:
-        lfo.destination = req.destination
+    if req.shape       is not None: lfo.shape       = req.shape
+    if req.rate        is not None: lfo.rate        = req.rate
+    if req.depth       is not None: lfo.depth       = req.depth
+    if req.destination is not None: lfo.destination = req.destination
     state.autosave()
     return {"lfo": lfo.model_dump()}
 

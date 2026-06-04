@@ -108,12 +108,17 @@ class AppState:
         self.sequencer = None
 
     def load_sample_players(self) -> None:
-        # Mutate in place so any running PlaybackClock's reference stays valid.
-        self.sample_players.clear()
+        # Build into a temporary dict first so all file I/O completes before
+        # the live dictionary is touched.  The clear()+update() swap is
+        # microsecond-scale, minimising the window where the clock sees an
+        # empty dict and silently drops notes.
+        new_players = {}
         for track in self.store.project.tracks:
             player = SamplePlayer()
             player.load(self.store.samples_dir, track.samples)
-            self.sample_players[track.id] = player
+            new_players[track.id] = player
+        self.sample_players.clear()
+        self.sample_players.update(new_players)
 
     def autosave(self) -> None:
         """Persist current project state to disk. Best-effort: never raises."""
