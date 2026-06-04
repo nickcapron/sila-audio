@@ -21,9 +21,11 @@ from sila.api.routes import router, startup as routes_startup, last_ping_age, sh
 from sila.security import generate_session_token
 
 _PORT = 8765
-_HEARTBEAT_TIMEOUT = 120.0  # shut down if no browser ping for this many seconds
-# 120 s gives headroom for Chrome's background-tab timer throttling (~60 s)
-# while still cleaning up if the user genuinely closes the app.
+_HEARTBEAT_TIMEOUT = 30.0   # shut down if no browser ping for this many seconds
+# beforeunload+sendBeacon stops audio immediately on normal tab close, so the
+# watchdog is now only a crash fallback.  30 s is accepted with the knowledge
+# that Chrome's background-tab throttle (~60 s) could trigger a spurious
+# shutdown if the user leaves the tab for >30 s without closing it.
 _HEARTBEAT_POLL = 5.0       # how often the watchdog checks
 
 
