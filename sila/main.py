@@ -6,6 +6,7 @@ startup so the UI and test harness can pick it up. Never logged.
 """
 
 import asyncio
+import logging
 import os
 import signal
 import subprocess
@@ -104,6 +105,16 @@ app.mount("/", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
 
 def main() -> None:
+    # Root handler at WARNING keeps uvicorn HTTP traffic quiet.
+    # sila.engine.clock is promoted to DEBUG so dropped-trig messages
+    # surface in the console for polyphony debugging.
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s [%(name)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.getLogger("sila.engine.clock").setLevel(logging.DEBUG)
+
     _kill_port(_PORT)
     token = generate_session_token()
     # Print token once for the UI/harness to read. Not logged anywhere else.
