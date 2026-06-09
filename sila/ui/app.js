@@ -578,6 +578,19 @@ function _makeKnob(input) {
   knob.addEventListener("pointerup", end);
   knob.addEventListener("pointercancel", end);
 
+  // Mouse wheel: nudge by one step per notch (wheel up = increase).
+  knob.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const dir = e.deltaY < 0 ? 1 : -1;
+    const v = Math.max(min, Math.min(max, Math.round((parseFloat(input.value) + dir * step) / step) * step));
+    if (v !== parseFloat(input.value)) {
+      input.value = v;
+      refresh();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }, { passive: false });
+
   _knobs.push({ refresh });
   refresh();
 }
