@@ -414,6 +414,8 @@ async function setTrackColor(trackId, color) {
     const res = await PUT(`/tracks/${trackId}/color`, { color });
     const track = project.tracks.find(t => t.id === trackId);
     if (track) track.color = res.color;
+    // If this track is the one open in the inspector, recolour its header now.
+    if (selectedTrackId === trackId) _setInspectorHeaderColor(res.color);
     renderTracks();
     status(color ? `Track colour set` : "Track colour reset");
   } catch (e) {
@@ -501,6 +503,12 @@ async function changeStepCount(trackId, stepCount) {
 // Inspector panel management
 // ---------------------------------------------------------------------------
 
+// Single place that knows how the inspector header gets its colour, so a live
+// track-colour change can reuse it instead of duplicating the fallback rule.
+function _setInspectorHeaderColor(color) {
+  document.getElementById("insp-mode").style.color = color || "";
+}
+
 function _inspectorSetMode(mode, trackName, stepLabel, trackColor) {
   const modeEl = document.getElementById("insp-mode");
   const subEl  = document.getElementById("insp-sub");
@@ -509,7 +517,7 @@ function _inspectorSetMode(mode, trackName, stepLabel, trackColor) {
   const trackP = document.getElementById("insp-track");
 
   // Tint the header with the track's colour; "" falls back to the CSS default.
-  modeEl.style.color = (mode === "none") ? "" : (trackColor || "");
+  _setInspectorHeaderColor(mode === "none" ? "" : trackColor);
 
   if (mode === "step") {
     modeEl.textContent = stepLabel || "Step";
