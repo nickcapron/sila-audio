@@ -46,12 +46,14 @@ juce_add_binary_data(SILAWebUI
 target_sources(SILA PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
-    # engine/*.cpp are added as they are ported (see DESIGN.md roadmap):
-    # src/engine/Sequencer.cpp
-    # src/engine/Sampler.cpp
-    # src/engine/VoiceMixer.cpp
-    # src/engine/Fx.cpp
+    src/engine/Sampler.cpp       # Phase 2
+    src/engine/VoiceMixer.cpp    # Phase 2
+    # added as they are ported (see DESIGN.md roadmap):
+    # src/engine/Sequencer.cpp   # Phase 3
+    # src/engine/Fx.cpp          # Phase 5
 )
+
+target_include_directories(SILA PRIVATE src)
 
 target_compile_definitions(SILA PUBLIC
     JUCE_WEB_BROWSER=1

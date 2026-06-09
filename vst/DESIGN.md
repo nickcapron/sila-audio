@@ -112,16 +112,34 @@ cmake --build vst/build
 
 ## Phased roadmap
 
-1. **Scaffold (this commit):** CMake, plugin stubs, WebView host, bridge
-   outline, engine headers. ← *you are here*
+1. **Scaffold:** CMake, plugin stubs, WebView host, bridge outline, engine
+   headers. ✅ *done*
 2. **Standalone audio:** port `Sampler` + `VoiceMixer`, get one track triggering
-   on host transport in the Standalone target.
+   on host transport in the Standalone target. ✅ *done* — see notes below.
 3. **Sequencer + timing:** port `Sequencer`, host-synced scheduling, swing,
    micro-timing, song mode.
 4. **UI bridge:** load `sila/ui` in the WebView, implement the bridge functions
    mapping the existing REST endpoints, push playhead events.
 5. **FX/LFO + state:** port filter/LFO, implement preset save/load.
 6. **Polish:** parameters/automation, AU validation, installer.
+
+## Phase 2 notes (implemented)
+
+- `engine/Sampler.{h,cpp}` — velocity layers + round-robin + start/end slicing,
+  mono downmix on load (`AudioFormatManager`). No sample-rate conversion yet.
+- `engine/VoiceMixer.{h,cpp}` — voice mixing with pan + sample-offset start
+  (`renderInto`), and the master stage (`applyMaster`): hard-clip by default or
+  the ported small-speaker monitor (HPF + bass harmonics + soft-limit).
+- `PluginProcessor` — `processBlock` resolves the transport (host when playing),
+  finds the 16th-note boundaries in the block, and triggers a hard-coded
+  4-on-the-floor kick sample-accurately via `scheduleTriggers`.
+- **Two pragmatic choices to make it audible now, without the UI or a DAW:**
+  1. the kick is **synthesized in code** (`makeKick`) so no sample file is
+     needed yet;
+  2. the **Standalone wrapper free-runs** an internal clock at 120 BPM (a DAW's
+     transport still governs in plugin form). Build the `Standalone` target and
+     you should hear a steady 4-on-the-floor.
+- Not yet: real patterns/tracks (Phase 3), file loading from the UI (Phase 4).
 
 ## Risks / open questions
 

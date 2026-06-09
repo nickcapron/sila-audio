@@ -5,34 +5,43 @@
 // Port of ../../sila/engine/audio.py (the mixing half — the device/stream/
 // watcher half is dropped; the host owns the device).
 //
-// A Voice is a playing sample with volume/pan/start-offset; renderInto() mixes
-// all active voices into the block (port of AudioEngine._callback), then
-// applyMaster() does the soft-clip / optional small-speaker monitor stage
-// (the _soft_clip + _apply_small_speaker code we wrote).
+// renderInto() mixes all active voices into the block (port of
+// AudioEngine._callback); applyMaster() does the master stage — hard clip by
+// default, or the opt-in small-speaker monitor (the HPF + psychoacoustic-bass
+// harmonics + soft-limit we ported to JS in app.js).
 namespace sila::engine
 {
 struct Voice
 {
-    const juce::AudioBuffer<float>* audio = nullptr;
-    int   pos          = 0;
-    float volume       = 1.0f;
-    float panL = 0.7071f, panR = 0.7071f;
-    int   startOffset  = 0;   // sample offset within the first block (was delay_frames)
-    int   framesLeft   = -1;  // -1 = play to end (was frames_remaining)
+    const juce::AudioBuffer<float>* audio = nullptr;  // mono source
+    int   pos    = 0;                                 // current read index
+    int   endPos = 0;                                 // stop index (slice end)
+    float volume = 1.0f;
+    float panL = 0.70710678f, panR = 0.70710678f;
+    int   startOffset = 0;   // samples to wait before first output (was delay_frames)
 };
 
 class VoiceMixer
 {
 public:
-    void prepare (double sampleRate);
-    void addVoice (Voice v);                          // play()
-    void renderInto (juce::AudioBuffer<float>& block); // _callback mixing loop
+    void prepare (double sr);
+    void reset();
+
+    void addVoice (const Voice& v) { voices.push_back (v); }
+    int  activeVoiceCount() const { return (int) voices.size(); }
+
+    void renderInto (juce::AudioBuffer<float>& block);
     void applyMaster (juce::AudioBuffer<float>& block, bool smallSpeaker, float masterVol);
 
 private:
+    static float softClip (float x, float knee);
+
     std::vector<Voice> voices;
     double sampleRate { 48000.0 };
-    // small-speaker filter state (the vectorised one-pole we ported to JS),
-    // here a couple of juce::dsp::IIR / manual one-pole states per channel.
+
+    // Small-speaker one-pole filter state, per channel [L, R].
+    double ssSub[2]  { 0.0, 0.0 };
+    double ssLow[2]  { 0.0, 0.0 };
+    double ssHarm[2] { 0.0, 0.0 };
 };
 } // namespace sila::engine

@@ -1,16 +1,18 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "engine/Sampler.h"
+#include "engine/VoiceMixer.h"
 
-// SILA plugin processor (scaffold).
+// SILA plugin processor.
 //
-// Replaces the standalone app's PlaybackClock + AudioEngine: instead of a
-// wall-clock sleep loop driving sounddevice, the host calls processBlock() and
-// we render the sequencer sample-accurately against the host transport.
+// Phase 2: a single track triggers a kick on a 4-on-the-floor pattern, synced
+// to the transport. A real DAW's transport governs; in the Standalone wrapper
+// (no host transport) an internal free-running clock engages so it plays.
 //
-// Engine modules (Sequencer/Sampler/VoiceMixer/Fx) are declared in src/engine
-// and ported from ../sila/engine per DESIGN.md. They are forward-declared here
-// to keep the scaffold compiling before they exist.
+// The full Sequencer (per-track patterns, trig conditions, swing, song mode)
+// arrives in Phase 3 — for now scheduleTriggers() uses a hard-coded pattern to
+// prove the host-synced timing + Sampler + VoiceMixer path end to end.
 class SilaAudioProcessor : public juce::AudioProcessor
 {
 public:
@@ -28,7 +30,7 @@ public:
     bool acceptsMidi()  const override { return true;  }
     bool producesMidi() const override { return false; }
     bool isMidiEffect()  const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 0.5; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -36,27 +38,29 @@ public:
     const juce::String getProgramName (int) override { return {}; }
     void changeProgramName (int, const juce::String&) override {}
 
-    // Whole-project state (tracks/steps/patterns/song chain) as a JSON blob,
-    // plus the automatable params. Mirrors models/project.py serialization.
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int sizeInBytes) override;
 
-    // Automatable parameters (master volume, swing, small-speaker monitor, …).
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameters();
 
-    // Convert host PPQ position to 16th-note scheduling within this block, then
-    // tick the sequencer at each boundary. Port of clock.py::_run timing.
-    void scheduleAndRender (juce::AudioBuffer<float>&, const juce::AudioPlayHead::PositionInfo&);
+    // Find the 16th-note boundaries inside this block and trigger the pattern
+    // sample-accurately. Port of clock.py::_run timing, pull-based.
+    void scheduleTriggers (double ppqStart, double bpm, int numSamples);
+
+    static juce::AudioBuffer<float> makeKick (double sampleRate);
+
+    static constexpr double kDefaultBpm = 120.0;   // standalone free-run tempo
 
     double sampleRate { 48000.0 };
-    double lastPpq    { -1.0 };   // for detecting 16th-note boundaries across blocks
+    double internalPpq { 0.0 };       // free-running clock for the Standalone case
+    long   lastFiredSixteenth { -1 }; // dedupe boundaries across blocks
+    bool   pattern[16] {};            // Phase 2: hard-coded 4-on-the-floor
 
-    // engine::Sequencer  sequencer;   // ../sila/engine/sequencer.py
-    // engine::Sampler     sampler;     // ../sila/engine/sampler.py
-    // engine::VoiceMixer  mixer;       // ../sila/engine/audio.py (voices + master)
+    sila::engine::Sampler    sampler;   // ../sila/engine/sampler.py
+    sila::engine::VoiceMixer mixer;     // ../sila/engine/audio.py
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessor)
 };
