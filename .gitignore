@@ -12,3 +12,8 @@ env/
 # OS / editor cruft
 .DS_Store
 Thumbs.db
+
+# JUCE / CMake plugin build output
+vst/build/
+*.vst3
+*.component
