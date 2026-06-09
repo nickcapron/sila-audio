@@ -139,6 +139,7 @@ async function boot() {
   await initSongBar();
   _startMidiPoll();
   _initSmallSpeaker();
+  _enhanceKnobs();
   status("Ready");
 
   // Live BPM: send change to server on every committed value (blur / Enter).
@@ -507,6 +508,82 @@ async function changeStepCount(trackId, stepCount) {
 // track-colour change can reuse it instead of duplicating the fallback rule.
 function _setInspectorHeaderColor(color) {
   document.getElementById("insp-mode").style.color = color || "";
+  // Tint the knobs with the same colour ("" → falls back to the accent).
+  document.querySelectorAll(".insp-panel").forEach(p =>
+    p.style.setProperty("--knob-col", color || ""));
+}
+
+// ── Synth-style rotary knobs ──────────────────────────────────────────────
+// Each range <input> stays the hidden source of truth and keeps its existing
+// input/change listeners; the knob just reads it and dispatches those events,
+// so the save logic is untouched. _refreshKnobs() syncs the visuals whenever
+// the inspector loads new values.
+const _knobs = [];
+
+function _enhanceKnobs() {
+  document
+    .querySelectorAll("#insp-step input[type=range], #insp-track input[type=range]")
+    .forEach(_makeKnob);
+}
+
+function _makeKnob(input) {
+  if (input._knobbed) return;
+  input._knobbed = true;
+  const min = parseFloat(input.min || "0");
+  const max = parseFloat(input.max || "100");
+  const step = parseFloat(input.step || "1") || 1;
+  const range = max - min;
+  const field = input.closest(".field") || input.parentElement;
+  field.classList.add("has-knob");
+  input.style.display = "none";
+
+  const wrap = document.createElement("div");
+  wrap.className = "knob-wrap";
+  const knob = document.createElement("div");
+  knob.className = "knob";
+  const valEl = document.createElement("div");
+  valEl.className = "knob-val";
+  wrap.appendChild(knob);
+  wrap.appendChild(valEl);
+  field.appendChild(wrap);
+
+  const refresh = () => {
+    const v = parseFloat(input.value);
+    const pct = range ? Math.max(0, Math.min(1, (v - min) / range)) : 0;
+    knob.style.setProperty("--pct", pct.toFixed(4));
+    valEl.textContent = (min < 0 && v > 0) ? "+" + v : String(v);
+  };
+
+  let dragging = false, startY = 0, startVal = 0;
+  knob.addEventListener("pointerdown", (e) => {
+    dragging = true; startY = e.clientY; startVal = parseFloat(input.value);
+    knob.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  knob.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    let v = startVal + ((startY - e.clientY) / 160) * range;  // drag up = increase
+    v = Math.max(min, Math.min(max, Math.round(v / step) * step));
+    if (v !== parseFloat(input.value)) {
+      input.value = v;
+      refresh();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { knob.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    input.dispatchEvent(new Event("change", { bubbles: true }));  // persist on release
+  };
+  knob.addEventListener("pointerup", end);
+  knob.addEventListener("pointercancel", end);
+
+  _knobs.push({ refresh });
+  refresh();
+}
+
+function _refreshKnobs() {
+  _knobs.forEach(k => k.refresh());
 }
 
 function _inspectorSetMode(mode, trackName, stepLabel, trackColor) {
@@ -577,6 +654,7 @@ function _doSelectTrack(trackId) {
   } else {
     document.getElementById("trimmer-section").style.display = "none";
   }
+  _refreshKnobs();
 }
 
 function selectStep(trackId, idx, step) {
@@ -602,6 +680,7 @@ function selectStep(trackId, idx, step) {
   // P-lock indicators: lit when a custom value overrides the track default
   document.getElementById("plk-start").classList.toggle("on", pl.start !== undefined);
   document.getElementById("plk-end").classList.toggle("on",   pl.end   !== undefined);
+  _refreshKnobs();
 }
 
 async function _saveLfo(field, value) {

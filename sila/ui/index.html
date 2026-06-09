@@ -510,6 +510,49 @@
       width: 100%;
     }
     .field textarea { resize: vertical; height: 60px; }
+
+    /* ── Synth-style rotary knobs (enhance plain range sliders) ───── */
+    .field.has-knob { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+    .field.has-knob > label { flex: 1; }
+    .knob-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
+    .knob {
+      --pct: 0;
+      width: 42px; height: 42px; border-radius: 50%;
+      position: relative; cursor: ns-resize; flex-shrink: 0;
+      touch-action: none; user-select: none;
+      background:
+        radial-gradient(circle at 50% 50%, var(--surface) 0 53%, transparent 54%),
+        conic-gradient(from 225deg,
+          var(--knob-col, var(--accent)) 0 calc(var(--pct) * 270deg),
+          #25323f calc(var(--pct) * 270deg) 270deg,
+          transparent 270deg 360deg);
+      box-shadow: inset 0 0 0 1px var(--border), 0 1px 2px rgba(0,0,0,0.4);
+    }
+    .knob::after {  /* pointer */
+      content: ""; position: absolute; left: 50%; bottom: 50%;
+      width: 2px; height: 15px; margin-left: -1px; border-radius: 1px;
+      background: var(--knob-col, var(--accent));
+      transform-origin: 50% 100%;
+      transform: rotate(calc(225deg + var(--pct) * 270deg));
+    }
+    .knob:hover { box-shadow: inset 0 0 0 1px var(--knob-col, var(--accent)), 0 0 9px -2px var(--knob-col, var(--accent)); }
+    .knob-val {
+      font-size: 10px; color: var(--knob-col, var(--accent));
+      font-variant-numeric: tabular-nums; min-width: 30px; text-align: center;
+    }
+
+    /* hardware-style select: custom teal chevron */
+    .field select {
+      appearance: none; -webkit-appearance: none; cursor: pointer;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+        linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+      background-position: calc(100% - 13px) 52%, calc(100% - 8px) 52%;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+      padding-right: 22px;
+    }
+
     /* P-lock indicator dot */
     .plk {
       display: inline-block;
