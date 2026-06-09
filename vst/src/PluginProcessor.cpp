@@ -1,5 +1,4 @@
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
 #include <cmath>
 
 SilaAudioProcessor::SilaAudioProcessor()
@@ -163,7 +162,9 @@ void SilaAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 
 juce::AudioProcessorEditor* SilaAudioProcessor::createEditor()
 {
-    return new SilaAudioProcessorEditor (*this);
+    // Phase 2: generic editor shows the parameters and is guaranteed to build.
+    // The WebView editor (src/PluginEditor.*) comes online in Phase 4.
+    return new juce::GenericAudioProcessorEditor (*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

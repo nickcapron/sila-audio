@@ -32,23 +32,24 @@ juce_add_plugin(SILA
     IS_SYNTH                TRUE          # instrument: produces audio
     NEEDS_MIDI_INPUT        TRUE          # optional MIDI triggering
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-    NEEDS_WEB_BROWSER       TRUE          # WebView editor
+    # NEEDS_WEB_BROWSER     TRUE          # re-enable in Phase 4 (WebView editor)
 )
 
-# Bundle the existing web UI (sila/ui) into the plugin binary.
-juce_add_binary_data(SILAWebUI
-    SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/../sila/ui/index.html
-        ${CMAKE_CURRENT_SOURCE_DIR}/../sila/ui/app.js
-        ${CMAKE_CURRENT_SOURCE_DIR}/webui/bridge.js
-)
+# Phase 4: bundle the web UI (sila/ui) into the binary. Off for the Phase 2
+# audio build so the WebView API surface can't break the build.
+# juce_add_binary_data(SILAWebUI
+#     SOURCES
+#         ${CMAKE_CURRENT_SOURCE_DIR}/../sila/ui/index.html
+#         ${CMAKE_CURRENT_SOURCE_DIR}/../sila/ui/app.js
+#         ${CMAKE_CURRENT_SOURCE_DIR}/webui/bridge.js
+# )
 
 target_sources(SILA PRIVATE
     src/PluginProcessor.cpp
-    src/PluginEditor.cpp
     src/engine/Sampler.cpp       # Phase 2
     src/engine/VoiceMixer.cpp    # Phase 2
     # added as they are ported (see DESIGN.md roadmap):
+    # src/PluginEditor.cpp       # Phase 4 (WebView editor)
     # src/engine/Sequencer.cpp   # Phase 3
     # src/engine/Fx.cpp          # Phase 5
 )
@@ -56,16 +57,14 @@ target_sources(SILA PRIVATE
 target_include_directories(SILA PRIVATE src)
 
 target_compile_definitions(SILA PUBLIC
-    JUCE_WEB_BROWSER=1
+    JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
 )
 
 target_link_libraries(SILA PRIVATE
-    SILAWebUI
     juce::juce_audio_utils
     juce::juce_dsp
-    juce::juce_gui_extra        # WebBrowserComponent
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
