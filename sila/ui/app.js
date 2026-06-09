@@ -501,12 +501,15 @@ async function changeStepCount(trackId, stepCount) {
 // Inspector panel management
 // ---------------------------------------------------------------------------
 
-function _inspectorSetMode(mode, trackName, stepLabel) {
+function _inspectorSetMode(mode, trackName, stepLabel, trackColor) {
   const modeEl = document.getElementById("insp-mode");
   const subEl  = document.getElementById("insp-sub");
   const empty  = document.getElementById("insp-empty");
   const stepP  = document.getElementById("insp-step");
   const trackP = document.getElementById("insp-track");
+
+  // Tint the header with the track's colour; "" falls back to the CSS default.
+  modeEl.style.color = (mode === "none") ? "" : (trackColor || "");
 
   if (mode === "step") {
     modeEl.textContent = stepLabel || "Step";
@@ -544,7 +547,7 @@ function _doSelectTrack(trackId) {
   const track = project && project.tracks.find(t => t.id === trackId);
   if (!track) { _inspectorSetMode("none"); return; }
 
-  _inspectorSetMode("track", track.name);
+  _inspectorSetMode("track", track.name, undefined, track.color);
 
   document.getElementById("track-notes").value    = track.notes || "";
   document.getElementById("track-humanize").value = Math.round((track.humanize || 0) * 100);
@@ -573,7 +576,7 @@ function selectStep(trackId, idx, step) {
   selectedStepIdx = idx;
   const track = project.tracks.find(t => t.id === trackId);
   const trackName = track ? track.name : "";
-  _inspectorSetMode("step", trackName, `Step ${idx + 1}`);
+  _inspectorSetMode("step", trackName, `Step ${idx + 1}`, track ? track.color : "");
 
   document.getElementById("step-vel").value   = step.velocity;
   document.getElementById("step-pitch").value = step.pitch_offset;
