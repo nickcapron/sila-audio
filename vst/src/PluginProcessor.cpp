@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "engine/ProjectJson.h"
 #include <cmath>
 #include <algorithm>
 
@@ -213,6 +214,31 @@ void SilaAudioProcessor::rebuildSamplerBankForRate (double sr)
     // has no audio-thread reader — store lets it free here, no retire list needed.
     liveSamplers.store (std::make_shared<const SamplerBank> (std::move (*next)),
                         std::memory_order_release);
+}
+
+SilaAudioProcessor::SamplerBank
+SilaAudioProcessor::buildBankForProject (const sila::engine::Project& proj, double sr)
+{
+    SamplerBank bank;
+    bank.reserve (proj.tracks.size());
+    for (const auto& t : proj.tracks)
+        bank.push_back (buildSamplerFromLayers (t.samples, sr));   // empty layers => silent sampler
+    return bank;
+}
+
+void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerBankPtr bank)
+{
+    // The audio thread may be reading the current snapshot+bank, so publish
+    // atomically and retire the old ones (freed later by reapRetired). Publish
+    // the bank first: for the one block where track count and bank size may
+    // disagree, forEachTrig's bounds check simply skips — no glitch.
+    if (auto oldBank = liveSamplers.exchange (bank, std::memory_order_acq_rel))
+        retiredSamplers.push_back (std::move (oldBank));
+    if (auto oldProj = liveProject.exchange (proj, std::memory_order_acq_rel))
+        retiredProjects.push_back (std::move (oldProj));
+
+    projectEpoch.fetch_add (1, std::memory_order_release);   // tell the editor to refresh
+    reapRetired();   // message thread; keeps the retire lists from growing on reload
 }
 
 // Phase 3: until the UI bridge (Phase 4) authors patterns, build a small demo
@@ -464,6 +490,9 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 v.startOffset = startOffset;
                 v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
                 v.panL = v.panR = 0.70710678f;     // centre (per-track pan is Phase 5)
+                v.keepAlive   = smp;   // pin this sampler alive until the voice ends
+                                       // (an RCU bank swap must not free a buffer a
+                                       // ringing voice still points into)
                 mixer.addVoice (v);
             });
         }
@@ -473,14 +502,43 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
 
 void SilaAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = apvts.copyState().createXml())
+    // Message thread. Grab the immutable snapshot with one lock-free acquire-load
+    // (same read the audio thread does — just bumps the shared_ptr refcount, never
+    // blocks it), then serialise it as a property alongside the APVTS params.
+    auto state = apvts.copyState();
+    if (auto proj = snapshot())
+        state.setProperty ("projectJson",
+                           juce::JSON::toString (sila::engine::projectToVar (*proj), true), nullptr);
+
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, dest);
 }
 
 void SilaAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+    if (xml == nullptr)
+        return;
+
+    const juce::ValueTree state = juce::ValueTree::fromXml (*xml);
+    if (! state.isValid())
+        return;
+
+    apvts.replaceState (state);   // restore params (swing/songMode/master/...)
+
+    // Restore the structural Project, if this preset carries one (older presets
+    // without it just keep the current project).
+    const juce::var projVar = juce::JSON::parse (state.getProperty ("projectJson").toString());
+    if (! projVar.isObject())
+        return;
+
+    auto proj = std::make_shared<const sila::engine::Project> (sila::engine::projectFromVar (projVar));
+    // Build the sampler bank now (WindowedSinc resamples each source file to the
+    // current device rate). If this runs before prepareToPlay, sampleRate is the
+    // default; prepareToPlay's rebuildSamplerBankForRate then re-resamples from
+    // the same SampleRef paths to the real rate — self-healing.
+    auto bank = std::make_shared<const SamplerBank> (buildBankForProject (*proj, sampleRate));
+    setProject (std::move (proj), std::move (bank));
 }
 
 juce::AudioProcessorEditor* SilaAudioProcessor::createEditor()

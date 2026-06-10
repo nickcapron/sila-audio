@@ -460,12 +460,24 @@ function onExport(res) {
   if (res && res.summary) console.log("[export] " + (res.dir ? res.dir + "\n" : "") + res.summary);
 }
 
+// ── Project reload (DAW state load swapped in a whole new Project) ────────────
+async function onProjectReload() {
+  try { project = await GET("/project"); } catch { return; }
+  sel = { trackId: null, idx: null };
+  renderTracks();
+  hideTrimmer();
+  const sw = Math.round((project.swing || 0) * 100);
+  swingEl.value = sw; swingPct.textContent = sw + "%";   // header reflects restored swing
+  setStatus(`project loaded — ${project.tracks.length} tracks`, true);
+}
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
     window.__JUCE__.backend.addEventListener("playhead", onPlayhead);
     window.__JUCE__.backend.addEventListener("status", onStatus);
     window.__JUCE__.backend.addEventListener("export", onExport);
+    window.__JUCE__.backend.addEventListener("project", onProjectReload);
   }
 
   project = await GET("/project");

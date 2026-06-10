@@ -61,6 +61,11 @@ public:
     std::atomic<double> currentBpm       { kDefaultBpm };
     std::atomic<int>    currentSongSlot  { -1 };   // -1 = song mode off / not playing
 
+    // Bumped whenever a whole new Project is published (DAW state load). The
+    // editor polls this on its timer to re-fetch GET /project — keeps the
+    // processor decoupled from the editor (no cross-thread listener).
+    std::atomic<uint32_t> projectEpoch { 0 };
+
     // ── RCU concurrency seam (DESIGN.md) ───────────────────────────────────
     // The structural project state is an immutable snapshot. The audio thread
     // does ONE atomic load per block and only reads it. The message thread (UI
@@ -130,6 +135,15 @@ private:
     // tracks are re-resampled to `sr`; the snapshot/edits are preserved. Called
     // from prepareToPlay only (no concurrent processBlock).
     void rebuildSamplerBankForRate (double sr);
+
+    // Build a full sampler bank for a project (every track via its layers; empty
+    // layers => a silent sampler). Used when loading DAW state.
+    static SamplerBank buildBankForProject (const sila::engine::Project& proj, double sr);
+
+    // Wholesale RCU swap of both Project and sampler bank (DAW state load). Audio
+    // thread may be running, so old snapshots go on the retire lists; bumps
+    // projectEpoch so the editor refreshes. Message thread only.
+    void setProject (ProjectPtr proj, SamplerBankPtr bank);
 
     static juce::AudioBuffer<float> makeKick  (double sampleRate);
     static juce::AudioBuffer<float> makeSnare (double sampleRate);

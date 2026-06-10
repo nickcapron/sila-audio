@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <vector>
+#include <memory>
 
 // Port of ../../sila/engine/audio.py (the mixing half — the device/stream/
 // watcher half is dropped; the host owns the device).
@@ -19,6 +20,11 @@ struct Voice
     float volume = 1.0f;
     float panL = 0.70710678f, panR = 0.70710678f;
     int   startOffset = 0;   // samples to wait before first output (was delay_frames)
+
+    // Pins the buffer's owner (the Sampler) alive for the voice's lifetime, so an
+    // RCU bank swap that retires+frees that sampler can't dangle `audio` while the
+    // voice is still ringing. Type-erased to keep the mixer free of a Sampler dep.
+    std::shared_ptr<const void> keepAlive;
 };
 
 class VoiceMixer

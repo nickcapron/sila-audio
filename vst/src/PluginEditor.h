@@ -62,5 +62,9 @@ private:
     double lastSentBpm      = 0.0;
     int    lastSentSongSlot = -2;   // -2 = nothing sent yet (-1 is a real value)
 
+    // Last project epoch the UI has seen; a change means the processor swapped in
+    // a whole new Project (DAW state load) and the grid must re-fetch.
+    uint32_t lastSeenEpoch = 0;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessorEditor)
 };
