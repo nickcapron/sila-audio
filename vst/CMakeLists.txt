@@ -32,39 +32,44 @@ juce_add_plugin(SILA
     IS_SYNTH                TRUE          # instrument: produces audio
     NEEDS_MIDI_INPUT        TRUE          # optional MIDI triggering
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-    # NEEDS_WEB_BROWSER     TRUE          # re-enable in Phase 4 (WebView editor)
+    NEEDS_WEB_BROWSER       TRUE          # Phase 4: WebView UI editor
+    NEEDS_WEBVIEW2          TRUE          # Windows: statically link WebView2 (SDK via NuGet)
 )
 
-# Phase 4: bundle the web UI (sila/ui) into the binary. Off for the Phase 2
-# audio build so the WebView API surface can't break the build.
-# juce_add_binary_data(SILAWebUI
-#     SOURCES
-#         ${CMAKE_CURRENT_SOURCE_DIR}/../sila/ui/index.html
-#         ${CMAKE_CURRENT_SOURCE_DIR}/../sila/ui/app.js
-#         ${CMAKE_CURRENT_SOURCE_DIR}/webui/bridge.js
-# )
+# Phase 4 (Step 1): bundle the bring-up UI + the vendored JUCE JS bridge module
+# into the binary, served by the editor's resource provider. The full sila/ui
+# gets added here as its REST surface is ported to the bridge.
+juce_add_binary_data(SILAWebUI
+    SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/webui/index.html
+        ${CMAKE_CURRENT_SOURCE_DIR}/webui/bridge.js
+        ${CMAKE_CURRENT_SOURCE_DIR}/webui/js/juce/index.js
+        ${CMAKE_CURRENT_SOURCE_DIR}/webui/js/juce/check_native_interop.js
+)
 
 target_sources(SILA PRIVATE
     src/PluginProcessor.cpp
+    src/PluginEditor.cpp         # Phase 4 (WebView editor)
     src/engine/Sampler.cpp       # Phase 2
     src/engine/VoiceMixer.cpp    # Phase 2
+    src/engine/Sequencer.cpp     # Phase 3
     # added as they are ported (see DESIGN.md roadmap):
-    # src/PluginEditor.cpp       # Phase 4 (WebView editor)
-    # src/engine/Sequencer.cpp   # Phase 3
     # src/engine/Fx.cpp          # Phase 5
 )
 
 target_include_directories(SILA PRIVATE src)
 
 target_compile_definitions(SILA PUBLIC
-    JUCE_WEB_BROWSER=0
+    JUCE_WEB_BROWSER=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1   # enables the WebView2 backend + window.__JUCE__
 )
 
 target_link_libraries(SILA PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
+    SILAWebUI                                     # bundled web UI (BinaryData)
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
