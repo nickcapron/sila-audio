@@ -37,7 +37,14 @@ private:
     float currentSwing() const;
     bool  currentSongMode() const;
 
+    // Launch the native folder picker, then transcode every project sample to
+    // 48k/16-bit/mono WAVs there; pushes the result via the "export" event.
+    void launchDigitaktExport();
+
     SilaAudioProcessor& processor;
+
+    // Kept alive while the async FileChooser dialog is open.
+    std::unique_ptr<juce::FileChooser> fileChooser;
 
     // Declared before webView: the browser Options reference the relay.
     juce::WebToggleButtonRelay songModeRelay { "songModeToggle" };

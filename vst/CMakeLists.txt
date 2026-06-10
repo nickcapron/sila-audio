@@ -53,6 +53,7 @@ target_sources(SILA PRIVATE
     src/engine/Sampler.cpp       # Phase 2
     src/engine/VoiceMixer.cpp    # Phase 2
     src/engine/Sequencer.cpp     # Phase 3
+    src/engine/DigitaktExport.cpp # Phase 4 Step 2d (Digitakt sample export)
     # added as they are ported (see DESIGN.md roadmap):
     # src/engine/Fx.cpp          # Phase 5
 )

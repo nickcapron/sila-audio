@@ -1,5 +1,5 @@
 #include "engine/Sampler.h"
-#include <cmath>
+#include "engine/Resample.h"
 
 namespace sila::engine
 {
@@ -31,24 +31,9 @@ bool Sampler::addFile (const juce::File& file, int velMin, int velMax, int rrGro
         mono.applyGain (1.0f / (float) src.getNumChannels());
 
     // Resample to the device rate so the file plays at its original pitch/speed
-    // regardless of its own rate. Done offline here on the message thread with
-    // highest-quality windowed-sinc anti-aliasing (we pay the cost once, at
-    // load); the audio thread still reads the resulting buffer 1:1. Files already
-    // at the device rate skip this entirely (exact passthrough).
-    const double srcRate = reader->sampleRate;
-    if (srcRate > 0.0 && std::abs (srcRate - sampleRate) > 1.0e-6)
-    {
-        const double ratio  = srcRate / sampleRate;                 // input samples per output
-        const int    outLen = (int) std::floor ((double) len / ratio);   // floor => never reads past `len`
-        if (outLen > 0)
-        {
-            juce::AudioBuffer<float> resampled (1, outLen);
-            juce::WindowedSincInterpolator interp;
-            interp.reset();
-            interp.process (ratio, mono.getReadPointer (0), resampled.getWritePointer (0), outLen);
-            mono = std::move (resampled);
-        }
-    }
+    // regardless of its own rate (offline windowed-sinc; the audio thread still
+    // reads the result 1:1). Files already at the device rate pass through.
+    mono = resampleMonoTo (mono, reader->sampleRate, sampleRate);
 
     addBuffer (std::move (mono), velMin, velMax, rrGroup, start, end);
     return true;

@@ -36,6 +36,14 @@
     #transport.playing .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
     /* active song-mode pattern badge */
     #active-pattern { color: var(--accent-2); font-weight: 700; letter-spacing: 1px; }
+    /* export button (pinned to the right of the header) */
+    #export-btn {
+      margin-left: auto; background: var(--surface); color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 4px; padding: 5px 14px;
+      font: inherit; font-size: 11px; letter-spacing: 1.5px; font-weight: 700; cursor: pointer;
+    }
+    #export-btn:hover { background: var(--accent); color: #04110d; }
+    #export-btn:disabled { opacity: .5; cursor: default; border-color: var(--border); color: var(--text-dim); background: var(--surface); }
     input[type=range] { width: 120px; accent-color: var(--accent); }
     input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
     label { user-select: none; cursor: pointer; }
@@ -164,6 +172,7 @@
     <span class="meta">Swing <input type="range" id="swing" min="0" max="100" value="0"><span id="swing-pct" class="val" style="min-width:34px">0%</span></span>
     <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>
+    <button id="export-btn" title="Transcode all project samples to 48k/16-bit mono WAVs for the Elektron Digitakt">EXPORT</button>
   </header>
 
   <div class="body">

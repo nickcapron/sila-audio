@@ -12,6 +12,8 @@
 //                                           track's sampler over the RCU seam);
 //                                           also commits trimmer start/end edits
 //   GET  /tracks/{id}/waveform?points=N  -> downsampled peaks + start/end (trim)
+//   POST /export/digitakt                -> native folder picker + transcode;
+//                                           result arrives via the "export" event
 //   event "playhead"                     -> highlight the playing column
 //   event "status"                       -> playing / bpm / active song slot
 //   toggle "songModeToggle"              -> bound to the songMode APVTS param
@@ -25,6 +27,7 @@ const backendCall = getNativeFunction("backendCall");
 const api  = (method, path, body) => backendCall(method, path, body ?? null);
 const GET  = (p)    => api("GET", p);
 const PUT  = (p, b) => api("PUT", p, b);
+const POST = (p, b) => api("POST", p, b ?? null);
 
 const tracksEl   = document.getElementById("tracks");
 const ppqEl      = document.getElementById("ppq");
@@ -51,6 +54,7 @@ const trimEndH   = document.getElementById("trim-end");
 const trimNameEl = document.getElementById("trim-name");
 const trimStartV = document.getElementById("trim-start-v");
 const trimEndV   = document.getElementById("trim-end-v");
+const exportBtn  = document.getElementById("export-btn");
 
 let project = null;
 let sel = { trackId: null, idx: null };   // selected step
@@ -443,11 +447,25 @@ async function commitTrim() {
   setStatus(`trimmed ${sampleLabel(track)} → ${Math.round(trimStart * 100)}–${Math.round(trimEnd * 100)}%`, true);
 }
 
+// ── Digitakt export (C++ owns the native folder dialog; result via event) ────
+async function triggerExport() {
+  setStatus("choose a folder to export Digitakt WAVs…", false);
+  try { await POST("/export/digitakt"); }   // C++ opens the picker; summary arrives via "export"
+  catch { setStatus("export failed to start", false); }
+}
+
+function onExport(res) {
+  const line = (res && res.summary) ? res.summary.split("\n")[0] : "export done";
+  setStatus(line, !!(res && res.exported));
+  if (res && res.summary) console.log("[export] " + (res.dir ? res.dir + "\n" : "") + res.summary);
+}
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
     window.__JUCE__.backend.addEventListener("playhead", onPlayhead);
     window.__JUCE__.backend.addEventListener("status", onStatus);
+    window.__JUCE__.backend.addEventListener("export", onExport);
   }
 
   project = await GET("/project");
@@ -479,6 +497,9 @@ async function boot() {
   trimStartH.addEventListener("mousedown", (e) => startTrimDrag(e, "start"));
   trimEndH.addEventListener("mousedown", (e) => startTrimDrag(e, "end"));
   window.addEventListener("resize", () => { if (trimmerEl.classList.contains("visible")) updateTrimHandles(); });
+
+  // Digitakt export.
+  exportBtn.addEventListener("click", triggerExport);
 
   setStatus(`connected — ${project.tracks.length} tracks · click a step, right-click to inspect`, true);
 }
