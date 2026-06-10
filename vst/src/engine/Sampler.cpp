@@ -2,7 +2,8 @@
 
 namespace sila::engine
 {
-bool Sampler::addFile (const juce::File& file, int velMin, int velMax, int rrGroup)
+bool Sampler::addFile (const juce::File& file, int velMin, int velMax, int rrGroup,
+                       float start, float end)
 {
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
     if (reader == nullptr)
@@ -28,17 +29,20 @@ bool Sampler::addFile (const juce::File& file, int velMin, int velMax, int rrGro
     if (src.getNumChannels() > 1)
         mono.applyGain (1.0f / (float) src.getNumChannels());
 
-    addBuffer (std::move (mono), velMin, velMax, rrGroup);
+    addBuffer (std::move (mono), velMin, velMax, rrGroup, start, end);
     return true;
 }
 
-void Sampler::addBuffer (juce::AudioBuffer<float> mono, int velMin, int velMax, int rrGroup)
+void Sampler::addBuffer (juce::AudioBuffer<float> mono, int velMin, int velMax, int rrGroup,
+                         float start, float end)
 {
     SampleLayer layer;
     layer.audio   = std::move (mono);
     layer.velMin  = velMin;
     layer.velMax  = velMax;
     layer.rrGroup = rrGroup;
+    layer.start   = start;
+    layer.end     = end;
     layers.push_back (std::move (layer));
 }
 
@@ -68,5 +72,29 @@ SampleSlice Sampler::get (int velocity, float startOverride, float endOverride)
     int end   = juce::jlimit (start + 1, n, (int) (eFrac * n));
 
     return { &layer.audio, start, end - start };
+}
+
+std::vector<float> Sampler::computePeaks (int points) const
+{
+    if (layers.empty() || points <= 0)
+        return {};
+
+    const juce::AudioBuffer<float>& audio = layers.front().audio;
+    const int n = audio.getNumSamples();
+    if (n <= 0)
+        return {};
+
+    const float* data = audio.getReadPointer (0);
+    std::vector<float> peaks ((size_t) points, 0.0f);
+    for (int b = 0; b < points; ++b)
+    {
+        const int from = (int) ((juce::int64) b       * n / points);
+        const int to   = (int) ((juce::int64) (b + 1) * n / points);
+        float peak = 0.0f;
+        for (int i = from; i < to; ++i)
+            peak = juce::jmax (peak, std::abs (data[i]));
+        peaks[(size_t) b] = juce::jmin (1.0f, peak);
+    }
+    return peaks;
 }
 } // namespace sila::engine

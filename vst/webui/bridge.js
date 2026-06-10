@@ -9,7 +9,9 @@
 //   GET  /sequencer/status               -> initial transport status on boot
 //   GET  /library                        -> ~/SILA/library pack/category tree
 //   PUT  /tracks/{id}/samples            -> assign sample layers (rebuilds the
-//                                           track's sampler over the RCU seam)
+//                                           track's sampler over the RCU seam);
+//                                           also commits trimmer start/end edits
+//   GET  /tracks/{id}/waveform?points=N  -> downsampled peaks + start/end (trim)
 //   event "playhead"                     -> highlight the playing column
 //   event "status"                       -> playing / bpm / active song slot
 //   toggle "songModeToggle"              -> bound to the songMode APVTS param
@@ -40,6 +42,15 @@ const libTreeEl  = document.getElementById("lib-tree");
 const libSearch  = document.getElementById("lib-search");
 const libCloseEl = document.getElementById("lib-close");
 const libTargetEl = document.getElementById("lib-target");
+const trimmerEl  = document.getElementById("trimmer");
+const trimWrap   = document.getElementById("trim-wrap");
+const trimCanvas = document.getElementById("trim-canvas");
+const trimRegion = document.getElementById("trim-region");
+const trimStartH = document.getElementById("trim-start");
+const trimEndH   = document.getElementById("trim-end");
+const trimNameEl = document.getElementById("trim-name");
+const trimStartV = document.getElementById("trim-start-v");
+const trimEndV   = document.getElementById("trim-end-v");
 
 let project = null;
 let sel = { trackId: null, idx: null };   // selected step
@@ -184,6 +195,8 @@ function selectStep(trackId, idx) {
   $("i-end").value   = Math.round((pl.end ?? 1) * 100);     $("iv-end").textContent   = $("i-end").value + "%";
   $("i-pitch").value = step.pitch_offset ?? 0;   $("iv-pitch").textContent = fmtSigned($("i-pitch").value);
   $("i-length").value = String(step.length ?? 1);
+
+  showTrimmer(trackId);   // trimmer follows the selected track's sample
 }
 
 const fmtSigned = (v) => (Number(v) > 0 ? "+" + v : String(v));
@@ -345,6 +358,89 @@ async function assignSample(trackId, path, filename) {
   if (slot) { slot.textContent = stem(filename); slot.title = path; slot.classList.add("loaded"); }
   closeLibrary();
   setStatus(`assigned ${filename}`, true);
+  showTrimmer(trackId);   // surface the trimmer for the freshly-assigned sample
+}
+
+// ── Sample trimmer (layer start/end over the waveform) ──────────────────────
+let trimTrackId = null;
+let trimStart = 0, trimEnd = 1;
+let trimPeaks = [];
+
+async function showTrimmer(trackId) {
+  const track = findTrack(trackId);
+  if (!track || !track.samples || !track.samples.length) { hideTrimmer(); return; }
+  let data;
+  try { data = await GET(`/tracks/${trackId}/waveform?points=600`); }
+  catch { hideTrimmer(); return; }
+  if (!data.waveform || !data.waveform.length) { hideTrimmer(); return; }
+  trimTrackId = trackId;
+  trimPeaks = data.waveform;
+  trimStart = data.start ?? 0;
+  trimEnd   = data.end ?? 1;
+  trimNameEl.textContent = sampleLabel(track);
+  trimmerEl.classList.add("visible");
+  updateTrimHandles();   // draws the waveform too
+}
+
+function hideTrimmer() { trimmerEl.classList.remove("visible"); trimTrackId = null; }
+
+function drawWaveform() {
+  const c = trimCanvas;
+  c.width  = trimWrap.clientWidth  || 200;
+  c.height = trimWrap.clientHeight || 92;
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  const mid = c.height / 2;
+  const w   = c.width / trimPeaks.length;
+  const startPx = Math.round(trimStart * c.width);
+  const endPx   = Math.round(trimEnd   * c.width);
+  for (let i = 0; i < trimPeaks.length; i++) {
+    const x = i * w;
+    const h = trimPeaks[i] * mid;
+    const active = x >= startPx && x < endPx;
+    ctx.fillStyle = active ? "#34e3c4" : "#243245";
+    ctx.fillRect(x, mid - h, Math.max(1, w - 0.5), h * 2);
+  }
+}
+
+function updateTrimHandles() {
+  trimStartH.style.left = (trimStart * 100) + "%";
+  trimEndH.style.left   = (trimEnd   * 100) + "%";
+  trimRegion.style.left  = (trimStart * 100) + "%";
+  trimRegion.style.width = ((trimEnd - trimStart) * 100) + "%";
+  trimStartV.textContent = Math.round(trimStart * 100) + "%";
+  trimEndV.textContent   = Math.round(trimEnd   * 100) + "%";
+  if (trimPeaks.length) drawWaveform();   // re-shade active/muted as handles move
+}
+
+function startTrimDrag(e, edge) {
+  e.preventDefault();
+  const rect = trimWrap.getBoundingClientRect();
+  const onMove = (ev) => {
+    let frac = (ev.clientX - rect.left) / rect.width;
+    frac = Math.max(0, Math.min(1, frac));
+    if (edge === "start") trimStart = Math.min(frac, trimEnd - 0.01);
+    else                  trimEnd   = Math.max(frac, trimStart + 0.01);
+    updateTrimHandles();
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    commitTrim();   // PUT through the existing RCU seam on release
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+async function commitTrim() {
+  if (!trimTrackId) return;
+  const track = findTrack(trimTrackId);
+  if (!track || !track.samples || !track.samples.length) return;
+  const layer = { ...track.samples[0], start: trimStart, end: trimEnd };
+  track.samples[0] = layer;
+  try { await PUT(`/tracks/${trimTrackId}/samples`, { samples: [layer] }); }
+  catch { setStatus("trim failed", false); return; }
+  setStatus(`trimmed ${sampleLabel(track)} → ${Math.round(trimStart * 100)}–${Math.round(trimEnd * 100)}%`, true);
 }
 
 // ── Boot ────────────────────────────────────────────────────────────────────
@@ -378,6 +474,11 @@ async function boot() {
   libCloseEl.addEventListener("click", closeLibrary);
   libModal.addEventListener("click", (e) => { if (e.target === libModal) closeLibrary(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLibrary(); });
+
+  // Trimmer drag handles.
+  trimStartH.addEventListener("mousedown", (e) => startTrimDrag(e, "start"));
+  trimEndH.addEventListener("mousedown", (e) => startTrimDrag(e, "end"));
+  window.addEventListener("resize", () => { if (trimmerEl.classList.contains("visible")) updateTrimHandles(); });
 
   setStatus(`connected — ${project.tracks.length} tracks · click a step, right-click to inspect`, true);
 }

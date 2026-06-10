@@ -34,14 +34,23 @@ public:
 
     // Decode a WAV/AIFF file to a mono layer. (Phase 2: no sample-rate
     // conversion yet — files not at the host rate play at the wrong pitch.)
-    bool addFile (const juce::File&, int velMin = 0, int velMax = 127, int rrGroup = 0);
+    // start/end are 0..1 layer-level slice fractions (the trimmer, Step 2c).
+    bool addFile (const juce::File&, int velMin = 0, int velMax = 127, int rrGroup = 0,
+                  float start = 0.0f, float end = 1.0f);
 
     // Add an in-memory mono buffer as a layer (e.g. a synthesized test sample).
-    void addBuffer (juce::AudioBuffer<float> mono, int velMin = 0, int velMax = 127, int rrGroup = 0);
+    void addBuffer (juce::AudioBuffer<float> mono, int velMin = 0, int velMax = 127, int rrGroup = 0,
+                    float start = 0.0f, float end = 1.0f);
 
     // Velocity-layer select + round-robin within the group; returns the slice
     // to play. Mirrors SamplePlayer.get() / get_with_offset().
     SampleSlice get (int velocity, float startOverride = -1.0f, float endOverride = -1.0f);
+
+    // Downsampled abs-amplitude peaks (0..1) of the first layer's buffer, for the
+    // trimmer waveform. Empty if unloaded. const + reads only the immutable
+    // buffer, so it is safe to call on the message thread while the audio thread
+    // plays (the audio thread only mutates round-robin counters, never the audio).
+    std::vector<float> computePeaks (int points) const;
 
 private:
     juce::AudioFormatManager formats;

@@ -165,7 +165,7 @@ void SilaAudioProcessor::assignTrackSamples (int trackIndex,
         if (! f.existsAsFile())
             f = libraryRoot().getChildFile (layer.path);   // resolve library-relative
         if (f.existsAsFile())
-            smp->addFile (f, layer.velMin, layer.velMax, layer.rrGroup);
+            smp->addFile (f, layer.velMin, layer.velMax, layer.rrGroup, layer.start, layer.end);
     }
 
     // Copy the bank (other tracks keep their sampler + RR state), swap this one.

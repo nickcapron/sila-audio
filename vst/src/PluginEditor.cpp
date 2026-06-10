@@ -319,9 +319,14 @@ void SilaAudioProcessorEditor::timerCallback()
 
 juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::var>& args)
 {
-    const juce::String method = args.size() > 0 ? args[0].toString() : juce::String();
-    const juce::String path   = args.size() > 1 ? args[1].toString() : juce::String();
-    const juce::var    body   = args.size() > 2 ? args[2] : juce::var();
+    const juce::String method  = args.size() > 0 ? args[0].toString() : juce::String();
+    const juce::String rawPath = args.size() > 1 ? args[1].toString() : juce::String();
+    const juce::var    body    = args.size() > 2 ? args[2] : juce::var();
+
+    // Split off any ?query so routing/seg-matching see the path only.
+    const int qpos           = rawPath.indexOfChar ('?');
+    const juce::String path  = qpos >= 0 ? rawPath.substring (0, qpos) : rawPath;
+    const juce::String query = qpos >= 0 ? rawPath.substring (qpos + 1) : juce::String();
 
     juce::StringArray seg;
     seg.addTokens (path, "/", "");
@@ -420,6 +425,51 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         if (trackIndex >= 0)
             processor.assignTrackSamples (trackIndex, layers);
         return emptyObject();
+    }
+
+    // GET /tracks/{id}/waveform?points=N — downsampled peaks + the track's
+    // current layer start/end, for the sample trimmer. Empty waveform for tracks
+    // with no assigned sample file (so the UI hides the panel for the demo kit).
+    if (method == "GET" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "waveform")
+    {
+        const juce::String id = seg[1];
+        int points = 600;
+        {
+            juce::StringArray qp;
+            qp.addTokens (query, "&", "");
+            for (const auto& kv : qp)
+                if (kv.startsWith ("points="))
+                    points = kv.fromFirstOccurrenceOf ("points=", false, false).getIntValue();
+        }
+        points = juce::jlimit (1, 4000, points);
+
+        auto*  o      = new juce::DynamicObject();
+        juce::Array<juce::var> wf;
+        double start  = 0.0, end = 1.0;
+
+        auto snap = processor.snapshot();
+        if (snap != nullptr)
+            for (int i = 0; i < (int) snap->tracks.size(); ++i)
+                if (snap->tracks[(size_t) i].id == id)
+                {
+                    const auto& layers = snap->tracks[(size_t) i].samples;
+                    if (! layers.empty())   // trimmer only for assigned sample files
+                    {
+                        start = layers.front().start;
+                        end   = layers.front().end;
+                        if (auto bank = processor.samplerSnapshot())
+                            if (i < (int) bank->size() && (*bank)[(size_t) i] != nullptr)
+                                for (float p : (*bank)[(size_t) i]->computePeaks (points))
+                                    wf.add ((double) p);
+                    }
+                    break;
+                }
+
+        o->setProperty ("waveform", wf);
+        o->setProperty ("length", wf.size());
+        o->setProperty ("start", start);
+        o->setProperty ("end", end);
+        return juce::var (o);
     }
 
     // GET /sequencer/status — current transport status for the initial fetch on
