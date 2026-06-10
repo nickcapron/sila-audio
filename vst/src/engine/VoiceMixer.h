@@ -15,8 +15,9 @@ namespace sila::engine
 struct Voice
 {
     const juce::AudioBuffer<float>* audio = nullptr;  // mono source
-    int   pos    = 0;                                 // current read index
-    int   endPos = 0;                                 // stop index (slice end)
+    double pos  = 0.0;                                 // fractional read position (varispeed pitch)
+    int   endPos = 0;                                 // stop index (slice end, in source samples)
+    double rate  = 1.0;                                // playback rate = 2^(pitch_offset/12)
     float volume = 1.0f;
     float panL = 0.70710678f, panR = 0.70710678f;
     int   startOffset = 0;   // samples to wait before first output (was delay_frames)

@@ -10,6 +10,24 @@ static constexpr double kSsDrive   = 2.5;
 static constexpr double kSsBassGain = 0.8;
 static constexpr float  kSsSoftKnee = 0.8f;
 
+// 4-point cubic Hermite (Catmull-Rom) interpolation at fractional `pos` for the
+// varispeed (pitch) read. Indices clamped to the buffer so the kernel never
+// reads past either edge. Stateless — cheap enough for the per-voice hot path,
+// and cleaner transients than linear without windowed-sinc's cost.
+static float hermite4 (const float* src, int n, double pos)
+{
+    const int   i    = (int) std::floor (pos);
+    const float frac = (float) (pos - i);
+    auto at = [src, n] (int k) { return src[juce::jlimit (0, n - 1, k)]; };
+
+    const float xm1 = at (i - 1), x0 = at (i), x1 = at (i + 1), x2 = at (i + 2);
+    const float c0 = x0;
+    const float c1 = 0.5f * (x1 - xm1);
+    const float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+    const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+    return ((c3 * frac + c2) * frac + c1) * frac + c0;
+}
+
 void VoiceMixer::prepare (double sr)
 {
     sampleRate = sr;
@@ -43,20 +61,21 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block)
             continue;
         }
 
-        const auto* src = v.audio->getReadPointer (0);
+        const auto* src   = v.audio->getReadPointer (0);
+        const int   srcN  = v.audio->getNumSamples();
         int j = v.startOffset;        // first output sample in this block
         v.startOffset = 0;
 
-        while (j < n && v.pos < v.endPos)
+        while (j < n && v.pos < (double) v.endPos)
         {
-            const float s = src[v.pos] * v.volume;
+            const float s = hermite4 (src, srcN, v.pos) * v.volume;
             L[j] += v.panL * s;
             if (R != nullptr) R[j] += v.panR * s;
-            ++v.pos;
+            v.pos += v.rate;          // varispeed: rate = 2^(pitch_offset/12)
             ++j;
         }
 
-        if (v.pos >= v.endPos)
+        if (v.pos >= (double) v.endPos)
             voices.erase (voices.begin() + (long) i);   // finished
         else
             ++i;

@@ -485,8 +485,9 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
 
                 sila::engine::Voice v;
                 v.audio       = slice.buffer;
-                v.pos         = slice.start;
+                v.pos         = (double) slice.start;
                 v.endPos      = slice.start + slice.length;
+                v.rate        = std::pow (2.0, (double) ev.pitchOffset / 12.0);   // varispeed pitch
                 v.startOffset = startOffset;
                 v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
                 v.panL = v.panR = 0.70710678f;     // centre (per-track pan is Phase 5)
