@@ -135,6 +135,45 @@ void SilaAudioProcessor::reapRetired()
         std::remove_if (retiredProjects.begin(), retiredProjects.end(),
                         [] (const ProjectPtr& p) { return p.use_count() <= 1; }),
         retiredProjects.end());
+
+    // Same reclamation for superseded sampler banks (audio thread done with them).
+    retiredSamplers.erase (
+        std::remove_if (retiredSamplers.begin(), retiredSamplers.end(),
+                        [] (const SamplerBankPtr& b) { return b.use_count() <= 1; }),
+        retiredSamplers.end());
+}
+
+juce::File SilaAudioProcessor::libraryRoot()
+{
+    return juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+               .getChildFile ("SILA").getChildFile ("library");
+}
+
+void SilaAudioProcessor::assignTrackSamples (int trackIndex,
+                                             const std::vector<sila::engine::SampleRef>& layers)
+{
+    auto cur = liveSamplers.load (std::memory_order_acquire);
+    if (cur == nullptr || trackIndex < 0 || trackIndex >= (int) cur->size())
+        return;
+
+    // Build the replacement sampler from the layer files (message thread I/O).
+    auto smp = std::make_shared<sila::engine::Sampler>();
+    smp->prepare (sampleRate);
+    for (const auto& layer : layers)
+    {
+        juce::File f (layer.path);
+        if (! f.existsAsFile())
+            f = libraryRoot().getChildFile (layer.path);   // resolve library-relative
+        if (f.existsAsFile())
+            smp->addFile (f, layer.velMin, layer.velMax, layer.rrGroup);
+    }
+
+    // Copy the bank (other tracks keep their sampler + RR state), swap this one.
+    auto next = std::make_shared<SamplerBank> (*cur);
+    (*next)[(size_t) trackIndex] = std::move (smp);
+    auto old = liveSamplers.exchange (std::make_shared<const SamplerBank> (std::move (*next)),
+                                      std::memory_order_acq_rel);
+    if (old) retiredSamplers.push_back (std::move (old));
 }
 
 // Phase 3: until the UI bridge (Phase 4) authors patterns, build a small demo
@@ -148,7 +187,7 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
     using namespace sila::engine;
 
     auto proj = std::make_shared<Project>();
-    samplers.clear();
+    auto samplerBank = std::make_shared<SamplerBank>();
 
     auto addTrack = [&] (const juce::String& name, juce::AudioBuffer<float> sample) -> Track&
     {
@@ -158,10 +197,10 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         t.steps.resize (16);            // 16-step loop
         proj->tracks.push_back (std::move (t));
 
-        samplers.push_back (std::make_unique<Sampler>());
-        Sampler& smp = *samplers.back();
-        smp.prepare (sr);
-        smp.addBuffer (std::move (sample));
+        auto smp = std::make_shared<Sampler>();
+        smp->prepare (sr);
+        smp->addBuffer (std::move (sample));   // synthesized demo kit (no file path)
+        samplerBank->push_back (std::move (smp));
         return proj->tracks.back();
     };
 
@@ -231,6 +270,10 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
     };
 
     proj->songChain = { 0, 1, 0, 2 };    // A B A C, one bar each (active slot gated by songMode param)
+
+    // Publish the matching sampler bank (parallel to proj->tracks by index).
+    liveSamplers.store (std::make_shared<const SamplerBank> (std::move (*samplerBank)),
+                        std::memory_order_release);
     return proj;
 }
 
@@ -332,6 +375,11 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
     // Swing (port of clock.py): odd-indexed 16ths shift by swing * interval / 2.
     const double swingOffset = (double) swing * samplesPer16 * 0.5;
 
+    // One atomic load of the sampler bank for the whole block (RCU read).
+    const SamplerBankPtr bank = samplerSnapshot();
+    if (bank == nullptr)
+        return;
+
     long idx = (long) std::ceil (sixteenthStart - 1e-9);
     for (;;)
     {
@@ -345,12 +393,15 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
 
             sequencer.forEachTrig (proj, absIdx, songMode, fill, [&] (const sila::engine::TrigEvent& ev)
             {
-                if (ev.trackIndex < 0 || ev.trackIndex >= (int) samplers.size())
+                if (ev.trackIndex < 0 || ev.trackIndex >= (int) bank->size())
+                    return;
+                const auto& smp = (*bank)[(size_t) ev.trackIndex];
+                if (smp == nullptr)
                     return;
 
                 const float s = ev.pStart.has_value() ? *ev.pStart : -1.0f;
                 const float e = ev.pEnd.has_value()   ? *ev.pEnd   : -1.0f;
-                const auto slice = samplers[(size_t) ev.trackIndex]->get (ev.velocity, s, e);
+                const auto slice = smp->get (ev.velocity, s, e);
                 if (slice.buffer == nullptr)
                     return;
 

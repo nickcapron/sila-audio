@@ -95,8 +95,41 @@ juce::var trackToVar (const Track& t)
     juce::Array<juce::var> steps;
     for (const auto& s : t.steps) steps.add (stepToVar (s));
     o->setProperty ("steps", steps);
-    o->setProperty ("samples", juce::Array<juce::var>());   // samples-as-data: later step
+
+    juce::Array<juce::var> samples;
+    for (const auto& layer : t.samples)
+    {
+        auto* so = new juce::DynamicObject();
+        so->setProperty ("path",         layer.path);
+        so->setProperty ("velocity_min", layer.velMin);
+        so->setProperty ("velocity_max", layer.velMax);
+        so->setProperty ("start",        (double) layer.start);
+        so->setProperty ("end",          (double) layer.end);
+        so->setProperty ("rr_group",     layer.rrGroup);
+        samples.add (juce::var (so));
+    }
+    o->setProperty ("samples", samples);
     return juce::var (o);
+}
+
+// Parse the { samples: [layer...] } body of PUT /tracks/{id}/samples.
+std::vector<sila::engine::SampleRef> parseSampleLayers (const juce::var& samplesVar)
+{
+    std::vector<sila::engine::SampleRef> out;
+    if (auto* arr = samplesVar.getArray())
+        for (const auto& lv : *arr)
+        {
+            if (! lv.isObject()) continue;
+            sila::engine::SampleRef r;
+            r.path    = lv.getProperty ("path", juce::String()).toString();
+            r.velMin  = (int) lv.getProperty ("velocity_min", 0);
+            r.velMax  = (int) lv.getProperty ("velocity_max", 127);
+            r.start   = (float) (double) lv.getProperty ("start", 0.0);
+            r.end     = (float) (double) lv.getProperty ("end", 1.0);
+            r.rrGroup = (int) lv.getProperty ("rr_group", 0);
+            if (r.path.isNotEmpty()) out.push_back (r);
+        }
+    return out;
 }
 
 juce::var projectToVar (const Project& p, float swing, bool songMode, double bpm)
@@ -114,6 +147,78 @@ juce::var projectToVar (const Project& p, float swing, bool songMode, double bpm
 }
 
 juce::var emptyObject() { return juce::var (new juce::DynamicObject()); }
+
+bool isAudioFile (const juce::File& f)
+{
+    const auto ext = f.getFileExtension().toLowerCase();
+    return ext == ".wav" || ext == ".aiff" || ext == ".aif";
+}
+
+// Port of library/browser.py::get_library_tree — a two-level pack/category/
+// sample tree from ~/SILA/library. "My Samples" pinned first, then packs
+// alphabetically; empty categories omitted. Built on the message thread.
+juce::var libraryTreeVar (const juce::File& root)
+{
+    auto* result = new juce::DynamicObject();
+    juce::Array<juce::var> packs;
+    if (! root.isDirectory())
+    {
+        result->setProperty ("packs", packs);
+        return juce::var (result);
+    }
+
+    auto byName = [] (const juce::File& a, const juce::File& b)
+                     { return a.getFileName().compareNatural (b.getFileName()) < 0; };
+
+    auto packDirs = root.findChildFiles (juce::File::findDirectories | juce::File::ignoreHiddenFiles, false);
+    std::sort (packDirs.begin(), packDirs.end(), byName);
+
+    // Pin "My Samples" at the top regardless of alphabetical order.
+    const juce::String kMySamples = "My Samples";
+    juce::Array<juce::File> ordered;
+    for (const auto& d : packDirs) if (d.getFileName() == kMySamples) ordered.add (d);
+    for (const auto& d : packDirs) if (d.getFileName() != kMySamples) ordered.add (d);
+
+    for (const auto& packDir : ordered)
+    {
+        auto* pack = new juce::DynamicObject();
+        pack->setProperty ("name", packDir.getFileName());
+        pack->setProperty ("path", packDir.getFileName());
+        juce::Array<juce::var> categories;
+
+        auto catDirs = packDir.findChildFiles (juce::File::findDirectories | juce::File::ignoreHiddenFiles, false);
+        std::sort (catDirs.begin(), catDirs.end(), byName);
+        for (const auto& catDir : catDirs)
+        {
+            auto files = catDir.findChildFiles (juce::File::findFiles | juce::File::ignoreHiddenFiles, false);
+            std::sort (files.begin(), files.end(), byName);
+
+            juce::Array<juce::var> samples;
+            for (const auto& f : files)
+            {
+                if (! isAudioFile (f)) continue;
+                auto* s = new juce::DynamicObject();
+                s->setProperty ("name",     f.getFileNameWithoutExtension());
+                s->setProperty ("filename", f.getFileName());
+                s->setProperty ("path",     packDir.getFileName() + "/" + catDir.getFileName() + "/" + f.getFileName());
+                s->setProperty ("size_bytes", (juce::int64) f.getSize());
+                samples.add (juce::var (s));
+            }
+            if (samples.isEmpty()) continue;   // omit empty categories
+
+            auto* cat = new juce::DynamicObject();
+            cat->setProperty ("name",    catDir.getFileName());
+            cat->setProperty ("path",    packDir.getFileName() + "/" + catDir.getFileName());
+            cat->setProperty ("samples", samples);
+            categories.add (juce::var (cat));
+        }
+        pack->setProperty ("categories", categories);
+        packs.add (juce::var (pack));
+    }
+
+    result->setProperty ("packs", packs);
+    return juce::var (result);
+}
 
 // Transport status payload — port of /sequencer/status. The plugin has no
 // server clock to fail, so healthy is always true and error/startup_warning are
@@ -287,6 +392,33 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         const double s = body.getProperty ("swing", 0.0);
         if (auto* param = processor.apvts.getParameter ("swing"))
             param->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, (float) s));
+        return emptyObject();
+    }
+
+    // GET /library — pack/category/sample tree from ~/SILA/library (msg thread).
+    if (method == "GET" && path == "/library")
+        return libraryTreeVar (SilaAudioProcessor::libraryRoot());
+
+    // PUT /tracks/{id}/samples  body { samples: [layer...] } — assign sample
+    // layers to a track: store them in the snapshot AND rebuild that track's
+    // sampler (file I/O on the message thread, RT-safe bank swap).
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "samples")
+    {
+        const juce::String id     = seg[1];
+        const auto         layers = parseSampleLayers (body.getProperty ("samples", juce::var()));
+        int trackIndex = -1;
+        processor.editProject ([&] (Project& proj)
+        {
+            for (int i = 0; i < (int) proj.tracks.size(); ++i)
+                if (proj.tracks[(size_t) i].id == id)
+                {
+                    proj.tracks[(size_t) i].samples = layers;
+                    trackIndex = i;
+                    break;
+                }
+        });
+        if (trackIndex >= 0)
+            processor.assignTrackSamples (trackIndex, layers);
         return emptyObject();
     }
 

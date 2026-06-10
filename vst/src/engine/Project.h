@@ -26,16 +26,29 @@ struct Step
     std::optional<float> pStart, pEnd;                // p_locks["start"/"end"], 0..1 fractions
 };
 
+// Port of project.py SampleLayer (load-relevant subset). A track's sound is one
+// or more velocity-layered sample files. The processor's sampler bank is
+// (re)built from these on the message thread when they change; the audio thread
+// never touches files. `path` is absolute, or relative to ~/SILA/library.
+struct SampleRef
+{
+    juce::String path;
+    int   velMin = 0, velMax = 127;
+    float start = 0.0f, end = 1.0f;     // 0..1 fractions (layer-level; step p-locks override)
+    int   rrGroup = 0;
+};
+
 // Port of project.py::TrackModel. `steps.size()` is the per-track loop length,
 // so tracks of different lengths run as polyrhythms (matches the Python
-// per-track counter). FX/LFO/humanize/samples come with later phases.
+// per-track counter). FX/LFO/humanize come with later phases.
 struct Track
 {
-    juce::String      id;
-    juce::String      name;
-    bool              muted = false;
-    bool              solo  = false;
-    std::vector<Step> steps;
+    juce::String           id;
+    juce::String           name;
+    bool                   muted = false;
+    bool                   solo  = false;
+    std::vector<Step>      steps;
+    std::vector<SampleRef> samples;     // velocity layers; empty = synthesized/unset
 };
 
 // Port of project.py::PatternBank. kNumSlots named pattern snapshots; each slot

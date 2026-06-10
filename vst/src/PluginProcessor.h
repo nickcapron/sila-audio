@@ -87,6 +87,25 @@ public:
     // Free retired snapshots no reader still holds. Message thread only.
     void reapRetired();
 
+    // ── Sampler bank (RCU, parallel to the Project) ────────────────────────
+    // The audio thread indexes a sampler per track. Files are loaded on the
+    // message thread, so the bank is published the same way as the Project: an
+    // immutable vector of shared samplers, swapped atomically and retired on the
+    // message thread. Sampler::get() mutates round-robin state, but only the
+    // audio thread ever calls it, so a shared (non-const) Sampler is safe.
+    using SamplerBank    = std::vector<std::shared_ptr<sila::engine::Sampler>>;
+    using SamplerBankPtr = std::shared_ptr<const SamplerBank>;
+
+    SamplerBankPtr samplerSnapshot() const { return liveSamplers.load (std::memory_order_acquire); }
+
+    // Message thread: build a fresh sampler for one track from its sample layers
+    // and publish a new bank (other tracks reuse their existing sampler + RR
+    // state). No-op if the index is out of range or the bank is unset.
+    void assignTrackSamples (int trackIndex, const std::vector<sila::engine::SampleRef>& layers);
+
+    // ~/SILA/library — root for resolving relative sample paths from the browser.
+    static juce::File libraryRoot();
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameters();
 
@@ -121,10 +140,11 @@ private:
     std::atomic<bool> fillActive { false };
 
     sila::engine::Sequencer  sequencer; // ../sila/engine/sequencer.py (stateless)
-    // One sampler per track, parallel to the snapshot's tracks. Held by
-    // unique_ptr because juce::AudioFormatManager (inside Sampler) is non-movable.
-    // Stable for Step 2a (step edits don't change track count/order/samples).
-    std::vector<std::unique_ptr<sila::engine::Sampler>> samplers;
+
+    // Live sampler bank (RCU). Audio thread loads it once per block; the message
+    // thread swaps a track's sampler on assignment. Parallel to snapshot tracks.
+    std::atomic<SamplerBankPtr> liveSamplers;
+    std::vector<SamplerBankPtr> retiredSamplers;   // awaiting reclamation (msg thread)
     sila::engine::VoiceMixer mixer;     // ../sila/engine/audio.py
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessor)

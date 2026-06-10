@@ -7,6 +7,9 @@
 //   PUT  /tracks/{id}/mute | /solo       -> track gating
 //   PUT  /project/swing                  -> drives the swing APVTS param
 //   GET  /sequencer/status               -> initial transport status on boot
+//   GET  /library                        -> ~/SILA/library pack/category tree
+//   PUT  /tracks/{id}/samples            -> assign sample layers (rebuilds the
+//                                           track's sampler over the RCU seam)
 //   event "playhead"                     -> highlight the playing column
 //   event "status"                       -> playing / bpm / active song slot
 //   toggle "songModeToggle"              -> bound to the songMode APVTS param
@@ -32,6 +35,11 @@ const transportEl = document.getElementById("transport");
 const playStateEl = document.getElementById("play-state");
 const bpmEl      = document.getElementById("bpm");
 const activePatEl = document.getElementById("active-pattern");
+const libModal   = document.getElementById("library-modal");
+const libTreeEl  = document.getElementById("lib-tree");
+const libSearch  = document.getElementById("lib-search");
+const libCloseEl = document.getElementById("lib-close");
+const libTargetEl = document.getElementById("lib-target");
 
 let project = null;
 let sel = { trackId: null, idx: null };   // selected step
@@ -80,6 +88,12 @@ function renderTracks() {
     name.className = "track-name";
     name.textContent = track.name;
 
+    const slot = document.createElement("div");
+    slot.className = "sample-slot" + (track.samples && track.samples.length ? " loaded" : "");
+    slot.textContent = sampleLabel(track);
+    slot.title = (track.samples && track.samples[0]) ? track.samples[0].path : "no sample — click to assign";
+    slot.onclick = (e) => { e.stopPropagation(); openLibrary(track.id, track.name); };
+
     const grid = document.createElement("div");
     grid.className = "step-grid";
     track.steps.forEach((step, idx) => {
@@ -93,6 +107,7 @@ function renderTracks() {
 
     row.appendChild(ms);
     row.appendChild(name);
+    row.appendChild(slot);
     row.appendChild(grid);
     tracksEl.appendChild(row);
   }
@@ -229,6 +244,109 @@ function onStatus(s) {
   }
 }
 
+// ── Sample library browser ──────────────────────────────────────────────────
+let libraryCache = null;   // GET /library result, fetched once
+let libTrackId = null;     // track being assigned
+
+const stem = (s) => String(s).replace(/\.[^.]+$/, "");
+function sampleLabel(track) {
+  const l = track.samples && track.samples[0];
+  return l && l.path ? stem(l.path.split("/").pop()) : "—";
+}
+
+async function openLibrary(trackId, trackName) {
+  libTrackId = trackId;
+  libTargetEl.textContent = "assign to track: " + trackName;
+  libSearch.value = "";
+  libModal.classList.add("open");
+  libSearch.focus();
+  if (!libraryCache) {
+    libTreeEl.innerHTML = '<div class="lib-empty">loading library…</div>';
+    try { libraryCache = await GET("/library"); }
+    catch { libTreeEl.innerHTML = '<div class="lib-empty">could not load ~/SILA/library</div>'; return; }
+  }
+  renderLibrary("");
+}
+
+function closeLibrary() { libModal.classList.remove("open"); libTrackId = null; }
+
+function sampleRow(s, sub) {
+  const el = document.createElement("div");
+  el.className = "lib-sample";
+  el.textContent = sub ? `${s.name}   ·   ${sub}` : s.name;
+  el.title = s.path;
+  el.onclick = () => assignSample(libTrackId, s.path, s.filename);
+  return el;
+}
+
+function renderLibrary(filter) {
+  const packs = (libraryCache && libraryCache.packs) || [];
+  libTreeEl.innerHTML = "";
+  const q = filter.trim().toLowerCase();
+
+  // Search: flat filtered list across the whole library (capped).
+  if (q) {
+    let n = 0;
+    for (const pack of packs)
+      for (const cat of pack.categories)
+        for (const s of cat.samples)
+          if (s.filename.toLowerCase().includes(q)) {
+            libTreeEl.appendChild(sampleRow(s, `${pack.name} / ${cat.name}`));
+            if (++n >= 300) {
+              const more = document.createElement("div");
+              more.className = "lib-empty";
+              more.textContent = "… refine your search to see more";
+              libTreeEl.appendChild(more);
+              return;
+            }
+          }
+    if (n === 0) libTreeEl.innerHTML = '<div class="lib-empty">no matches</div>';
+    return;
+  }
+
+  // Browse: collapsible packs → categories; sample rows built lazily on expand.
+  if (packs.length === 0) { libTreeEl.innerHTML = '<div class="lib-empty">library is empty</div>'; return; }
+  for (const pack of packs) {
+    const pd = document.createElement("details");
+    pd.className = "lib-pack";
+    const ps = document.createElement("summary");
+    ps.textContent = pack.name;
+    pd.appendChild(ps);
+    for (const cat of pack.categories) {
+      const cd = document.createElement("details");
+      cd.className = "lib-cat";
+      const cs = document.createElement("summary");
+      cs.innerHTML = `${cat.name}<span class="count">${cat.samples.length}</span>`;
+      cd.appendChild(cs);
+      cd.addEventListener("toggle", () => {
+        if (cd.open && cd.dataset.built !== "1") {
+          cd.dataset.built = "1";
+          for (const s of cat.samples) cd.appendChild(sampleRow(s, null));
+        }
+      });
+      pd.appendChild(cd);
+    }
+    libTreeEl.appendChild(pd);
+  }
+}
+
+async function assignSample(trackId, path, filename) {
+  if (!trackId) return;
+  const layer = { path, velocity_min: 0, velocity_max: 127, start: 0.0, end: 1.0, rr_group: 0 };
+  try {
+    await PUT(`/tracks/${trackId}/samples`, { samples: [layer] });
+  } catch {
+    setStatus("failed to assign sample", false);
+    return;
+  }
+  const track = findTrack(trackId);
+  if (track) track.samples = [layer];
+  const slot = document.querySelector(`[data-track-id="${trackId}"] .sample-slot`);
+  if (slot) { slot.textContent = stem(filename); slot.title = path; slot.classList.add("loaded"); }
+  closeLibrary();
+  setStatus(`assigned ${filename}`, true);
+}
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
@@ -254,6 +372,12 @@ async function boot() {
   songMode.valueChangedEvent.addListener(reflect);
   reflect();
   songEl.addEventListener("change", () => songMode.setValue(songEl.checked));
+
+  // Library browser controls.
+  libSearch.addEventListener("input", () => renderLibrary(libSearch.value));
+  libCloseEl.addEventListener("click", closeLibrary);
+  libModal.addEventListener("click", (e) => { if (e.target === libModal) closeLibrary(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLibrary(); });
 
   setStatus(`connected — ${project.tracks.length} tracks · click a step, right-click to inspect`, true);
 }
