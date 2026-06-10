@@ -118,11 +118,21 @@ void SilaAudioProcessor::prepareToPlay (double sr, int samplesPerBlock)
     internalPpq = 0.0;
     lastFiredSixteenth = -1;
 
-    auto initial = buildDemoProject (sr);
-    const int trackCount = (int) initial->tracks.size();
-    liveProject.store (std::move (initial), std::memory_order_release);
+    if (liveProject.load (std::memory_order_acquire) == nullptr)
+    {
+        // First prepare: author the in-code demo project + its sampler bank.
+        liveProject.store (buildDemoProject (sr), std::memory_order_release);
+    }
+    else
+    {
+        // Re-prepare (device rate / block-size change): keep the project + user
+        // edits, just re-resample the file-backed samplers to the new rate.
+        rebuildSamplerBankForRate (sr);
+    }
 
     mixer.prepare (sr);
+    const auto live = liveProject.load (std::memory_order_acquire);
+    const int trackCount = live != nullptr ? (int) live->tracks.size() : 0;
     SILA_TRACE ("prepareToPlay: exit (" + juce::String (trackCount)
                 + " tracks, samplers + mixer ready)");
 }
@@ -149,16 +159,11 @@ juce::File SilaAudioProcessor::libraryRoot()
                .getChildFile ("SILA").getChildFile ("library");
 }
 
-void SilaAudioProcessor::assignTrackSamples (int trackIndex,
-                                             const std::vector<sila::engine::SampleRef>& layers)
+std::shared_ptr<sila::engine::Sampler>
+SilaAudioProcessor::buildSamplerFromLayers (const std::vector<sila::engine::SampleRef>& layers, double sr)
 {
-    auto cur = liveSamplers.load (std::memory_order_acquire);
-    if (cur == nullptr || trackIndex < 0 || trackIndex >= (int) cur->size())
-        return;
-
-    // Build the replacement sampler from the layer files (message thread I/O).
     auto smp = std::make_shared<sila::engine::Sampler>();
-    smp->prepare (sampleRate);
+    smp->prepare (sr);
     for (const auto& layer : layers)
     {
         juce::File f (layer.path);
@@ -167,13 +172,47 @@ void SilaAudioProcessor::assignTrackSamples (int trackIndex,
         if (f.existsAsFile())
             smp->addFile (f, layer.velMin, layer.velMax, layer.rrGroup, layer.start, layer.end);
     }
+    return smp;
+}
 
-    // Copy the bank (other tracks keep their sampler + RR state), swap this one.
+void SilaAudioProcessor::assignTrackSamples (int trackIndex,
+                                             const std::vector<sila::engine::SampleRef>& layers)
+{
+    auto cur = liveSamplers.load (std::memory_order_acquire);
+    if (cur == nullptr || trackIndex < 0 || trackIndex >= (int) cur->size())
+        return;
+
+    // Build the replacement sampler (resamples files to the device rate), then
+    // copy the bank (other tracks keep their sampler + RR state), swap this one.
     auto next = std::make_shared<SamplerBank> (*cur);
-    (*next)[(size_t) trackIndex] = std::move (smp);
+    (*next)[(size_t) trackIndex] = buildSamplerFromLayers (layers, sampleRate);
     auto old = liveSamplers.exchange (std::make_shared<const SamplerBank> (std::move (*next)),
                                       std::memory_order_acq_rel);
     if (old) retiredSamplers.push_back (std::move (old));
+}
+
+void SilaAudioProcessor::rebuildSamplerBankForRate (double sr)
+{
+    auto proj = liveProject.load (std::memory_order_acquire);
+    auto cur  = liveSamplers.load (std::memory_order_acquire);
+    if (proj == nullptr)
+        return;
+
+    auto next = std::make_shared<SamplerBank>();
+    next->resize (proj->tracks.size());
+    for (size_t i = 0; i < proj->tracks.size(); ++i)
+    {
+        const auto& layers = proj->tracks[i].samples;
+        if (! layers.empty())
+            (*next)[i] = buildSamplerFromLayers (layers, sr);     // re-resample at the new rate
+        else if (cur != nullptr && i < cur->size())
+            (*next)[i] = (*cur)[i];   // transitional synth kit: keep (built at the old rate)
+    }
+
+    // prepareToPlay is not concurrent with processBlock, so the superseded bank
+    // has no audio-thread reader — store lets it free here, no retire list needed.
+    liveSamplers.store (std::make_shared<const SamplerBank> (std::move (*next)),
+                        std::memory_order_release);
 }
 
 // Phase 3: until the UI bridge (Phase 4) authors patterns, build a small demo

@@ -121,6 +121,16 @@ private:
     // parallel sampler array. Replaced by UI-authored state in later steps.
     ProjectPtr buildDemoProject (double sampleRate);
 
+    // Build a sampler for one track from its sample layers, resampling each file
+    // to `sr` (message-thread file I/O). Shared by assignment + rate-change rebuild.
+    static std::shared_ptr<sila::engine::Sampler>
+        buildSamplerFromLayers (const std::vector<sila::engine::SampleRef>& layers, double sr);
+
+    // Device-rate change (re-prepare): rebuild the sampler bank so file-backed
+    // tracks are re-resampled to `sr`; the snapshot/edits are preserved. Called
+    // from prepareToPlay only (no concurrent processBlock).
+    void rebuildSamplerBankForRate (double sr);
+
     static juce::AudioBuffer<float> makeKick  (double sampleRate);
     static juce::AudioBuffer<float> makeSnare (double sampleRate);
     static juce::AudioBuffer<float> makeHat   (double sampleRate);
