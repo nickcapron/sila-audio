@@ -36,8 +36,10 @@ juce::var stepToVar (const Step& s)
     o->setProperty ("micro_timing",   s.microTiming);
 
     auto* pl = new juce::DynamicObject();
-    if (s.pStart.has_value()) pl->setProperty ("start", (double) *s.pStart);
-    if (s.pEnd.has_value())   pl->setProperty ("end",   (double) *s.pEnd);
+    if (s.pStart.has_value())     pl->setProperty ("start",     (double) *s.pStart);
+    if (s.pEnd.has_value())       pl->setProperty ("end",       (double) *s.pEnd);
+    if (s.pCutoff.has_value())    pl->setProperty ("cutoff",    (double) *s.pCutoff);
+    if (s.pResonance.has_value()) pl->setProperty ("resonance", (double) *s.pResonance);
     o->setProperty ("p_locks", juce::var (pl));
     return juce::var (o);
 }
@@ -57,10 +59,14 @@ void applyStepVar (Step& s, const juce::var& v)
         const juce::var pl = v["p_locks"];
         s.pStart.reset();
         s.pEnd.reset();
+        s.pCutoff.reset();
+        s.pResonance.reset();
         if (pl.isObject())
         {
-            if (pl.hasProperty ("start")) s.pStart = (float) (double) pl["start"];
-            if (pl.hasProperty ("end"))   s.pEnd   = (float) (double) pl["end"];
+            if (pl.hasProperty ("start"))     s.pStart     = (float) (double) pl["start"];
+            if (pl.hasProperty ("end"))       s.pEnd       = (float) (double) pl["end"];
+            if (pl.hasProperty ("cutoff"))    s.pCutoff    = (float) (double) pl["cutoff"];
+            if (pl.hasProperty ("resonance")) s.pResonance = (float) (double) pl["resonance"];
         }
     }
 }
@@ -111,6 +117,8 @@ juce::var trackToVar (const Track& t)
     o->setProperty ("solo",       t.solo);
     o->setProperty ("volume",     (double) t.volume);
     o->setProperty ("pan",        (double) t.pan);
+    o->setProperty ("cutoff",     (double) t.cutoff);
+    o->setProperty ("resonance",  (double) t.resonance);
     o->setProperty ("step_count", (int) t.steps.size());
 
     juce::Array<juce::var> steps;
@@ -127,8 +135,10 @@ Track trackFromVar (const juce::var& v)
     t.name  = v.getProperty ("name", juce::String()).toString();
     t.muted  = (bool) v.getProperty ("muted", false);
     t.solo   = (bool) v.getProperty ("solo", false);
-    t.volume = (float) (double) v.getProperty ("volume", 1.0);
-    t.pan    = (float) (double) v.getProperty ("pan", 0.0);
+    t.volume    = (float) (double) v.getProperty ("volume", 1.0);
+    t.pan       = (float) (double) v.getProperty ("pan", 0.0);
+    t.cutoff    = (float) (double) v.getProperty ("cutoff", 1.0);
+    t.resonance = (float) (double) v.getProperty ("resonance", 0.0);
 
     if (auto* steps = v.getProperty ("steps", juce::var()).getArray())
         for (const auto& sv : *steps)

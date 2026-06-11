@@ -37,6 +37,14 @@ struct Voice
     int   gateSamples = 0;
     int   elapsed     = 0;
 
+    // Per-voice TPT (zero-delay-feedback) state-variable lowpass. Coeffs baked at
+    // trigger from the (p-locked) cutoff/resonance; only the integrator ticks per
+    // sample. filterOn=false => bypassed (zero cost). Own state => the tail rings
+    // at this voice's cutoff even when a later step opens a brighter voice.
+    bool  filterOn = false;
+    float svfA1 = 0.0f, svfA2 = 0.0f, svfA3 = 0.0f;
+    float ic1eq = 0.0f, ic2eq = 0.0f;
+
     // Pins the buffer's owner (the Sampler) alive for the voice's lifetime, so an
     // RCU bank swap that retires+frees that sampler can't dangle `audio` while the
     // voice is still ringing. Type-erased to keep the mixer free of a Sampler dep.

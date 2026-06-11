@@ -28,6 +28,19 @@ static float hermite4 (const float* src, int n, double pos)
     return ((c3 * frac + c2) * frac + c1) * frac + c0;
 }
 
+// One TPT-SVF lowpass sample (Andrew Simper / Cytomic). Coeffs are baked on the
+// voice; this only advances the two integrators — ~10 mul/add, unconditionally
+// stable at any cutoff/Q. LP output is v2.
+static float svfLowpass (Voice& v, float x)
+{
+    const float v3 = x - v.ic2eq;
+    const float v1 = v.svfA1 * v.ic1eq + v.svfA2 * v3;
+    const float v2 = v.ic2eq + v.svfA2 * v.ic1eq + v.svfA3 * v3;
+    v.ic1eq = 2.0f * v1 - v.ic1eq;
+    v.ic2eq = 2.0f * v2 - v.ic2eq;
+    return v2;
+}
+
 void VoiceMixer::prepare (double sr)
 {
     sampleRate = sr;
@@ -86,7 +99,9 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<
                 if (env <= 0.0f) break;   // gate fully closed
             }
 
-            const float s = hermite4 (src, srcN, v.pos) * v.volume * env * tm.gain;
+            float x = hermite4 (src, srcN, v.pos);
+            if (v.filterOn) x = svfLowpass (v, x);   // filter -> envelope -> gain/pan
+            const float s = x * v.volume * env * tm.gain;
             L[j] += tm.panL * s;
             if (R != nullptr) R[j] += tm.panR * s;
             v.pos += v.rate;          // varispeed: rate = 2^(pitch_offset/12)

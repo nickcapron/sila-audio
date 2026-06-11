@@ -75,6 +75,7 @@ function stepIsLocked(s) {
   const pl = s.p_locks || {};
   return s.probability < 100 || (s.trig_condition && s.trig_condition !== "always") ||
          (s.micro_timing || 0) !== 0 || pl.start !== undefined || pl.end !== undefined ||
+         pl.cutoff !== undefined || pl.resonance !== undefined ||
          (s.velocity !== undefined && s.velocity !== 100);
 }
 
@@ -116,13 +117,26 @@ function renderTracks() {
     vol.value = Math.round((track.volume ?? 1) * 100);
     vol.addEventListener("input", () => { track.volume = vol.value / 100; });
     vol.addEventListener("change", () => PUT(`/tracks/${track.id}/volume`, { volume: track.volume }));
+    const cut = document.createElement("input");
+    cut.type = "range"; cut.min = 0; cut.max = 100; cut.title = "filter cutoff";
+    cut.value = Math.round((track.cutoff ?? 1) * 100);
+    cut.addEventListener("input", () => { track.cutoff = cut.value / 100; });
+    cut.addEventListener("change", () => PUT(`/tracks/${track.id}/cutoff`, { cutoff: track.cutoff }));
     const pan = document.createElement("input");
     pan.type = "range"; pan.className = "pan"; pan.min = -100; pan.max = 100; pan.title = "pan (L–R)";
     pan.value = Math.round((track.pan ?? 0) * 100);
     pan.addEventListener("input", () => { track.pan = pan.value / 100; });
     pan.addEventListener("change", () => PUT(`/tracks/${track.id}/pan`, { pan: track.pan }));
+    const res = document.createElement("input");
+    res.type = "range"; res.className = "res"; res.min = 0; res.max = 100; res.title = "filter resonance";
+    res.value = Math.round((track.resonance ?? 0) * 100);
+    res.addEventListener("input", () => { track.resonance = res.value / 100; });
+    res.addEventListener("change", () => PUT(`/tracks/${track.id}/resonance`, { resonance: track.resonance }));
+    // grid order: row1 = vol, cutoff ; row2 = pan, resonance
     mix.appendChild(vol);
+    mix.appendChild(cut);
     mix.appendChild(pan);
+    mix.appendChild(res);
 
     const grid = document.createElement("div");
     grid.className = "step-grid";
@@ -211,6 +225,8 @@ function selectStep(trackId, idx) {
   $("i-prob").value  = step.probability ?? 100;  $("iv-prob").textContent = $("i-prob").value + "%";
   $("i-trig").value  = step.trig_condition || "always";
   $("i-mt").value    = step.micro_timing ?? 0;   $("iv-mt").textContent   = fmtSigned($("i-mt").value);
+  $("i-cutoff").value = Math.round((pl.cutoff ?? track.cutoff ?? 1) * 100);   $("iv-cutoff").textContent = $("i-cutoff").value + "%";
+  $("i-res").value    = Math.round((pl.resonance ?? track.resonance ?? 0) * 100); $("iv-res").textContent = $("i-res").value + "%";
   $("i-start").value = Math.round((pl.start ?? 0) * 100);   $("iv-start").textContent = $("i-start").value + "%";
   $("i-end").value   = Math.round((pl.end ?? 1) * 100);     $("iv-end").textContent   = $("i-end").value + "%";
   $("i-pitch").value = step.pitch_offset ?? 0;   $("iv-pitch").textContent = fmtSigned($("i-pitch").value);
@@ -227,12 +243,14 @@ function wireInspector() {
   $("i-vel").addEventListener("input", () => { const s = cur(); if (!s) return; s.velocity = parseInt($("i-vel").value); $("iv-vel").textContent = s.velocity; });
   $("i-prob").addEventListener("input", () => { const s = cur(); if (!s) return; s.probability = parseInt($("i-prob").value); $("iv-prob").textContent = s.probability + "%"; });
   $("i-mt").addEventListener("input", () => { const s = cur(); if (!s) return; s.micro_timing = parseInt($("i-mt").value); $("iv-mt").textContent = fmtSigned(s.micro_timing); });
+  $("i-cutoff").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).cutoff = parseInt($("i-cutoff").value) / 100; $("iv-cutoff").textContent = $("i-cutoff").value + "%"; });
+  $("i-res").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).resonance = parseInt($("i-res").value) / 100; $("iv-res").textContent = $("i-res").value + "%"; });
   $("i-pitch").addEventListener("input", () => { const s = cur(); if (!s) return; s.pitch_offset = parseInt($("i-pitch").value); $("iv-pitch").textContent = fmtSigned(s.pitch_offset); });
   $("i-start").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).start = parseInt($("i-start").value) / 100; $("iv-start").textContent = $("i-start").value + "%"; });
   $("i-end").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).end = parseInt($("i-end").value) / 100; $("iv-end").textContent = $("i-end").value + "%"; });
 
   // Commit (PUT) on release / change so we don't spam the bridge per pixel.
-  ["i-vel", "i-prob", "i-mt", "i-start", "i-end", "i-pitch"].forEach(id =>
+  ["i-vel", "i-prob", "i-mt", "i-start", "i-end", "i-pitch", "i-cutoff", "i-res"].forEach(id =>
     $(id).addEventListener("change", saveSelectedStep));
   $("i-trig").addEventListener("change", () => { const s = cur(); if (s) { s.trig_condition = $("i-trig").value; saveSelectedStep(); } });
   $("i-length").addEventListener("change", () => { const s = cur(); if (s) { s.length = parseFloat($("i-length").value); saveSelectedStep(); } });

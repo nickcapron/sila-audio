@@ -510,6 +510,23 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                                   : 0;
                 v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
                 v.trackIndex  = ev.trackIndex;     // per-track gain/pan applied in the mixer
+
+                // Bake the per-voice TPT-SVF lowpass coeffs from the resolved
+                // (p-locked) cutoff/resonance. Open cutoff => bypass (zero cost).
+                if (ev.cutoff < 0.999f)
+                {
+                    const double fc = juce::jlimit (20.0, sampleRate * 0.49,
+                                                    20.0 * std::pow (1000.0, (double) ev.cutoff));
+                    const double Q  = 0.5 + (double) ev.resonance * 19.5;   // matches fx.py
+                    const double k  = 1.0 / Q;
+                    const double g  = std::tan (juce::MathConstants<double>::pi * fc / sampleRate);
+                    const double a1 = 1.0 / (1.0 + g * (g + k));
+                    v.filterOn = true;
+                    v.svfA1    = (float) a1;
+                    v.svfA2    = (float) (g * a1);
+                    v.svfA3    = (float) (g * g * a1);   // a3 = g*a2
+                }
+
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends
                                        // (an RCU bank swap must not free a buffer a
                                        // ringing voice still points into)

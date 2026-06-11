@@ -268,18 +268,24 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
-    // PUT /tracks/{id}/volume { volume: 0..1 }  and  /tracks/{id}/pan { pan: -1..1 }
+    // PUT /tracks/{id}/{volume|pan|cutoff|resonance} — per-track mixer/filter base.
     if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks"
-        && (seg[2] == "volume" || seg[2] == "pan"))
+        && (seg[2] == "volume" || seg[2] == "pan" || seg[2] == "cutoff" || seg[2] == "resonance"))
     {
         const juce::String id    = seg[1];
-        const bool         isVol = seg[2] == "volume";
-        const float volume = (float) juce::jlimit (0.0, 1.0, (double) body.getProperty ("volume", 1.0));
-        const float pan    = (float) juce::jlimit (-1.0, 1.0, (double) body.getProperty ("pan", 0.0));
+        const juce::String which = seg[2];
+        const double raw = (double) body.getProperty (which, which == "pan" ? 0.0 : 1.0);
         processor.editProject ([&] (Project& proj)
         {
             for (auto& t : proj.tracks)
-                if (t.id == id) { if (isVol) t.volume = volume; else t.pan = pan; break; }
+                if (t.id == id)
+                {
+                    if      (which == "volume")    t.volume    = (float) juce::jlimit (0.0, 1.0, raw);
+                    else if (which == "pan")       t.pan       = (float) juce::jlimit (-1.0, 1.0, raw);
+                    else if (which == "cutoff")    t.cutoff    = (float) juce::jlimit (0.0, 1.0, raw);
+                    else if (which == "resonance") t.resonance = (float) juce::jlimit (0.0, 1.0, raw);
+                    break;
+                }
         });
         return emptyObject();
     }

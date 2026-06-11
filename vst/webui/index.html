@@ -60,10 +60,10 @@
     .ms button.mute.on { background: #ffae57; border-color: #ffae57; }
     .ms button.solo.on { background: var(--accent); border-color: var(--accent); }
     .track-name { width: 84px; flex-shrink: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    /* per-track mixer: volume + pan faders */
-    .track-mix { display: flex; flex-direction: column; gap: 3px; width: 80px; flex-shrink: 0; }
-    .track-mix input[type=range] { width: 80px; height: 13px; margin: 0; }
-    .track-mix .pan { accent-color: var(--accent-2); }
+    /* per-track channel strip: volume + cutoff (top), pan + resonance (bottom) */
+    .track-mix { display: grid; grid-template-columns: 74px 74px; gap: 3px 6px; flex-shrink: 0; }
+    .track-mix input[type=range] { width: 74px; height: 13px; margin: 0; }
+    .track-mix .pan, .track-mix .res { accent-color: var(--accent-2); }
     .step-grid { display: flex; gap: 4px; }
     .step {
       width: 30px; height: 30px; border-radius: 4px; background: var(--step-off);
@@ -223,6 +223,14 @@
         <div class="field">
           <div class="row"><label>Micro-timing</label><span class="fv" id="iv-mt">0</span></div>
           <input type="range" id="i-mt" min="-23" max="23" value="0">
+        </div>
+        <div class="field">
+          <div class="row"><label>Cutoff</label><span class="fv" id="iv-cutoff">100%</span></div>
+          <input type="range" id="i-cutoff" min="0" max="100" value="100">
+        </div>
+        <div class="field">
+          <div class="row"><label>Resonance</label><span class="fv" id="iv-res">0%</span></div>
+          <input type="range" id="i-res" min="0" max="100" value="0">
         </div>
         <div class="field">
           <div class="row"><label>Sample start</label><span class="fv" id="iv-start">0%</span></div>

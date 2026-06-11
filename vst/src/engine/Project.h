@@ -24,6 +24,7 @@ struct Step
     float         length      = 0.0f;                 // gate in 16ths; <= 0 = one-shot (no gate)
     int           microTiming = 0;                    // ±23 micro-steps (1/96-note); + = late
     std::optional<float> pStart, pEnd;                // p_locks["start"/"end"], 0..1 fractions
+    std::optional<float> pCutoff, pResonance;         // p_locks["cutoff"/"resonance"], override track base
 };
 
 // Port of project.py SampleLayer (load-relevant subset). A track's sound is one
@@ -49,6 +50,8 @@ struct Track
     bool                   solo  = false;
     float                  volume = 1.0f;   // linear gain 0..1 (per-track mixer fader)
     float                  pan    = 0.0f;   // -1 = hard L, 0 = centre, +1 = hard R
+    float                  cutoff = 1.0f;   // LP cutoff 0..1 (1 = open/bypass; 0 = 20 Hz)
+    float                  resonance = 0.0f; // 0 = Q 0.5 … 1 = Q 20
     std::vector<Step>      steps;
     std::vector<SampleRef> samples;     // velocity layers; empty = synthesized/unset
 };

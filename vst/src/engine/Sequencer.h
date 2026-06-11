@@ -29,6 +29,8 @@ struct TrigEvent
     float length            = 1.0f;
     int   microTiming       = 0;     // ±23 micro-steps
     std::optional<float> pStart, pEnd;   // p_lock start/end overrides
+    float cutoff            = 1.0f;  // resolved LP cutoff (step p-lock or track base)
+    float resonance         = 0.0f;  // resolved resonance
 };
 
 class Sequencer
@@ -88,6 +90,9 @@ public:
             ev.microTiming = step.microTiming;
             ev.pStart      = step.pStart;
             ev.pEnd        = step.pEnd;
+            // Resolve filter: per-step p-lock overrides the track base.
+            ev.cutoff      = step.pCutoff.value_or (track.cutoff);
+            ev.resonance   = step.pResonance.value_or (track.resonance);
             fn (ev);
         }
     }
