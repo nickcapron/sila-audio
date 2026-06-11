@@ -31,6 +31,8 @@ static float hermite4 (const float* src, int n, double pos)
 void VoiceMixer::prepare (double sr)
 {
     sampleRate = sr;
+    envAttack  = juce::jmax (1, (int) (0.001 * sr));   // ~1 ms note-on de-click
+    envRelease = juce::jmax (1, (int) (0.008 * sr));   // ~8 ms note-off release
     reset();
 }
 
@@ -66,17 +68,30 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block)
         int j = v.startOffset;        // first output sample in this block
         v.startOffset = 0;
 
+        const bool gated = v.gateSamples > 0;
         while (j < n && v.pos < (double) v.endPos)
         {
-            const float s = hermite4 (src, srcN, v.pos) * v.volume;
+            // AR gate: min() of a rising attack ramp and a falling release ramp =
+            // a trapezoid (a triangle if the gate is shorter than attack+release),
+            // so edges are click-free at any length. One-shot voices skip release.
+            float env = (v.elapsed < envAttack) ? (float) v.elapsed / (float) envAttack : 1.0f;
+            if (gated)
+            {
+                const float rel = (float) (v.gateSamples + envRelease - v.elapsed) / (float) envRelease;
+                env = juce::jmin (env, juce::jlimit (0.0f, 1.0f, rel));
+                if (env <= 0.0f) break;   // gate fully closed
+            }
+
+            const float s = hermite4 (src, srcN, v.pos) * v.volume * env;
             L[j] += v.panL * s;
             if (R != nullptr) R[j] += v.panR * s;
             v.pos += v.rate;          // varispeed: rate = 2^(pitch_offset/12)
+            ++v.elapsed;
             ++j;
         }
 
-        if (v.pos >= (double) v.endPos)
-            voices.erase (voices.begin() + (long) i);   // finished
+        if (v.pos >= (double) v.endPos || (gated && v.elapsed >= v.gateSamples + envRelease))
+            voices.erase (voices.begin() + (long) i);   // sample ran out, or gate released
         else
             ++i;
     }

@@ -22,6 +22,12 @@ struct Voice
     float panL = 0.70710678f, panR = 0.70710678f;
     int   startOffset = 0;   // samples to wait before first output (was delay_frames)
 
+    // Note-length gate (output samples): <= 0 = one-shot (play the whole sample);
+    // > 0 = hold this many output samples, then release. `elapsed` counts output
+    // samples actually rendered, so the gate is pitch-independent.
+    int   gateSamples = 0;
+    int   elapsed     = 0;
+
     // Pins the buffer's owner (the Sampler) alive for the voice's lifetime, so an
     // RCU bank swap that retires+frees that sampler can't dangle `audio` while the
     // voice is still ringing. Type-erased to keep the mixer free of a Sampler dep.
@@ -45,6 +51,11 @@ private:
 
     std::vector<Voice> voices;
     double sampleRate { 48000.0 };
+
+    // Click-free gate edges (set in prepare): ~1 ms attack de-click, ~8 ms
+    // linear release. Short enough to preserve drum transients.
+    int envAttack  { 48 };
+    int envRelease { 384 };
 
     // Small-speaker one-pole filter state, per channel [L, R].
     double ssSub[2]  { 0.0, 0.0 };

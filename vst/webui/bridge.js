@@ -198,7 +198,7 @@ function selectStep(trackId, idx) {
   $("i-start").value = Math.round((pl.start ?? 0) * 100);   $("iv-start").textContent = $("i-start").value + "%";
   $("i-end").value   = Math.round((pl.end ?? 1) * 100);     $("iv-end").textContent   = $("i-end").value + "%";
   $("i-pitch").value = step.pitch_offset ?? 0;   $("iv-pitch").textContent = fmtSigned($("i-pitch").value);
-  $("i-length").value = String(step.length ?? 1);
+  $("i-length").value = String(step.length ?? 0);   // 0 = ∞ one-shot (default)
 
   showTrimmer(trackId);   // trimmer follows the selected track's sample
 }

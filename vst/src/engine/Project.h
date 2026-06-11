@@ -21,7 +21,7 @@ struct Step
     int           pitchOffset = 0;                    // semitones; carried, applied in Phase 5 (needs resampling)
     int           probability = 100;                  // 0..100
     TrigCondition trig        = TrigCondition::Always;
-    float         length      = 1.0f;                 // note-length multiplier
+    float         length      = 0.0f;                 // gate in 16ths; <= 0 = one-shot (no gate)
     int           microTiming = 0;                    // ±23 micro-steps (1/96-note); + = late
     std::optional<float> pStart, pEnd;                // p_locks["start"/"end"], 0..1 fractions
 };

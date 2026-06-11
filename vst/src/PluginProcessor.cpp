@@ -489,6 +489,10 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 v.endPos      = slice.start + slice.length;
                 v.rate        = std::pow (2.0, (double) ev.pitchOffset / 12.0);   // varispeed pitch
                 v.startOffset = startOffset;
+                // Note-length gate (output samples); length <= 0 => one-shot.
+                v.gateSamples = (ev.length > 0.0f)
+                                  ? juce::jmax (1, (int) std::lround ((double) ev.length * samplesPer16))
+                                  : 0;
                 v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
                 v.panL = v.panR = 0.70710678f;     // centre (per-track pan is Phase 5)
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends
