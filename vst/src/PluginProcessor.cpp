@@ -512,8 +512,18 @@ void SilaAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     // blocks it), then serialise it as a property alongside the APVTS params.
     auto state = apvts.copyState();
     if (auto proj = snapshot())
-        state.setProperty ("projectJson",
-                           juce::JSON::toString (sila::engine::projectToVar (*proj), true), nullptr);
+    {
+        // Only persist the project if it has loadable audio (≥1 assigned sample).
+        // The in-code demo kit is synth buffers with no source paths, so it would
+        // restore as silence — skip it so a fresh launch keeps the audible demo.
+        bool hasSamples = false;
+        for (const auto& t : proj->tracks)
+            if (! t.samples.empty()) { hasSamples = true; break; }
+
+        if (hasSamples)
+            state.setProperty ("projectJson",
+                               juce::JSON::toString (sila::engine::projectToVar (*proj), true), nullptr);
+    }
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, dest);
