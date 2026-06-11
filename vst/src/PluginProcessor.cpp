@@ -407,6 +407,17 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (proj != nullptr && playing && bpm > 0.0)
     {
+        // Advance per-track free-run LFO phase for this block; free-mode voices
+        // sample it at trigger (in scheduleTriggers).
+        const size_t nt = proj->tracks.size();
+        if (trackLfoPhase.size() != nt) trackLfoPhase.assign (nt, 0.0);
+        const double twoPi = 2.0 * juce::MathConstants<double>::pi;
+        for (size_t i = 0; i < nt; ++i)
+        {
+            trackLfoPhase[i] += numSamples * twoPi * (double) proj->tracks[i].lfoRate / sampleRate;
+            while (trackLfoPhase[i] >= twoPi) trackLfoPhase[i] -= twoPi;
+        }
+
         scheduleTriggers (*proj, ppqStart, bpm, numSamples, swing, songMode, fill);
         // Advance the internal clock to the end of this block (keeps it in sync
         // with the host when host-driven; carries the free-run when not).
@@ -511,20 +522,37 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
                 v.trackIndex  = ev.trackIndex;     // per-track gain/pan applied in the mixer
 
-                // Bake the per-voice TPT-SVF lowpass coeffs from the resolved
-                // (p-locked) cutoff/resonance. Open cutoff => bypass (zero cost).
-                if (ev.cutoff < 0.999f)
+                // Base (pre-LFO) values the LFO modulates from at control rate.
+                v.baseGain      = v.volume;
+                v.baseRate      = v.rate;
+                v.baseCutoff    = ev.cutoff;
+                v.baseResonance = ev.resonance;
+
+                // Per-voice LFO: armed when depth & rate > 0. Trig-sync starts the
+                // phase at 0; free-run samples the track's running phase so
+                // overlapping voices stay aligned to the track LFO clock.
+                const bool lfoOn = ev.lfoDepth > 0.0f && ev.lfoRate > 0.0f;
+                if (lfoOn)
                 {
-                    const double fc = juce::jlimit (20.0, sampleRate * 0.49,
-                                                    20.0 * std::pow (1000.0, (double) ev.cutoff));
-                    const double Q  = 0.5 + (double) ev.resonance * 19.5;   // matches fx.py
-                    const double k  = 1.0 / Q;
-                    const double g  = std::tan (juce::MathConstants<double>::pi * fc / sampleRate);
-                    const double a1 = 1.0 / (1.0 + g * (g + k));
+                    v.lfo.on    = true;
+                    v.lfo.shape = (int) ev.lfoShape;
+                    v.lfo.dest  = (int) ev.lfoDest;
+                    v.lfo.depth = ev.lfoDepth;
+                    v.lfo.inc   = 2.0 * juce::MathConstants<double>::pi * (double) ev.lfoRate / sampleRate;
+                    v.lfo.phase = ev.lfoSync ? 0.0
+                                  : (ev.trackIndex >= 0 && ev.trackIndex < (int) trackLfoPhase.size()
+                                         ? trackLfoPhase[(size_t) ev.trackIndex] : 0.0);
+                    v.lfo.shVal = (ev.lfoShape == sila::engine::LfoShape::Random)
+                                      ? lfoRng.nextFloat() * 2.0f - 1.0f : 0.0f;
+                }
+
+                // Filter on when the base cutoff filters OR an LFO sweeps cutoff.
+                // (The LFO update recomputes the coeffs each control block.)
+                const bool lfoCutoff = lfoOn && ev.lfoDest == sila::engine::LfoDest::Cutoff;
+                if (ev.cutoff < 0.999f || lfoCutoff)
+                {
                     v.filterOn = true;
-                    v.svfA1    = (float) a1;
-                    v.svfA2    = (float) (g * a1);
-                    v.svfA3    = (float) (g * g * a1);   // a3 = g*a2
+                    sila::engine::bakeSvfLowpass (v, ev.cutoff, ev.resonance, sampleRate);
                 }
 
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends

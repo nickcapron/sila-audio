@@ -55,6 +55,15 @@ const trimNameEl = document.getElementById("trim-name");
 const trimStartV = document.getElementById("trim-start-v");
 const trimEndV   = document.getElementById("trim-end-v");
 const exportBtn  = document.getElementById("export-btn");
+const lfoPanel   = document.getElementById("lfo-panel");
+const lfoNameEl  = document.getElementById("lfo-name");
+const lfoShapeEl = document.getElementById("lfo-shape");
+const lfoDestEl  = document.getElementById("lfo-dest");
+const lfoRateEl  = document.getElementById("lfo-rate");
+const lfoRateV   = document.getElementById("lfo-rate-v");
+const lfoDepthEl = document.getElementById("lfo-depth");
+const lfoDepthV  = document.getElementById("lfo-depth-v");
+const lfoSyncEl  = document.getElementById("lfo-sync");
 
 let project = null;
 let sel = { trackId: null, idx: null };   // selected step
@@ -76,6 +85,7 @@ function stepIsLocked(s) {
   return s.probability < 100 || (s.trig_condition && s.trig_condition !== "always") ||
          (s.micro_timing || 0) !== 0 || pl.start !== undefined || pl.end !== undefined ||
          pl.cutoff !== undefined || pl.resonance !== undefined ||
+         pl.lfo_depth !== undefined || pl.lfo_rate !== undefined ||
          (s.velocity !== undefined && s.velocity !== 100);
 }
 
@@ -227,12 +237,16 @@ function selectStep(trackId, idx) {
   $("i-mt").value    = step.micro_timing ?? 0;   $("iv-mt").textContent   = fmtSigned($("i-mt").value);
   $("i-cutoff").value = Math.round((pl.cutoff ?? track.cutoff ?? 1) * 100);   $("iv-cutoff").textContent = $("i-cutoff").value + "%";
   $("i-res").value    = Math.round((pl.resonance ?? track.resonance ?? 0) * 100); $("iv-res").textContent = $("i-res").value + "%";
+  const _L = track.lfo || {};
+  $("i-lfo-depth").value = Math.round((pl.lfo_depth ?? _L.depth ?? 0) * 100); $("iv-lfo-depth").textContent = $("i-lfo-depth").value + "%";
+  const _lr = pl.lfo_rate ?? _L.rate ?? 1; $("i-lfo-rate").value = rateToSlider(_lr); $("iv-lfo-rate").textContent = fmtHz(_lr);
   $("i-start").value = Math.round((pl.start ?? 0) * 100);   $("iv-start").textContent = $("i-start").value + "%";
   $("i-end").value   = Math.round((pl.end ?? 1) * 100);     $("iv-end").textContent   = $("i-end").value + "%";
   $("i-pitch").value = step.pitch_offset ?? 0;   $("iv-pitch").textContent = fmtSigned($("i-pitch").value);
   $("i-length").value = String(step.length ?? 0);   // 0 = ∞ one-shot (default)
 
   showTrimmer(trackId);   // trimmer follows the selected track's sample
+  showLfo(trackId);       // LFO panel follows the selected track
 }
 
 const fmtSigned = (v) => (Number(v) > 0 ? "+" + v : String(v));
@@ -245,12 +259,14 @@ function wireInspector() {
   $("i-mt").addEventListener("input", () => { const s = cur(); if (!s) return; s.micro_timing = parseInt($("i-mt").value); $("iv-mt").textContent = fmtSigned(s.micro_timing); });
   $("i-cutoff").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).cutoff = parseInt($("i-cutoff").value) / 100; $("iv-cutoff").textContent = $("i-cutoff").value + "%"; });
   $("i-res").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).resonance = parseInt($("i-res").value) / 100; $("iv-res").textContent = $("i-res").value + "%"; });
+  $("i-lfo-depth").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).lfo_depth = parseInt($("i-lfo-depth").value) / 100; $("iv-lfo-depth").textContent = $("i-lfo-depth").value + "%"; });
+  $("i-lfo-rate").addEventListener("input", () => { const s = cur(); if (!s) return; const hz = sliderToRate(+$("i-lfo-rate").value); (s.p_locks = s.p_locks || {}).lfo_rate = hz; $("iv-lfo-rate").textContent = fmtHz(hz); });
   $("i-pitch").addEventListener("input", () => { const s = cur(); if (!s) return; s.pitch_offset = parseInt($("i-pitch").value); $("iv-pitch").textContent = fmtSigned(s.pitch_offset); });
   $("i-start").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).start = parseInt($("i-start").value) / 100; $("iv-start").textContent = $("i-start").value + "%"; });
   $("i-end").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).end = parseInt($("i-end").value) / 100; $("iv-end").textContent = $("i-end").value + "%"; });
 
   // Commit (PUT) on release / change so we don't spam the bridge per pixel.
-  ["i-vel", "i-prob", "i-mt", "i-start", "i-end", "i-pitch", "i-cutoff", "i-res"].forEach(id =>
+  ["i-vel", "i-prob", "i-mt", "i-start", "i-end", "i-pitch", "i-cutoff", "i-res", "i-lfo-depth", "i-lfo-rate"].forEach(id =>
     $(id).addEventListener("change", saveSelectedStep));
   $("i-trig").addEventListener("change", () => { const s = cur(); if (s) { s.trig_condition = $("i-trig").value; saveSelectedStep(); } });
   $("i-length").addEventListener("change", () => { const s = cur(); if (s) { s.length = parseFloat($("i-length").value); saveSelectedStep(); } });
@@ -500,9 +516,42 @@ async function onProjectReload() {
   sel = { trackId: null, idx: null };
   renderTracks();
   hideTrimmer();
+  lfoPanel.classList.remove("visible");
+  lfoTrackId = null;
   const sw = Math.round((project.swing || 0) * 100);
   swingEl.value = sw; swingPct.textContent = sw + "%";   // header reflects restored swing
   setStatus(`project loaded — ${project.tracks.length} tracks`, true);
+}
+
+// ── Per-track LFO panel ──────────────────────────────────────────────────────
+let lfoTrackId = null;
+
+// Rate slider 0..100 <-> 0.1..20 Hz (exponential), shared by panel + inspector.
+const sliderToRate = (v) => 0.1 * Math.pow(200, v / 100);
+const rateToSlider = (hz) => Math.round(100 * Math.log(Math.max(0.1, hz) / 0.1) / Math.log(200));
+const fmtHz = (hz) => (hz < 1 ? hz.toFixed(2) : hz.toFixed(1)) + " Hz";
+
+function showLfo(trackId) {
+  const t = findTrack(trackId);
+  if (!t) { lfoPanel.classList.remove("visible"); return; }
+  lfoTrackId = trackId;
+  const L = t.lfo || {};
+  lfoNameEl.textContent = t.name;
+  lfoShapeEl.value = L.shape || "sine";
+  lfoDestEl.value  = L.destination || "cutoff";
+  const hz = L.rate ?? 1;
+  lfoRateEl.value = rateToSlider(hz);  lfoRateV.textContent = fmtHz(hz);
+  const d = Math.round((L.depth ?? 0) * 100);
+  lfoDepthEl.value = d;  lfoDepthV.textContent = d + "%";
+  lfoSyncEl.checked = L.sync !== false;
+  lfoPanel.classList.add("visible");
+}
+
+function sendLfo(patch) {
+  if (!lfoTrackId) return;
+  const t = findTrack(lfoTrackId);
+  if (t) t.lfo = Object.assign({}, t.lfo, patch);
+  PUT(`/tracks/${lfoTrackId}/lfo`, patch);
 }
 
 // ── Boot ────────────────────────────────────────────────────────────────────
@@ -546,6 +595,15 @@ async function boot() {
 
   // Digitakt export.
   exportBtn.addEventListener("click", triggerExport);
+
+  // LFO panel controls.
+  lfoShapeEl.addEventListener("change", () => sendLfo({ shape: lfoShapeEl.value }));
+  lfoDestEl.addEventListener("change", () => sendLfo({ destination: lfoDestEl.value }));
+  lfoRateEl.addEventListener("input", () => { lfoRateV.textContent = fmtHz(sliderToRate(+lfoRateEl.value)); });
+  lfoRateEl.addEventListener("change", () => sendLfo({ rate: sliderToRate(+lfoRateEl.value) }));
+  lfoDepthEl.addEventListener("input", () => { lfoDepthV.textContent = lfoDepthEl.value + "%"; });
+  lfoDepthEl.addEventListener("change", () => sendLfo({ depth: +lfoDepthEl.value / 100 }));
+  lfoSyncEl.addEventListener("change", () => sendLfo({ sync: lfoSyncEl.checked }));
 
   setStatus(`connected — ${project.tracks.length} tracks · click a step, right-click to inspect`, true);
 }

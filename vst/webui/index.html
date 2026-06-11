@@ -164,6 +164,18 @@
     .trim-handle:hover::before { background: var(--accent-2); box-shadow: 0 0 8px var(--accent-2); }
     .trim-vals { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 11px; margin-top: 5px; font-variant-numeric: tabular-nums; }
     .trim-vals span { color: var(--accent-2); }
+
+    /* per-track LFO panel (shown for the selected track) */
+    #lfo-panel { display: none; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; max-width: 760px; }
+    #lfo-panel.visible { display: block; }
+    .lfo-head { color: var(--accent); font-size: 11px; letter-spacing: 2px; margin-bottom: 10px; }
+    .lfo-head span { color: var(--text-dim); letter-spacing: 0; margin-left: 8px; }
+    .lfo-controls { display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; }
+    .lfo-ctl { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 11px; }
+    .lfo-ctl select, .lfo-ctl input[type=range] { width: 124px; }
+    .lfo-ctl select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 4px; font: inherit; font-size: 12px; }
+    .lfo-ctl .fv { color: var(--accent-2); font-variant-numeric: tabular-nums; }
+    .lfo-ctl.lfo-sync { flex-direction: row; align-items: center; gap: 6px; }
   </style>
 </head>
 <body>
@@ -192,6 +204,35 @@
           <div class="trim-handle" id="trim-end"></div>
         </div>
         <div class="trim-vals"><span id="trim-start-v">0%</span><span id="trim-end-v">100%</span></div>
+      </div>
+
+      <div id="lfo-panel">
+        <div class="lfo-head">LFO <span id="lfo-name"></span></div>
+        <div class="lfo-controls">
+          <label class="lfo-ctl">Shape
+            <select id="lfo-shape">
+              <option value="sine">Sine</option>
+              <option value="triangle">Triangle</option>
+              <option value="square">Square</option>
+              <option value="sawtooth">Saw</option>
+              <option value="random">Random S&amp;H</option>
+            </select>
+          </label>
+          <label class="lfo-ctl">Destination
+            <select id="lfo-dest">
+              <option value="cutoff">Cutoff</option>
+              <option value="volume">Volume</option>
+              <option value="pitch">Pitch</option>
+            </select>
+          </label>
+          <label class="lfo-ctl">Rate <span id="lfo-rate-v" class="fv">1.0 Hz</span>
+            <input type="range" id="lfo-rate" min="0" max="100" value="50">
+          </label>
+          <label class="lfo-ctl">Depth <span id="lfo-depth-v" class="fv">0%</span>
+            <input type="range" id="lfo-depth" min="0" max="100" value="0">
+          </label>
+          <label class="lfo-ctl lfo-sync"><input type="checkbox" id="lfo-sync" checked> Sync</label>
+        </div>
       </div>
     </main>
 
@@ -231,6 +272,14 @@
         <div class="field">
           <div class="row"><label>Resonance</label><span class="fv" id="iv-res">0%</span></div>
           <input type="range" id="i-res" min="0" max="100" value="0">
+        </div>
+        <div class="field">
+          <div class="row"><label>LFO Depth</label><span class="fv" id="iv-lfo-depth">0%</span></div>
+          <input type="range" id="i-lfo-depth" min="0" max="100" value="0">
+        </div>
+        <div class="field">
+          <div class="row"><label>LFO Rate</label><span class="fv" id="iv-lfo-rate">1.0 Hz</span></div>
+          <input type="range" id="i-lfo-rate" min="0" max="100" value="50">
         </div>
         <div class="field">
           <div class="row"><label>Sample start</label><span class="fv" id="iv-start">0%</span></div>

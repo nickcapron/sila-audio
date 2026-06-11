@@ -175,5 +175,11 @@ private:
     // mixer (continuous faders). Reused to avoid per-block allocation.
     std::vector<sila::engine::TrackMix> trackMix;
 
+    // Per-track free-running LFO phase (radians), advanced each block. A free-run
+    // (non-sync) voice samples its track's phase at trigger so overlapping voices
+    // stay aligned to the track's LFO clock. Parallel to snapshot tracks.
+    std::vector<double> trackLfoPhase;
+    juce::Random        lfoRng;   // seeds per-voice sample-and-hold start value
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessor)
 };

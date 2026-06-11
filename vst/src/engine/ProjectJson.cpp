@@ -24,6 +24,46 @@ TrigCondition trigFromString (const juce::String& s)
     return TrigCondition::Always;
 }
 
+static const char* lfoShapeToString (LfoShape s)
+{
+    switch (s)
+    {
+        case LfoShape::Triangle: return "triangle";
+        case LfoShape::Square:   return "square";
+        case LfoShape::Sawtooth: return "sawtooth";
+        case LfoShape::Random:   return "random";
+        case LfoShape::Sine:     break;
+    }
+    return "sine";
+}
+
+static LfoShape lfoShapeFromString (const juce::String& s)
+{
+    if (s == "triangle") return LfoShape::Triangle;
+    if (s == "square")   return LfoShape::Square;
+    if (s == "sawtooth") return LfoShape::Sawtooth;
+    if (s == "random")   return LfoShape::Random;
+    return LfoShape::Sine;
+}
+
+static const char* lfoDestToString (LfoDest d)
+{
+    switch (d)
+    {
+        case LfoDest::Volume: return "volume";
+        case LfoDest::Pitch:  return "pitch";
+        case LfoDest::Cutoff: break;
+    }
+    return "cutoff";
+}
+
+static LfoDest lfoDestFromString (const juce::String& s)
+{
+    if (s == "volume") return LfoDest::Volume;
+    if (s == "pitch")  return LfoDest::Pitch;
+    return LfoDest::Cutoff;
+}
+
 juce::var stepToVar (const Step& s)
 {
     auto* o = new juce::DynamicObject();
@@ -40,6 +80,8 @@ juce::var stepToVar (const Step& s)
     if (s.pEnd.has_value())       pl->setProperty ("end",       (double) *s.pEnd);
     if (s.pCutoff.has_value())    pl->setProperty ("cutoff",    (double) *s.pCutoff);
     if (s.pResonance.has_value()) pl->setProperty ("resonance", (double) *s.pResonance);
+    if (s.pLfoDepth.has_value())  pl->setProperty ("lfo_depth", (double) *s.pLfoDepth);
+    if (s.pLfoRate.has_value())   pl->setProperty ("lfo_rate",  (double) *s.pLfoRate);
     o->setProperty ("p_locks", juce::var (pl));
     return juce::var (o);
 }
@@ -61,12 +103,16 @@ void applyStepVar (Step& s, const juce::var& v)
         s.pEnd.reset();
         s.pCutoff.reset();
         s.pResonance.reset();
+        s.pLfoDepth.reset();
+        s.pLfoRate.reset();
         if (pl.isObject())
         {
             if (pl.hasProperty ("start"))     s.pStart     = (float) (double) pl["start"];
             if (pl.hasProperty ("end"))       s.pEnd       = (float) (double) pl["end"];
             if (pl.hasProperty ("cutoff"))    s.pCutoff    = (float) (double) pl["cutoff"];
             if (pl.hasProperty ("resonance")) s.pResonance = (float) (double) pl["resonance"];
+            if (pl.hasProperty ("lfo_depth")) s.pLfoDepth  = (float) (double) pl["lfo_depth"];
+            if (pl.hasProperty ("lfo_rate"))  s.pLfoRate   = (float) (double) pl["lfo_rate"];
         }
     }
 }
@@ -119,6 +165,15 @@ juce::var trackToVar (const Track& t)
     o->setProperty ("pan",        (double) t.pan);
     o->setProperty ("cutoff",     (double) t.cutoff);
     o->setProperty ("resonance",  (double) t.resonance);
+
+    auto* lfo = new juce::DynamicObject();
+    lfo->setProperty ("shape",       juce::String (lfoShapeToString (t.lfoShape)));
+    lfo->setProperty ("rate",        (double) t.lfoRate);
+    lfo->setProperty ("depth",       (double) t.lfoDepth);
+    lfo->setProperty ("destination", juce::String (lfoDestToString (t.lfoDest)));
+    lfo->setProperty ("sync",        t.lfoSync);
+    o->setProperty ("lfo", juce::var (lfo));
+
     o->setProperty ("step_count", (int) t.steps.size());
 
     juce::Array<juce::var> steps;
@@ -139,6 +194,16 @@ Track trackFromVar (const juce::var& v)
     t.pan       = (float) (double) v.getProperty ("pan", 0.0);
     t.cutoff    = (float) (double) v.getProperty ("cutoff", 1.0);
     t.resonance = (float) (double) v.getProperty ("resonance", 0.0);
+
+    const juce::var lv = v.getProperty ("lfo", juce::var());
+    if (lv.isObject())
+    {
+        t.lfoShape = lfoShapeFromString (lv.getProperty ("shape", "sine").toString());
+        t.lfoRate  = (float) (double) lv.getProperty ("rate", 1.0);
+        t.lfoDepth = (float) (double) lv.getProperty ("depth", 0.0);
+        t.lfoDest  = lfoDestFromString (lv.getProperty ("destination", "cutoff").toString());
+        t.lfoSync  = (bool) lv.getProperty ("sync", true);
+    }
 
     if (auto* steps = v.getProperty ("steps", juce::var()).getArray())
         for (const auto& sv : *steps)

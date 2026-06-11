@@ -290,6 +290,39 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
+    // PUT /tracks/{id}/lfo { shape?, rate?, depth?, destination?, sync? } — only
+    // the present fields are updated (track-level LFO base config).
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "lfo")
+    {
+        const juce::String id = seg[1];
+        processor.editProject ([&] (Project& proj)
+        {
+            for (auto& t : proj.tracks)
+                if (t.id == id)
+                {
+                    if (body.hasProperty ("shape"))
+                    {
+                        const juce::String sh = body["shape"].toString();
+                        t.lfoShape = sh == "triangle" ? LfoShape::Triangle
+                                   : sh == "square"   ? LfoShape::Square
+                                   : sh == "sawtooth" ? LfoShape::Sawtooth
+                                   : sh == "random"   ? LfoShape::Random : LfoShape::Sine;
+                    }
+                    if (body.hasProperty ("destination"))
+                    {
+                        const juce::String d = body["destination"].toString();
+                        t.lfoDest = d == "volume" ? LfoDest::Volume
+                                  : d == "pitch"  ? LfoDest::Pitch : LfoDest::Cutoff;
+                    }
+                    if (body.hasProperty ("rate"))  t.lfoRate  = (float) juce::jlimit (0.01, 40.0, (double) body["rate"]);
+                    if (body.hasProperty ("depth")) t.lfoDepth = (float) juce::jlimit (0.0, 1.0, (double) body["depth"]);
+                    if (body.hasProperty ("sync"))  t.lfoSync  = (bool) body["sync"];
+                    break;
+                }
+        });
+        return emptyObject();
+    }
+
     // PUT /tracks/{id}/mute
     if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "mute")
     {

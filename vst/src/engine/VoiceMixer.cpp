@@ -1,4 +1,5 @@
 #include "engine/VoiceMixer.h"
+#include "engine/Project.h"   // LfoShape / LfoDest enums (used by the LFO update)
 #include <cmath>
 
 namespace sila::engine
@@ -39,6 +40,62 @@ static float svfLowpass (Voice& v, float x)
     v.ic1eq = 2.0f * v1 - v.ic1eq;
     v.ic2eq = 2.0f * v2 - v.ic2eq;
     return v2;
+}
+
+// Shared by the trigger bake (PluginProcessor) and the LFO control-rate update.
+void bakeSvfLowpass (Voice& v, float cutoff, float resonance, double sampleRate)
+{
+    const double fc = juce::jlimit (20.0, sampleRate * 0.49,
+                                    20.0 * std::pow (1000.0, (double) cutoff));
+    const double Q  = 0.5 + (double) resonance * 19.5;     // matches fx.py
+    const double k  = 1.0 / Q;
+    const double g  = std::tan (juce::MathConstants<double>::pi * fc / sampleRate);
+    const double a1 = 1.0 / (1.0 + g * (g + k));
+    v.svfA1 = (float) a1;
+    v.svfA2 = (float) (g * a1);
+    v.svfA3 = (float) (g * g * a1);    // a3 = g*a2
+}
+
+// LFO shape in [-1,1] for the current phase (sine/tri/square/saw match lfo.py;
+// random returns the held sample-and-hold value).
+static float lfoEvalShape (const Voice::LFO& lfo)
+{
+    const double ph = lfo.phase;
+    constexpr double PI = juce::MathConstants<double>::pi;
+    switch ((LfoShape) lfo.shape)
+    {
+        case LfoShape::Sine:     return (float) std::sin (ph);
+        case LfoShape::Triangle: return (float) (2.0 * std::abs (std::fmod (ph / PI, 2.0) - 1.0) - 1.0);
+        case LfoShape::Square:   return std::sin (ph) >= 0.0 ? 1.0f : -1.0f;
+        case LfoShape::Sawtooth: return (float) (std::fmod (ph / PI, 2.0) - 1.0);
+        case LfoShape::Random:   return lfo.shVal;
+    }
+    return 0.0f;
+}
+
+void VoiceMixer::updateVoiceLfo (Voice& v)
+{
+    const float val = lfoEvalShape (v.lfo) * v.lfo.depth;   // [-depth, depth]
+    switch ((LfoDest) v.lfo.dest)
+    {
+        case LfoDest::Cutoff:
+            bakeSvfLowpass (v, juce::jlimit (0.0f, 1.0f, v.baseCutoff + val), v.baseResonance, sampleRate);
+            break;
+        case LfoDest::Volume:                                       // tremolo
+            v.volume = juce::jlimit (0.0f, 1.0f, v.baseGain * (1.0f + val));
+            break;
+        case LfoDest::Pitch:                                        // vibrato (±depth octave)
+            v.rate = v.baseRate * std::pow (2.0, (double) val);
+            break;
+    }
+
+    // Advance one control block; a new sample-and-hold value at each cycle wrap.
+    const double twoPi = 2.0 * juce::MathConstants<double>::pi;
+    v.lfo.phase += 32.0 * v.lfo.inc;
+    bool wrapped = false;
+    while (v.lfo.phase >= twoPi) { v.lfo.phase -= twoPi; wrapped = true; }
+    if (wrapped)
+        v.lfo.shVal = rng.nextFloat() * 2.0f - 1.0f;
 }
 
 void VoiceMixer::prepare (double sr)
@@ -88,6 +145,14 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<
         const bool gated = v.gateSamples > 0;
         while (j < n && v.pos < (double) v.endPos)
         {
+            // Control-rate LFO: re-evaluate + retarget every 32 samples (the
+            // expensive cutoff coeff recompute runs at ~1.5 kHz, not per sample).
+            if (v.lfo.on)
+            {
+                if (v.lfo.ctr == 0) { updateVoiceLfo (v); v.lfo.ctr = 32; }
+                --v.lfo.ctr;
+            }
+
             // AR gate: min() of a rising attack ramp and a falling release ramp =
             // a trapezoid (a triangle if the gate is shorter than attack+release),
             // so edges are click-free at any length. One-shot voices skip release.

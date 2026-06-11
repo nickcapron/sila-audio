@@ -13,6 +13,13 @@ namespace sila::engine
 // Port of step.py::TrigCondition.
 enum class TrigCondition { Always, OneIn2, OneIn4, Fill, NotFill };
 
+// LFO (Phase 5). Per-VOICE in the VST (each note its own phase) — a deliberate
+// divergence from lfo.py's per-track processor, so p-locked modulation is per
+// note and tails keep modulating. Shapes match lfo.py (sine/triangle/square/
+// sawtooth); `random` is a true sample-and-hold (new value each cycle).
+enum class LfoShape { Sine, Triangle, Square, Sawtooth, Random };
+enum class LfoDest  { Cutoff, Volume, Pitch };   // pan deferred (per-track mix stage)
+
 // Port of step.py::Step.
 struct Step
 {
@@ -25,6 +32,7 @@ struct Step
     int           microTiming = 0;                    // ±23 micro-steps (1/96-note); + = late
     std::optional<float> pStart, pEnd;                // p_locks["start"/"end"], 0..1 fractions
     std::optional<float> pCutoff, pResonance;         // p_locks["cutoff"/"resonance"], override track base
+    std::optional<float> pLfoDepth, pLfoRate;         // p_locks["lfo_depth"/"lfo_rate"]
 };
 
 // Port of project.py SampleLayer (load-relevant subset). A track's sound is one
@@ -52,6 +60,12 @@ struct Track
     float                  pan    = 0.0f;   // -1 = hard L, 0 = centre, +1 = hard R
     float                  cutoff = 1.0f;   // LP cutoff 0..1 (1 = open/bypass; 0 = 20 Hz)
     float                  resonance = 0.0f; // 0 = Q 0.5 … 1 = Q 20
+    // LFO (per-voice). depth 0 = off (zero cost). sync = retrigger phase per note.
+    LfoShape               lfoShape = LfoShape::Sine;
+    LfoDest                lfoDest  = LfoDest::Cutoff;
+    float                  lfoRate  = 1.0f;   // Hz (Speed)
+    float                  lfoDepth = 0.0f;   // 0..1
+    bool                   lfoSync  = true;   // true = trig-sync, false = free-run
     std::vector<Step>      steps;
     std::vector<SampleRef> samples;     // velocity layers; empty = synthesized/unset
 };

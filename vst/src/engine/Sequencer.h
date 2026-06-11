@@ -31,6 +31,12 @@ struct TrigEvent
     std::optional<float> pStart, pEnd;   // p_lock start/end overrides
     float cutoff            = 1.0f;  // resolved LP cutoff (step p-lock or track base)
     float resonance         = 0.0f;  // resolved resonance
+    // Resolved LFO config for this trigger (step p-lock overrides track base).
+    LfoShape lfoShape       = LfoShape::Sine;
+    LfoDest  lfoDest        = LfoDest::Cutoff;
+    float    lfoRate        = 1.0f;
+    float    lfoDepth       = 0.0f;
+    bool     lfoSync        = true;
 };
 
 class Sequencer
@@ -93,6 +99,12 @@ public:
             // Resolve filter: per-step p-lock overrides the track base.
             ev.cutoff      = step.pCutoff.value_or (track.cutoff);
             ev.resonance   = step.pResonance.value_or (track.resonance);
+            // Resolve LFO: depth/rate are p-lockable; shape/dest/sync track-level.
+            ev.lfoShape    = track.lfoShape;
+            ev.lfoDest     = track.lfoDest;
+            ev.lfoRate     = step.pLfoRate.value_or (track.lfoRate);
+            ev.lfoDepth    = step.pLfoDepth.value_or (track.lfoDepth);
+            ev.lfoSync     = track.lfoSync;
             fn (ev);
         }
     }

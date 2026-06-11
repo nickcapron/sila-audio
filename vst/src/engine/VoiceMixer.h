@@ -12,6 +12,12 @@
 // harmonics + soft-limit we ported to JS in app.js).
 namespace sila::engine
 {
+struct Voice;   // fwd
+
+// Compute + store the TPT-SVF lowpass coefficients on a voice from cutoff (0..1)
+// / resonance (0..1). Shared by the trigger bake and the LFO control-rate update.
+void bakeSvfLowpass (Voice& v, float cutoff, float resonance, double sampleRate);
+
 // Per-track mixer params, recomputed each block from the snapshot and looked up
 // by Voice.trackIndex — so volume/pan apply CONTINUOUSLY (a fader/pan move
 // affects voices already ringing), not baked at trigger time.
@@ -45,6 +51,26 @@ struct Voice
     float svfA1 = 0.0f, svfA2 = 0.0f, svfA3 = 0.0f;
     float ic1eq = 0.0f, ic2eq = 0.0f;
 
+    // Base (pre-LFO) values the LFO retargets at control rate (volume/rate also
+    // double as the live values when the LFO doesn't target them).
+    float  baseCutoff = 1.0f, baseResonance = 0.0f, baseGain = 1.0f;
+    double baseRate = 1.0;
+
+    // Per-voice LFO. on=false => no modulation (zero cost). phase advances inc
+    // per sample, evaluated/applied in 32-sample control blocks (ctr). shVal is
+    // the held sample-and-hold value for the `random` shape.
+    struct LFO
+    {
+        bool   on = false;
+        int    shape = 0;     // LfoShape
+        int    dest = 0;      // LfoDest
+        double phase = 0.0;
+        double inc = 0.0;     // 2π·rate/sr
+        float  depth = 0.0f;
+        int    ctr = 0;
+        float  shVal = 0.0f;
+    } lfo;
+
     // Pins the buffer's owner (the Sampler) alive for the voice's lifetime, so an
     // RCU bank swap that retires+frees that sampler can't dangle `audio` while the
     // voice is still ringing. Type-erased to keep the mixer free of a Sampler dep.
@@ -67,8 +93,13 @@ public:
 private:
     static float softClip (float x, float knee);
 
+    // Control-rate LFO update for one voice: eval shape, apply to its destination
+    // (recompute SVF coeffs / set gain / set rate), advance phase a control block.
+    void updateVoiceLfo (Voice& v);
+
     std::vector<Voice> voices;
     double sampleRate { 48000.0 };
+    juce::Random rng;                  // sample-and-hold random source (audio thread only)
 
     // Click-free gate edges (set in prepare): ~1 ms attack de-click, ~8 ms
     // linear release. Short enough to preserve drum transients.
