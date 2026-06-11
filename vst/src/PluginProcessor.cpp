@@ -414,8 +414,23 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         internalPpq = ppqStart + blockQuarters;
     }
 
+    // Per-track gain + equal-power pan for this block (continuous faders; voices
+    // already ringing follow the live values). resize() only allocates when the
+    // track count changes, so it's a no-op on the steady-state audio path.
+    const size_t nTracks = proj != nullptr ? proj->tracks.size() : 0;
+    if (trackMix.size() != nTracks)
+        trackMix.resize (nTracks);
+    for (size_t i = 0; i < nTracks; ++i)
+    {
+        const float pan   = juce::jlimit (-1.0f, 1.0f, proj->tracks[i].pan);
+        const float theta = (pan * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
+        trackMix[i].gain = juce::jlimit (0.0f, 1.0f, proj->tracks[i].volume);
+        trackMix[i].panL = std::cos (theta);
+        trackMix[i].panR = std::sin (theta);
+    }
+
     // Tails keep ringing even when stopped, so always render + master.
-    mixer.renderInto (buffer);
+    mixer.renderInto (buffer, trackMix);
 
     const auto* masterVolParam   = apvts.getRawParameterValue ("masterVol");
     const auto* smallSpeakerParam = apvts.getRawParameterValue ("smallSpeaker");
@@ -494,7 +509,7 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                                   ? juce::jmax (1, (int) std::lround ((double) ev.length * samplesPer16))
                                   : 0;
                 v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
-                v.panL = v.panR = 0.70710678f;     // centre (per-track pan is Phase 5)
+                v.trackIndex  = ev.trackIndex;     // per-track gain/pan applied in the mixer
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends
                                        // (an RCU bank swap must not free a buffer a
                                        // ringing voice still points into)

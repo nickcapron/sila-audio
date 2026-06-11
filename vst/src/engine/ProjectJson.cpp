@@ -109,6 +109,8 @@ juce::var trackToVar (const Track& t)
     o->setProperty ("color",      juce::String());     // per-track colour: later step
     o->setProperty ("muted",      t.muted);
     o->setProperty ("solo",       t.solo);
+    o->setProperty ("volume",     (double) t.volume);
+    o->setProperty ("pan",        (double) t.pan);
     o->setProperty ("step_count", (int) t.steps.size());
 
     juce::Array<juce::var> steps;
@@ -123,8 +125,10 @@ Track trackFromVar (const juce::var& v)
     Track t;
     t.id    = v.getProperty ("id", juce::String()).toString();
     t.name  = v.getProperty ("name", juce::String()).toString();
-    t.muted = (bool) v.getProperty ("muted", false);
-    t.solo  = (bool) v.getProperty ("solo", false);
+    t.muted  = (bool) v.getProperty ("muted", false);
+    t.solo   = (bool) v.getProperty ("solo", false);
+    t.volume = (float) (double) v.getProperty ("volume", 1.0);
+    t.pan    = (float) (double) v.getProperty ("pan", 0.0);
 
     if (auto* steps = v.getProperty ("steps", juce::var()).getArray())
         for (const auto& sv : *steps)

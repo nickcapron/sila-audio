@@ -109,6 +109,21 @@ function renderTracks() {
     slot.title = (track.samples && track.samples[0]) ? track.samples[0].path : "no sample — click to assign";
     slot.onclick = (e) => { e.stopPropagation(); openLibrary(track.id, track.name); };
 
+    const mix = document.createElement("div");
+    mix.className = "track-mix";
+    const vol = document.createElement("input");
+    vol.type = "range"; vol.min = 0; vol.max = 100; vol.title = "volume";
+    vol.value = Math.round((track.volume ?? 1) * 100);
+    vol.addEventListener("input", () => { track.volume = vol.value / 100; });
+    vol.addEventListener("change", () => PUT(`/tracks/${track.id}/volume`, { volume: track.volume }));
+    const pan = document.createElement("input");
+    pan.type = "range"; pan.className = "pan"; pan.min = -100; pan.max = 100; pan.title = "pan (L–R)";
+    pan.value = Math.round((track.pan ?? 0) * 100);
+    pan.addEventListener("input", () => { track.pan = pan.value / 100; });
+    pan.addEventListener("change", () => PUT(`/tracks/${track.id}/pan`, { pan: track.pan }));
+    mix.appendChild(vol);
+    mix.appendChild(pan);
+
     const grid = document.createElement("div");
     grid.className = "step-grid";
     track.steps.forEach((step, idx) => {
@@ -123,6 +138,7 @@ function renderTracks() {
     row.appendChild(ms);
     row.appendChild(name);
     row.appendChild(slot);
+    row.appendChild(mix);
     row.appendChild(grid);
     tracksEl.appendChild(row);
   }

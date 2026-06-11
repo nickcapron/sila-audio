@@ -171,5 +171,9 @@ private:
     std::vector<SamplerBankPtr> retiredSamplers;   // awaiting reclamation (msg thread)
     sila::engine::VoiceMixer mixer;     // ../sila/engine/audio.py
 
+    // Per-track gain/pan, rebuilt each block from the snapshot and passed to the
+    // mixer (continuous faders). Reused to avoid per-block allocation.
+    std::vector<sila::engine::TrackMix> trackMix;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessor)
 };

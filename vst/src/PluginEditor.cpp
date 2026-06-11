@@ -268,6 +268,22 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
+    // PUT /tracks/{id}/volume { volume: 0..1 }  and  /tracks/{id}/pan { pan: -1..1 }
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks"
+        && (seg[2] == "volume" || seg[2] == "pan"))
+    {
+        const juce::String id    = seg[1];
+        const bool         isVol = seg[2] == "volume";
+        const float volume = (float) juce::jlimit (0.0, 1.0, (double) body.getProperty ("volume", 1.0));
+        const float pan    = (float) juce::jlimit (-1.0, 1.0, (double) body.getProperty ("pan", 0.0));
+        processor.editProject ([&] (Project& proj)
+        {
+            for (auto& t : proj.tracks)
+                if (t.id == id) { if (isVol) t.volume = volume; else t.pan = pan; break; }
+        });
+        return emptyObject();
+    }
+
     // PUT /tracks/{id}/mute
     if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "mute")
     {

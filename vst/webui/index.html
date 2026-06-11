@@ -60,6 +60,10 @@
     .ms button.mute.on { background: #ffae57; border-color: #ffae57; }
     .ms button.solo.on { background: var(--accent); border-color: var(--accent); }
     .track-name { width: 84px; flex-shrink: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* per-track mixer: volume + pan faders */
+    .track-mix { display: flex; flex-direction: column; gap: 3px; width: 80px; flex-shrink: 0; }
+    .track-mix input[type=range] { width: 80px; height: 13px; margin: 0; }
+    .track-mix .pan { accent-color: var(--accent-2); }
     .step-grid { display: flex; gap: 4px; }
     .step {
       width: 30px; height: 30px; border-radius: 4px; background: var(--step-off);

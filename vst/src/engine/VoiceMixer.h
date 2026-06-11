@@ -12,14 +12,23 @@
 // harmonics + soft-limit we ported to JS in app.js).
 namespace sila::engine
 {
+// Per-track mixer params, recomputed each block from the snapshot and looked up
+// by Voice.trackIndex — so volume/pan apply CONTINUOUSLY (a fader/pan move
+// affects voices already ringing), not baked at trigger time.
+struct TrackMix
+{
+    float gain = 1.0f;
+    float panL = 0.70710678f, panR = 0.70710678f;   // equal-power (constant power)
+};
+
 struct Voice
 {
     const juce::AudioBuffer<float>* audio = nullptr;  // mono source
     double pos  = 0.0;                                 // fractional read position (varispeed pitch)
     int   endPos = 0;                                 // stop index (slice end, in source samples)
     double rate  = 1.0;                                // playback rate = 2^(pitch_offset/12)
-    float volume = 1.0f;
-    float panL = 0.70710678f, panR = 0.70710678f;
+    float volume = 1.0f;                               // per-hit (velocity), baked at trigger
+    int   trackIndex = 0;                              // selects per-track gain/pan (continuous)
     int   startOffset = 0;   // samples to wait before first output (was delay_frames)
 
     // Note-length gate (output samples): <= 0 = one-shot (play the whole sample);
@@ -43,7 +52,8 @@ public:
     void addVoice (const Voice& v) { voices.push_back (v); }
     int  activeVoiceCount() const { return (int) voices.size(); }
 
-    void renderInto (juce::AudioBuffer<float>& block);
+    // `trackMix` is indexed by Voice.trackIndex (per-track gain + equal-power pan).
+    void renderInto (juce::AudioBuffer<float>& block, const std::vector<TrackMix>& trackMix);
     void applyMaster (juce::AudioBuffer<float>& block, bool smallSpeaker, float masterVol);
 
 private:

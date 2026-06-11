@@ -42,7 +42,7 @@ void VoiceMixer::reset()
     ssSub[0] = ssSub[1] = ssLow[0] = ssLow[1] = ssHarm[0] = ssHarm[1] = 0.0;
 }
 
-void VoiceMixer::renderInto (juce::AudioBuffer<float>& block)
+void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<TrackMix>& trackMix)
 {
     const int n = block.getNumSamples();
     if (n <= 0) return;
@@ -50,9 +50,13 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block)
     auto* L = block.getWritePointer (0);
     auto* R = block.getNumChannels() > 1 ? block.getWritePointer (1) : nullptr;
 
+    static const TrackMix unity {};   // fallback if a voice's track index is stale
+
     for (size_t i = 0; i < voices.size();)
     {
         Voice& v = voices[i];
+        const TrackMix& tm = (v.trackIndex >= 0 && v.trackIndex < (int) trackMix.size())
+                                 ? trackMix[(size_t) v.trackIndex] : unity;
 
         // Defer voices whose start offset is beyond this block (port of the
         // delay_frames >= frames branch in audio.py::_callback).
@@ -82,9 +86,9 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block)
                 if (env <= 0.0f) break;   // gate fully closed
             }
 
-            const float s = hermite4 (src, srcN, v.pos) * v.volume * env;
-            L[j] += v.panL * s;
-            if (R != nullptr) R[j] += v.panR * s;
+            const float s = hermite4 (src, srcN, v.pos) * v.volume * env * tm.gain;
+            L[j] += tm.panL * s;
+            if (R != nullptr) R[j] += tm.panR * s;
             v.pos += v.rate;          // varispeed: rate = 2^(pitch_offset/12)
             ++v.elapsed;
             ++j;

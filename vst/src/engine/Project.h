@@ -47,6 +47,8 @@ struct Track
     juce::String           name;
     bool                   muted = false;
     bool                   solo  = false;
+    float                  volume = 1.0f;   // linear gain 0..1 (per-track mixer fader)
+    float                  pan    = 0.0f;   // -1 = hard L, 0 = centre, +1 = hard R
     std::vector<Step>      steps;
     std::vector<SampleRef> samples;     // velocity layers; empty = synthesized/unset
 };
