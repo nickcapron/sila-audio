@@ -86,6 +86,18 @@ function setStatus(msg, ok) {
 
 const findTrack = (id) => project.tracks.find(t => t.id === id);
 
+// A labeled channel-strip control cell (tiny uppercase caption above the slider).
+function mkCtl(labelText, input, purple) {
+  const c = document.createElement("div");
+  c.className = "ctl";
+  const lab = document.createElement("span");
+  lab.textContent = labelText;
+  if (purple) lab.className = "v2";
+  c.appendChild(lab);
+  c.appendChild(input);
+  return c;
+}
+
 // A step carries non-default params worth flagging with a dot.
 function stepIsLocked(s) {
   const pl = s.p_locks || {};
@@ -137,7 +149,8 @@ function renderTracks() {
     const name = document.createElement("div");
     name.className = "track-name";
     name.textContent = track.name;
-    name.title = "double-click to rename";
+    name.title = "click for track options · double-click to rename";
+    name.onclick = () => selectTrack(track.id);
     name.ondblclick = () => startRename(track.id, name);
 
     const slot = document.createElement("div");
@@ -175,11 +188,11 @@ function renderTracks() {
     });
     fmode.value = track.filter_mode || "lowpass";
     fmode.addEventListener("change", () => { track.filter_mode = fmode.value; PUT(`/tracks/${track.id}/filter_mode`, { mode: fmode.value }); });
-    // grid order: row1 = vol, cutoff ; row2 = pan, resonance ; row3 = filter mode (spans)
-    mix.appendChild(vol);
-    mix.appendChild(cut);
-    mix.appendChild(pan);
-    mix.appendChild(res);
+    // grid order: row1 = Vol, Cut ; row2 = Pan, Res ; row3 = filter mode (spans)
+    mix.appendChild(mkCtl("Vol", vol));
+    mix.appendChild(mkCtl("Cut", cut));
+    mix.appendChild(mkCtl("Pan", pan, true));
+    mix.appendChild(mkCtl("Res", res, true));
     mix.appendChild(fmode);
 
     const grid = document.createElement("div");
@@ -287,6 +300,16 @@ async function toggleSolo(trackId) {
 
 // ── Inspector ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
+
+// Clicking a track name selects the track (no step): surface its LFO + trimmer
+// panels without needing to click a step first.
+function selectTrack(trackId) {
+  const prev = sel;
+  sel = { trackId, idx: null };
+  if (prev.trackId !== null && prev.idx !== null) repaintCell(prev.trackId, prev.idx);
+  showLfo(trackId);
+  showTrimmer(trackId);
+}
 
 function selectStep(trackId, idx) {
   const prev = sel;
