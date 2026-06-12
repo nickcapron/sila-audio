@@ -308,6 +308,59 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
             return v;
         }
 
+    // POST /tracks { name } — append a track + reset its slot params to defaults.
+    if (method == "POST" && path == "/tracks")
+    {
+        auto snap = processor.snapshot();
+        const int newIdx = snap != nullptr ? (int) snap->tracks.size() : 0;
+        if (newIdx >= SilaAudioProcessor::kMaxTracks)
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("error", "max tracks reached");
+            return juce::var (o);
+        }
+        juce::String nm = body.getProperty ("name", juce::String()).toString().trim();
+        if (nm.isEmpty()) nm = "Track " + juce::String (newIdx + 1);
+        processor.addTrack (nm);
+        setSlotValue (newIdx, "vol", 1.0f);  setSlotValue (newIdx, "pan", 0.0f);
+        setSlotValue (newIdx, "cutoff", 1.0f); setSlotValue (newIdx, "res", 0.0f);
+        setSlotValue (newIdx, "fmode", 0.0f);
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("added", nm);
+        return juce::var (o);
+    }
+
+    // DELETE /tracks/{id} — remove a track; shift slot params below it up so the
+    // survivors keep their mix/filter settings.
+    if (method == "DELETE" && seg.size() == 2 && seg[0] == "tracks")
+    {
+        const int idx = trackSlot (seg[1]);
+        if (idx >= 0)
+        {
+            auto snap = processor.snapshot();
+            const int count = snap != nullptr ? (int) snap->tracks.size() : 0;
+            const char* pids[] = { "vol", "pan", "cutoff", "res", "fmode" };
+            for (int s = idx; s < count - 1; ++s)
+                for (auto* pid : pids)
+                    setSlotValue (s, pid, slotValue (s + 1, pid));
+            processor.removeTrack (idx);
+        }
+        return emptyObject();
+    }
+
+    // PUT /tracks/{id}/name { name } — rename (snapshot edit; the id stays stable).
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "name")
+    {
+        const juce::String id = seg[1];
+        const juce::String nm = body.getProperty ("name", juce::String()).toString().trim();
+        if (nm.isNotEmpty())
+            processor.editProject ([&] (Project& proj)
+            {
+                for (auto& t : proj.tracks) if (t.id == id) { t.name = nm; break; }
+            });
+        return emptyObject();
+    }
+
     // PUT /tracks/{id}/steps/{idx}  body { step: {...} }
     // After removeEmptyStrings the path is ["tracks", id, "steps", idx] (4 segs).
     if (method == "PUT" && seg.size() == 4 && seg[0] == "tracks" && seg[2] == "steps")

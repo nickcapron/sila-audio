@@ -28,6 +28,7 @@ const api  = (method, path, body) => backendCall(method, path, body ?? null);
 const GET  = (p)    => api("GET", p);
 const PUT  = (p, b) => api("PUT", p, b);
 const POST = (p, b) => api("POST", p, b ?? null);
+const DEL  = (p)    => api("DELETE", p, null);
 
 const tracksEl   = document.getElementById("tracks");
 const ppqEl      = document.getElementById("ppq");
@@ -113,12 +114,31 @@ function renderTracks() {
     solo.className = "solo" + (track.solo ? " on" : "");
     solo.textContent = "S";
     solo.onclick = () => toggleSolo(track.id);
+    const del = document.createElement("button");
+    del.className = "del";
+    del.textContent = "×";
+    del.title = "delete track";
+    let delTimer = null;
+    del.onclick = () => {
+      if (del.classList.contains("armed")) {           // confirmed
+        clearTimeout(delTimer);
+        deleteTrack(track.id);
+        return;
+      }
+      del.classList.add("armed");                       // arm — second click confirms
+      del.title = "click again to delete";
+      clearTimeout(delTimer);
+      delTimer = setTimeout(() => { del.classList.remove("armed"); del.title = "delete track"; }, 3000);
+    };
     ms.appendChild(mute);
     ms.appendChild(solo);
+    ms.appendChild(del);
 
     const name = document.createElement("div");
     name.className = "track-name";
     name.textContent = track.name;
+    name.title = "double-click to rename";
+    name.ondblclick = () => startRename(track.id, name);
 
     const slot = document.createElement("div");
     slot.className = "sample-slot" + (track.samples && track.samples.length ? " loaded" : "");
@@ -180,6 +200,44 @@ function renderTracks() {
     row.appendChild(grid);
     tracksEl.appendChild(row);
   }
+  const addBtn = document.getElementById("add-track");
+  if (addBtn) addBtn.disabled = project.tracks.length >= 8;
+}
+
+// ── Track management (add / remove / rename) ─────────────────────────────────
+// add/remove publish a new Project+bank via setProject -> projectEpoch bump, so
+// the UI rebuilds through the "project" event. Rename is a snapshot edit only.
+async function addTrack() {
+  const res = await POST("/tracks", {});
+  if (res && res.error) setStatus(res.error, false);
+}
+
+async function deleteTrack(id) {
+  await DEL(`/tracks/${id}`);
+}
+
+function startRename(id, nameEl) {
+  const input = document.createElement("input");
+  input.className = "track-name-edit";
+  input.value = nameEl.textContent;
+  nameEl.replaceWith(input);
+  input.focus(); input.select();
+  let done = false;
+  const finish = (save) => {
+    if (done) return; done = true;
+    const newName = (save && input.value.trim()) ? input.value.trim() : nameEl.textContent;
+    if (save && newName !== nameEl.textContent) {
+      const t = findTrack(id); if (t) t.name = newName;
+      PUT(`/tracks/${id}/name`, { name: newName });
+    }
+    nameEl.textContent = newName;
+    input.replaceWith(nameEl);
+  };
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    else if (e.key === "Escape") finish(false);
+  });
 }
 
 function paintCell(cell, trackId, idx, step) {
@@ -680,6 +738,10 @@ async function boot() {
 
   // Digitakt export.
   exportBtn.addEventListener("click", triggerExport);
+
+  // Track management.
+  const addBtn = document.getElementById("add-track");
+  if (addBtn) addBtn.addEventListener("click", addTrack);
 
   // Projects (save/load).
   projectsBtn.addEventListener("click", openProjects);

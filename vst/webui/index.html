@@ -66,7 +66,13 @@
     .ms button.on { color: #04110d; }
     .ms button.mute.on { background: #ffae57; border-color: #ffae57; }
     .ms button.solo.on { background: var(--accent); border-color: var(--accent); }
-    .track-name { width: 84px; flex-shrink: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ms button.del:hover { background: #ff5a5a; border-color: #ff5a5a; color: #04110d; }
+    .ms button.del.armed { background: #ff5a5a; border-color: #ff5a5a; color: #04110d; font-weight: 700; }
+    .track-name { width: 84px; flex-shrink: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
+    .track-name-edit { width: 84px; flex-shrink: 0; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 3px; font: inherit; font-size: 13px; padding: 1px 3px; }
+    #add-track { margin-top: 4px; background: var(--surface); color: var(--text-dim); border: 1px dashed var(--border); border-radius: 4px; padding: 5px 12px; font: inherit; font-size: 11px; cursor: pointer; }
+    #add-track:hover { color: var(--accent); border-color: var(--accent); }
+    #add-track:disabled { opacity: .4; cursor: default; }
     /* per-track channel strip: volume + cutoff (top), pan + resonance (bottom) */
     .track-mix { display: grid; grid-template-columns: 74px 74px; gap: 3px 6px; flex-shrink: 0; }
     .track-mix input[type=range] { width: 74px; height: 13px; margin: 0; }
@@ -204,6 +210,7 @@
   <div class="body">
     <main>
       <div id="tracks"></div>
+      <button id="add-track" title="Add a track (max 8)">+ Track</button>
 
       <div id="trimmer">
         <div class="trim-head">SAMPLE TRIM <span id="trim-name"></span></div>

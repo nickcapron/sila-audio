@@ -122,6 +122,12 @@ public:
     // swap it in, and bump projectEpoch so the editor refreshes. Message thread.
     void loadProject (ProjectPtr proj);
 
+    // Track management (message thread). Both rebuild the project AND the parallel
+    // sampler bank, then publish atomically via setProject (audio thread stays
+    // lock-free; a removed track's sampler is kept alive by any ringing voice).
+    void addTrack (const juce::String& name);   // appends; no-op at kMaxTracks
+    void removeTrack (int index);                // erases the track + its sampler + pattern-bank column
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameters();
 

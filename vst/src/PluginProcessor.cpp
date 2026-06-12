@@ -175,6 +175,49 @@ void SilaAudioProcessor::loadProject (ProjectPtr proj)
     setProject (std::move (proj), std::move (bank));
 }
 
+void SilaAudioProcessor::addTrack (const juce::String& name)
+{
+    auto cur     = liveProject.load (std::memory_order_acquire);
+    auto curBank = liveSamplers.load (std::memory_order_acquire);
+    if (cur == nullptr || (int) cur->tracks.size() >= kMaxTracks)
+        return;
+
+    auto next = std::make_shared<sila::engine::Project> (*cur);
+    sila::engine::Track t;
+    t.id   = juce::Uuid().toString();   // stable id, separate from the name
+    t.name = name;
+    t.steps.resize (16);                // empty 16-step pattern
+    next->tracks.push_back (std::move (t));
+
+    auto bank = std::make_shared<SamplerBank> (curBank != nullptr ? *curBank : SamplerBank {});
+    auto smp  = std::make_shared<sila::engine::Sampler>();
+    smp->prepare (sampleRate);          // empty (silent) until a sample is assigned
+    bank->push_back (std::move (smp));
+
+    setProject (std::move (next), std::make_shared<const SamplerBank> (std::move (*bank)));
+}
+
+void SilaAudioProcessor::removeTrack (int index)
+{
+    auto cur     = liveProject.load (std::memory_order_acquire);
+    auto curBank = liveSamplers.load (std::memory_order_acquire);
+    if (cur == nullptr || index < 0 || index >= (int) cur->tracks.size())
+        return;
+
+    auto next = std::make_shared<sila::engine::Project> (*cur);
+    next->tracks.erase (next->tracks.begin() + index);
+    // Pattern-bank columns are parallel to tracks by index — drop this one too.
+    for (auto& slot : next->patternBank.slots)
+        if (index < (int) slot.size())
+            slot.erase (slot.begin() + index);
+
+    auto bank = std::make_shared<SamplerBank> (curBank != nullptr ? *curBank : SamplerBank {});
+    if (index < (int) bank->size())
+        bank->erase (bank->begin() + index);
+
+    setProject (std::move (next), std::make_shared<const SamplerBank> (std::move (*bank)));
+}
+
 std::shared_ptr<sila::engine::Sampler>
 SilaAudioProcessor::buildSamplerFromLayers (const std::vector<sila::engine::SampleRef>& layers, double sr)
 {
