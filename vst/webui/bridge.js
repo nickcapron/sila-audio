@@ -134,7 +134,7 @@ function renderTracks() {
     vol.addEventListener("input", () => { track.volume = vol.value / 100; });
     vol.addEventListener("change", () => PUT(`/tracks/${track.id}/volume`, { volume: track.volume }));
     const cut = document.createElement("input");
-    cut.type = "range"; cut.min = 0; cut.max = 100; cut.title = "filter cutoff";
+    cut.type = "range"; cut.className = "cut"; cut.min = 0; cut.max = 100; cut.title = "filter cutoff";
     cut.value = Math.round((track.cutoff ?? 1) * 100);
     cut.addEventListener("input", () => { track.cutoff = cut.value / 100; });
     cut.addEventListener("change", () => PUT(`/tracks/${track.id}/cutoff`, { cutoff: track.cutoff }));
@@ -534,13 +534,18 @@ function onParams(changed) {
     if (!t) continue;
     if (c.volume !== undefined) t.volume = c.volume;
     if (c.pan !== undefined) t.pan = c.pan;
+    if (c.cutoff !== undefined) t.cutoff = c.cutoff;
+    if (c.resonance !== undefined) t.resonance = c.resonance;
+    if (c.filter_mode !== undefined) t.filter_mode = c.filter_mode;
     const row = document.querySelector(`[data-track-id="${t.id}"]`);
     if (!row) continue;
-    const volEl = row.querySelector(".vol");
-    const panEl = row.querySelector(".pan");
-    // Don't fight a slider the user is actively dragging.
-    if (volEl && volEl !== document.activeElement && c.volume !== undefined) volEl.value = Math.round(c.volume * 100);
-    if (panEl && panEl !== document.activeElement && c.pan !== undefined) panEl.value = Math.round(c.pan * 100);
+    // Don't fight a control the user is actively dragging.
+    const set = (sel, val) => { const el = row.querySelector(sel); if (el && el !== document.activeElement && val !== undefined) el.value = val; };
+    set(".vol", c.volume !== undefined ? Math.round(c.volume * 100) : undefined);
+    set(".pan", c.pan !== undefined ? Math.round(c.pan * 100) : undefined);
+    set(".cut", c.cutoff !== undefined ? Math.round(c.cutoff * 100) : undefined);
+    set(".res", c.resonance !== undefined ? Math.round(c.resonance * 100) : undefined);
+    set(".fmode", c.filter_mode);
   }
 }
 

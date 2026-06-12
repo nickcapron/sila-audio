@@ -530,11 +530,24 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
                 v.trackIndex  = ev.trackIndex;     // per-track gain/pan applied in the mixer
 
+                // Resolve the filter base from the APVTS slot bank; step p-locks
+                // override. (The engine only passes the p-lock optionals through.)
+                const int   fslot   = ev.trackIndex;
+                const bool  inBank  = fslot >= 0 && fslot < kMaxTracks;
+                const float baseCut = (inBank && pCutoff[fslot]) ? pCutoff[fslot]->load() : 1.0f;
+                const float baseRes = (inBank && pRes[fslot])    ? pRes[fslot]->load()    : 0.0f;
+                const auto  baseMode = (inBank && pFmode[fslot])
+                                         ? (sila::engine::FilterMode) juce::roundToInt (pFmode[fslot]->load())
+                                         : sila::engine::FilterMode::LowPass;
+                const float cutoff = ev.pCutoff.value_or (baseCut);
+                const float reso   = ev.pResonance.value_or (baseRes);
+                const auto  fmode  = ev.pFilterMode.value_or (baseMode);
+
                 // Base (pre-LFO) values the LFO modulates from at control rate.
                 v.baseGain      = v.volume;
                 v.baseRate      = v.rate;
-                v.baseCutoff    = ev.cutoff;
-                v.baseResonance = ev.resonance;
+                v.baseCutoff    = cutoff;
+                v.baseResonance = reso;
 
                 // Per-voice LFO: armed when depth & rate > 0. Trig-sync starts the
                 // phase at 0; free-run samples the track's running phase so
@@ -558,13 +571,12 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 // or an LFO that sweeps cutoff. (LP at fully-open = transparent =
                 // skip, for zero cost; the LFO update re-bakes coeffs each block.)
                 const bool lfoCutoff = lfoOn && ev.lfoDest == sila::engine::LfoDest::Cutoff;
-                const bool lpOpen    = ev.filterMode == sila::engine::FilterMode::LowPass
-                                           && ev.cutoff >= 0.999f;
+                const bool lpOpen    = fmode == sila::engine::FilterMode::LowPass && cutoff >= 0.999f;
                 if (! lpOpen || lfoCutoff)
                 {
                     v.filterOn   = true;
-                    v.filterMode = (int) ev.filterMode;
-                    sila::engine::bakeSvf (v, ev.cutoff, ev.resonance, sampleRate);
+                    v.filterMode = (int) fmode;
+                    sila::engine::bakeSvf (v, cutoff, reso, sampleRate);
                 }
 
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends

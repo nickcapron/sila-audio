@@ -29,9 +29,10 @@ struct TrigEvent
     float length            = 1.0f;
     int   microTiming       = 0;     // ±23 micro-steps
     std::optional<float> pStart, pEnd;   // p_lock start/end overrides
-    float cutoff            = 1.0f;  // resolved cutoff (step p-lock or track base)
-    float resonance         = 0.0f;  // resolved resonance
-    FilterMode filterMode   = FilterMode::LowPass;  // resolved filter mode
+    // Raw filter p-locks (passed through); the processor resolves them against the
+    // APVTS slot params (the track base) at trigger — the engine stays structural.
+    std::optional<float>      pCutoff, pResonance;
+    std::optional<FilterMode> pFilterMode;
     // Resolved LFO config for this trigger (step p-lock overrides track base).
     LfoShape lfoShape       = LfoShape::Sine;
     LfoDest  lfoDest        = LfoDest::Cutoff;
@@ -97,10 +98,10 @@ public:
             ev.microTiming = step.microTiming;
             ev.pStart      = step.pStart;
             ev.pEnd        = step.pEnd;
-            // Resolve filter: per-step p-lock overrides the track base.
-            ev.cutoff      = step.pCutoff.value_or (track.cutoff);
-            ev.resonance   = step.pResonance.value_or (track.resonance);
-            ev.filterMode  = step.pFilterMode.value_or (track.filterMode);
+            // Filter p-locks pass through; the processor resolves vs the APVTS base.
+            ev.pCutoff     = step.pCutoff;
+            ev.pResonance  = step.pResonance;
+            ev.pFilterMode = step.pFilterMode;
             // Resolve LFO: depth/rate are p-lockable; shape/dest/sync track-level.
             ev.lfoShape    = track.lfoShape;
             ev.lfoDest     = track.lfoDest;

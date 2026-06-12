@@ -29,6 +29,10 @@ juce::var projectToVar (const Project& p, float swing, bool songMode, double bpm
 
 juce::var emptyObject() { return juce::var (new juce::DynamicObject()); }
 
+// Filter-mode <-> AudioParameterChoice index (0=LP, 1=HP, 2=BP).
+const char* fmodeName  (int idx)               { return idx == 1 ? "highpass" : idx == 2 ? "bandpass" : "lowpass"; }
+int         fmodeIndex (const juce::String& s) { return s == "highpass" ? 1 : s == "bandpass" ? 2 : 0; }
+
 bool isAudioFile (const juce::File& f)
 {
     const auto ext = f.getFileExtension().toLowerCase();
@@ -245,14 +249,22 @@ void SilaAudioProcessorEditor::timerCallback()
         {
             const float vol = slotValue (i, "vol");
             const float pan = slotValue (i, "pan");
-            if (std::abs (vol - lastVol[i]) > 1.0e-4f || std::abs (pan - lastPan[i]) > 1.0e-4f)
+            const float cut = slotValue (i, "cutoff");
+            const float res = slotValue (i, "res");
+            const float fm  = slotValue (i, "fmode");
+            if (std::abs (vol - lastVol[i]) > 1.0e-4f || std::abs (pan - lastPan[i]) > 1.0e-4f
+                || std::abs (cut - lastCutoff[i]) > 1.0e-4f || std::abs (res - lastRes[i]) > 1.0e-4f
+                || std::abs (fm - lastFmode[i]) > 1.0e-4f)
             {
-                lastVol[i] = vol; lastPan[i] = pan;
+                lastVol[i] = vol; lastPan[i] = pan; lastCutoff[i] = cut; lastRes[i] = res; lastFmode[i] = fm;
                 auto* o = new juce::DynamicObject();
                 o->setProperty ("index",  i);
                 o->setProperty ("id",     snap->tracks[(size_t) i].id);
                 o->setProperty ("volume", (double) vol);
                 o->setProperty ("pan",    (double) pan);
+                o->setProperty ("cutoff", (double) cut);
+                o->setProperty ("resonance", (double) res);
+                o->setProperty ("filter_mode", fmodeName (juce::roundToInt (fm)));
                 changed.add (juce::var (o));
             }
         }
@@ -287,8 +299,11 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                 for (int i = 0; i < tracks->size() && i < SilaAudioProcessor::kMaxTracks; ++i)
                     if (auto* to = (*tracks)[i].getDynamicObject())
                     {
-                        to->setProperty ("volume", (double) slotValue (i, "vol"));
-                        to->setProperty ("pan",    (double) slotValue (i, "pan"));
+                        to->setProperty ("volume",     (double) slotValue (i, "vol"));
+                        to->setProperty ("pan",        (double) slotValue (i, "pan"));
+                        to->setProperty ("cutoff",     (double) slotValue (i, "cutoff"));
+                        to->setProperty ("resonance",  (double) slotValue (i, "res"));
+                        to->setProperty ("filter_mode", fmodeName (juce::roundToInt (slotValue (i, "fmode"))));
                     }
             return v;
         }
@@ -321,41 +336,25 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         const juce::String id    = seg[1];
         const juce::String which = seg[2];
         const double raw = (double) body.getProperty (which, which == "pan" ? 0.0 : 1.0);
-        if (which == "volume" || which == "pan")
+        const int slot = trackSlot (id);
+        if (slot >= 0)
         {
-            const int slot = trackSlot (id);
-            if (slot >= 0)
-                setSlotValue (slot, which == "volume" ? "vol" : "pan",
-                              (float) juce::jlimit (which == "pan" ? -1.0 : 0.0, 1.0, raw));
-        }
-        else
-        {
-            processor.editProject ([&] (Project& proj)
-            {
-                for (auto& t : proj.tracks)
-                    if (t.id == id)
-                    {
-                        if (which == "cutoff")    t.cutoff    = (float) juce::jlimit (0.0, 1.0, raw);
-                        else                      t.resonance = (float) juce::jlimit (0.0, 1.0, raw);
-                        break;
-                    }
-            });
+            const juce::String pid = which == "volume" ? "vol"
+                                   : which == "pan"    ? "pan"
+                                   : which == "cutoff" ? "cutoff" : "res";
+            const double lo = which == "pan" ? -1.0 : 0.0;
+            setSlotValue (slot, pid, (float) juce::jlimit (lo, 1.0, raw));
         }
         return emptyObject();
     }
 
-    // PUT /tracks/{id}/filter_mode { mode: lowpass|highpass|bandpass }
+    // PUT /tracks/{id}/filter_mode { mode: lowpass|highpass|bandpass } — fmode is
+    // an AudioParameterChoice in the slot bank (index 0/1/2).
     if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "filter_mode")
     {
-        const juce::String id = seg[1];
-        const juce::String m  = body.getProperty ("mode", "lowpass").toString();
-        const FilterMode fm = m == "highpass" ? FilterMode::HighPass
-                            : m == "bandpass" ? FilterMode::BandPass : FilterMode::LowPass;
-        processor.editProject ([&] (Project& proj)
-        {
-            for (auto& t : proj.tracks)
-                if (t.id == id) { t.filterMode = fm; break; }
-        });
+        const int slot = trackSlot (seg[1]);
+        if (slot >= 0)
+            setSlotValue (slot, "fmode", (float) fmodeIndex (body.getProperty ("mode", "lowpass").toString()));
         return emptyObject();
     }
 

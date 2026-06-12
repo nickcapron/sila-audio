@@ -182,9 +182,7 @@ juce::var trackToVar (const Track& t)
     o->setProperty ("color",      juce::String());     // per-track colour: later step
     o->setProperty ("muted",      t.muted);
     o->setProperty ("solo",       t.solo);
-    o->setProperty ("cutoff",     (double) t.cutoff);
-    o->setProperty ("resonance",  (double) t.resonance);
-    o->setProperty ("filter_mode", juce::String (filterModeToString (t.filterMode)));
+    // cutoff/resonance/filter_mode are APVTS slot params now (Phase 6).
 
     auto* lfo = new juce::DynamicObject();
     lfo->setProperty ("shape",       juce::String (lfoShapeToString (t.lfoShape)));
@@ -210,10 +208,6 @@ Track trackFromVar (const juce::var& v)
     t.name  = v.getProperty ("name", juce::String()).toString();
     t.muted  = (bool) v.getProperty ("muted", false);
     t.solo   = (bool) v.getProperty ("solo", false);
-    t.cutoff    = (float) (double) v.getProperty ("cutoff", 1.0);
-    t.resonance = (float) (double) v.getProperty ("resonance", 0.0);
-    t.filterMode = filterModeFromString (v.getProperty ("filter_mode", "lowpass").toString());
-
     const juce::var lv = v.getProperty ("lfo", juce::var());
     if (lv.isObject())
     {

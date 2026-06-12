@@ -60,10 +60,8 @@ struct Track
     juce::String           name;
     bool                   muted = false;
     bool                   solo  = false;
-    // volume/pan moved to the APVTS slot bank (Phase 6, host-automatable).
-    float                  cutoff = 1.0f;   // cutoff 0..1 (LP: 1 = open; HP: 0 = open); 0 = 20 Hz
-    float                  resonance = 0.0f; // 0 = Q 0.5 … 1 = Q 20
-    FilterMode             filterMode = FilterMode::LowPass;
+    // volume/pan/cutoff/resonance/filterMode moved to the APVTS slot bank
+    // (Phase 6, host-automatable). Per-step p-locks (below, on Step) still override.
     // LFO (per-voice). depth 0 = off (zero cost). sync = retrigger phase per note.
     LfoShape               lfoShape = LfoShape::Sine;
     LfoDest                lfoDest  = LfoDest::Cutoff;

@@ -73,8 +73,11 @@ private:
 
     // Last per-slot vol/pan pushed to the UI, so the timer only emits a "params"
     // event when a value changed (host automation / generic editor -> UI).
-    float lastVol[SilaAudioProcessor::kMaxTracks] {};
-    float lastPan[SilaAudioProcessor::kMaxTracks] {};
+    float lastVol[SilaAudioProcessor::kMaxTracks]    {};
+    float lastPan[SilaAudioProcessor::kMaxTracks]    {};
+    float lastCutoff[SilaAudioProcessor::kMaxTracks] {};
+    float lastRes[SilaAudioProcessor::kMaxTracks]    {};
+    float lastFmode[SilaAudioProcessor::kMaxTracks]  { -1, -1, -1, -1, -1, -1, -1, -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessorEditor)
 };
