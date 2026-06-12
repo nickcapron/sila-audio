@@ -9,6 +9,16 @@ SilaAudioProcessor::SilaAudioProcessor()
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "SILA", makeParameters())
 {
+    // Cache the per-slot raw-value pointers once (audio thread reads them lock-free).
+    for (int s = 0; s < kMaxTracks; ++s)
+    {
+        const juce::String pfx = "t" + juce::String (s) + "_";
+        pVol[s]    = apvts.getRawParameterValue (pfx + "vol");
+        pPan[s]    = apvts.getRawParameterValue (pfx + "pan");
+        pCutoff[s] = apvts.getRawParameterValue (pfx + "cutoff");
+        pRes[s]    = apvts.getRawParameterValue (pfx + "res");
+        pFmode[s]  = apvts.getRawParameterValue (pfx + "fmode");
+    }
 }
 
 SilaAudioProcessor::~SilaAudioProcessor() = default;
@@ -25,6 +35,25 @@ juce::AudioProcessorValueTreeState::ParameterLayout SilaAudioProcessor::makePara
         ParameterID { "smallSpeaker", 1 }, "Small-Speaker Monitor", false));
     layout.add (std::make_unique<AudioParameterBool>(
         ParameterID { "songMode", 1 }, "Song Mode", true));
+
+    // Per-track automation bank (Phase 6): a fixed set of slots, each with the
+    // mixer/filter params. Tracks map to slots by index.
+    for (int s = 0; s < kMaxTracks; ++s)
+    {
+        const String pfx = "t" + String (s) + "_";
+        const String tn  = "Track " + String (s + 1) + " ";
+        layout.add (std::make_unique<AudioParameterFloat>(
+            ParameterID { pfx + "vol", 1 }, tn + "Volume", 0.0f, 1.0f, 1.0f));
+        layout.add (std::make_unique<AudioParameterFloat>(
+            ParameterID { pfx + "pan", 1 }, tn + "Pan", -1.0f, 1.0f, 0.0f));
+        layout.add (std::make_unique<AudioParameterFloat>(
+            ParameterID { pfx + "cutoff", 1 }, tn + "Cutoff", 0.0f, 1.0f, 1.0f));
+        layout.add (std::make_unique<AudioParameterFloat>(
+            ParameterID { pfx + "res", 1 }, tn + "Resonance", 0.0f, 1.0f, 0.0f));
+        layout.add (std::make_unique<AudioParameterChoice>(
+            ParameterID { pfx + "fmode", 1 }, tn + "Filter Mode",
+            StringArray { "Low-pass", "High-pass", "Band-pass" }, 0));
+    }
     return layout;
 }
 
@@ -410,9 +439,11 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         trackMix.resize (nTracks);
     for (size_t i = 0; i < nTracks; ++i)
     {
-        const float pan   = juce::jlimit (-1.0f, 1.0f, proj->tracks[i].pan);
-        const float theta = (pan * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
-        trackMix[i].gain = juce::jlimit (0.0f, 1.0f, proj->tracks[i].volume);
+        const int   slot = (int) i;
+        const float vol  = (slot < kMaxTracks && pVol[slot] != nullptr) ? pVol[slot]->load() : 1.0f;
+        const float pan  = (slot < kMaxTracks && pPan[slot] != nullptr) ? pPan[slot]->load() : 0.0f;
+        const float theta = (juce::jlimit (-1.0f, 1.0f, pan) * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
+        trackMix[i].gain = juce::jlimit (0.0f, 1.0f, vol);
         trackMix[i].panL = std::cos (theta);
         trackMix[i].panR = std::sin (theta);
     }

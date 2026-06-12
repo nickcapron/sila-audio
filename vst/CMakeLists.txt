@@ -29,6 +29,8 @@ juce_add_plugin(SILA
     PLUGIN_MANUFACTURER_CODE Sila
     PLUGIN_CODE             Sila
     FORMATS                 VST3 AU Standalone
+    COPY_PLUGIN_AFTER_BUILD TRUE          # auto-install the built plugin...
+    VST3_COPY_DIR           "$ENV{USERPROFILE}/VST3"   # ...to a user-writable VST3 folder (no admin)
     IS_SYNTH                TRUE          # instrument: produces audio
     NEEDS_MIDI_INPUT        TRUE          # optional MIDI triggering
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE

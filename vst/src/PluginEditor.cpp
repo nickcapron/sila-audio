@@ -177,6 +177,27 @@ bool SilaAudioProcessorEditor::currentSongMode() const
     return pv != nullptr && pv->load() > 0.5f;
 }
 
+int SilaAudioProcessorEditor::trackSlot (const juce::String& id) const
+{
+    if (auto snap = processor.snapshot())
+        for (int i = 0; i < (int) snap->tracks.size(); ++i)
+            if (snap->tracks[(size_t) i].id == id)
+                return i;
+    return -1;
+}
+
+float SilaAudioProcessorEditor::slotValue (int slot, const juce::String& pid) const
+{
+    const auto* a = processor.apvts.getRawParameterValue ("t" + juce::String (slot) + "_" + pid);
+    return a != nullptr ? a->load() : 0.0f;
+}
+
+void SilaAudioProcessorEditor::setSlotValue (int slot, const juce::String& pid, float value)
+{
+    if (auto* p = processor.apvts.getParameter ("t" + juce::String (slot) + "_" + pid))
+        p->setValueNotifyingHost (p->convertTo0to1 (value));
+}
+
 void SilaAudioProcessorEditor::timerCallback()
 {
     // Reclaim snapshots the audio thread has finished with (message thread).
@@ -213,6 +234,31 @@ void SilaAudioProcessorEditor::timerCallback()
         lastSeenEpoch = epoch;
         webView.emitEventIfBrowserIsVisible ("project", juce::var());
     }
+
+    // Push per-slot vol/pan to the UI when they change (host automation / generic
+    // editor moved a param). Only the migrated params for now.
+    if (auto snap = processor.snapshot())
+    {
+        juce::Array<juce::var> changed;
+        const int n = juce::jmin ((int) snap->tracks.size(), SilaAudioProcessor::kMaxTracks);
+        for (int i = 0; i < n; ++i)
+        {
+            const float vol = slotValue (i, "vol");
+            const float pan = slotValue (i, "pan");
+            if (std::abs (vol - lastVol[i]) > 1.0e-4f || std::abs (pan - lastPan[i]) > 1.0e-4f)
+            {
+                lastVol[i] = vol; lastPan[i] = pan;
+                auto* o = new juce::DynamicObject();
+                o->setProperty ("index",  i);
+                o->setProperty ("id",     snap->tracks[(size_t) i].id);
+                o->setProperty ("volume", (double) vol);
+                o->setProperty ("pan",    (double) pan);
+                changed.add (juce::var (o));
+            }
+        }
+        if (! changed.isEmpty())
+            webView.emitEventIfBrowserIsVisible ("params", juce::var (changed));
+    }
 }
 
 juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::var>& args)
@@ -230,11 +276,22 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
     seg.addTokens (path, "/", "");
     seg.removeEmptyStrings();   // e.g. ["tracks","Kick","steps","3"]
 
-    // GET /project — serialize the current snapshot for the grid.
+    // GET /project — serialize the current snapshot for the grid, injecting the
+    // per-slot APVTS values (volume/pan) so the UI initialises correctly.
     if (method == "GET" && path == "/project")
         if (auto snap = processor.snapshot())
-            return projectToVar (*snap, currentSwing(), currentSongMode(),
-                                 processor.currentBpm.load (std::memory_order_relaxed));
+        {
+            juce::var v = projectToVar (*snap, currentSwing(), currentSongMode(),
+                                        processor.currentBpm.load (std::memory_order_relaxed));
+            if (auto* tracks = v.getProperty ("tracks", juce::var()).getArray())
+                for (int i = 0; i < tracks->size() && i < SilaAudioProcessor::kMaxTracks; ++i)
+                    if (auto* to = (*tracks)[i].getDynamicObject())
+                    {
+                        to->setProperty ("volume", (double) slotValue (i, "vol"));
+                        to->setProperty ("pan",    (double) slotValue (i, "pan"));
+                    }
+            return v;
+        }
 
     // PUT /tracks/{id}/steps/{idx}  body { step: {...} }
     // After removeEmptyStrings the path is ["tracks", id, "steps", idx] (4 segs).
@@ -257,24 +314,33 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
     }
 
     // PUT /tracks/{id}/{volume|pan|cutoff|resonance} — per-track mixer/filter base.
+    // volume/pan are APVTS slot params (Phase 6); cutoff/resonance still snapshot.
     if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks"
         && (seg[2] == "volume" || seg[2] == "pan" || seg[2] == "cutoff" || seg[2] == "resonance"))
     {
         const juce::String id    = seg[1];
         const juce::String which = seg[2];
         const double raw = (double) body.getProperty (which, which == "pan" ? 0.0 : 1.0);
-        processor.editProject ([&] (Project& proj)
+        if (which == "volume" || which == "pan")
         {
-            for (auto& t : proj.tracks)
-                if (t.id == id)
-                {
-                    if      (which == "volume")    t.volume    = (float) juce::jlimit (0.0, 1.0, raw);
-                    else if (which == "pan")       t.pan       = (float) juce::jlimit (-1.0, 1.0, raw);
-                    else if (which == "cutoff")    t.cutoff    = (float) juce::jlimit (0.0, 1.0, raw);
-                    else if (which == "resonance") t.resonance = (float) juce::jlimit (0.0, 1.0, raw);
-                    break;
-                }
-        });
+            const int slot = trackSlot (id);
+            if (slot >= 0)
+                setSlotValue (slot, which == "volume" ? "vol" : "pan",
+                              (float) juce::jlimit (which == "pan" ? -1.0 : 0.0, 1.0, raw));
+        }
+        else
+        {
+            processor.editProject ([&] (Project& proj)
+            {
+                for (auto& t : proj.tracks)
+                    if (t.id == id)
+                    {
+                        if (which == "cutoff")    t.cutoff    = (float) juce::jlimit (0.0, 1.0, raw);
+                        else                      t.resonance = (float) juce::jlimit (0.0, 1.0, raw);
+                        break;
+                    }
+            });
+        }
         return emptyObject();
     }
 
@@ -482,10 +548,20 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         }
         if (auto snap = processor.snapshot())
         {
+            // File format: { project: <structure>, params: { id: normalised } } so
+            // the automatable slot params round-trip alongside ProjectJson.
+            auto* root = new juce::DynamicObject();
+            root->setProperty ("project", sila::engine::projectToVar (*snap));
+            auto* params = new juce::DynamicObject();
+            for (auto* p : processor.getParameters())
+                if (auto* wid = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
+                    params->setProperty (wid->paramID, (double) p->getValue());
+            root->setProperty ("params", juce::var (params));
+
             const auto dir = SilaAudioProcessor::projectsDir();
             dir.createDirectory();
             dir.getChildFile (name + ".json")
-               .replaceWithText (juce::JSON::toString (sila::engine::projectToVar (*snap), false));
+               .replaceWithText (juce::JSON::toString (juce::var (root), false));
             o->setProperty ("saved", name);
         }
         return juce::var (o);
@@ -498,10 +574,17 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         const juce::String name = juce::File::createLegalFileName (body.getProperty ("name", juce::String()).toString());
         auto*  o    = new juce::DynamicObject();
         const auto file = SilaAudioProcessor::projectsDir().getChildFile (name + ".json");
-        const juce::var pv = file.existsAsFile() ? juce::JSON::parse (file.loadFileAsString()) : juce::var();
-        if (pv.isObject())
+        const juce::var root = file.existsAsFile() ? juce::JSON::parse (file.loadFileAsString()) : juce::var();
+        // New format wraps { project, params }; old files are a bare project.
+        const juce::var projVar = root.getProperty ("project", juce::var());
+        const juce::var actual  = projVar.isObject() ? projVar : root;
+        if (actual.isObject())
         {
-            processor.loadProject (std::make_shared<const Project> (sila::engine::projectFromVar (pv)));
+            processor.loadProject (std::make_shared<const Project> (sila::engine::projectFromVar (actual)));
+            if (auto* params = root.getProperty ("params", juce::var()).getDynamicObject())
+                for (const auto& kv : params->getProperties())
+                    if (auto* p = processor.apvts.getParameter (kv.name.toString()))
+                        p->setValueNotifyingHost ((float) (double) kv.value);
             o->setProperty ("loaded", name);
         }
         else

@@ -50,6 +50,10 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // Phase 6: per-track params live in a fixed APVTS "slot" bank so they're host-
+    // automatable. Tracks map to slots by index; a project can't exceed this.
+    static constexpr int kMaxTracks = 8;
+
     // Latest transport position (quarter notes), published by processBlock for
     // the editor to read on the message thread (lock-free; C++ -> UI playhead).
     std::atomic<double> currentPpq { 0.0 };
@@ -187,6 +191,14 @@ private:
     // stay aligned to the track's LFO clock. Parallel to snapshot tracks.
     std::vector<double> trackLfoPhase;
     juce::Random        lfoRng;   // seeds per-voice sample-and-hold start value
+
+    // Cached raw-value pointers for the per-slot APVTS bank (set in the ctor) so
+    // the audio thread reads them with a single atomic load — no string lookups.
+    std::atomic<float>* pVol[kMaxTracks]    {};
+    std::atomic<float>* pPan[kMaxTracks]    {};
+    std::atomic<float>* pCutoff[kMaxTracks] {};
+    std::atomic<float>* pRes[kMaxTracks]    {};
+    std::atomic<float>* pFmode[kMaxTracks]  {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessor)
 };

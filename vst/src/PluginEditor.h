@@ -37,6 +37,11 @@ private:
     float currentSwing() const;
     bool  currentSongMode() const;
 
+    // Per-track APVTS slot bank (Phase 6) helpers.
+    int   trackSlot (const juce::String& id) const;             // track index by id, or -1
+    float slotValue (int slot, const juce::String& pid) const;  // raw param value
+    void  setSlotValue (int slot, const juce::String& pid, float value);  // via setValueNotifyingHost
+
     // Launch the native folder picker, then transcode every project sample to
     // 48k/16-bit/mono WAVs there; pushes the result via the "export" event.
     void launchDigitaktExport();
@@ -65,6 +70,11 @@ private:
     // Last project epoch the UI has seen; a change means the processor swapped in
     // a whole new Project (DAW state load) and the grid must re-fetch.
     uint32_t lastSeenEpoch = 0;
+
+    // Last per-slot vol/pan pushed to the UI, so the timer only emits a "params"
+    // event when a value changed (host automation / generic editor -> UI).
+    float lastVol[SilaAudioProcessor::kMaxTracks] {};
+    float lastPan[SilaAudioProcessor::kMaxTracks] {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessorEditor)
 };

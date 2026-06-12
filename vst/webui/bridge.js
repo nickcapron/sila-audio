@@ -129,7 +129,7 @@ function renderTracks() {
     const mix = document.createElement("div");
     mix.className = "track-mix";
     const vol = document.createElement("input");
-    vol.type = "range"; vol.min = 0; vol.max = 100; vol.title = "volume";
+    vol.type = "range"; vol.className = "vol"; vol.min = 0; vol.max = 100; vol.title = "volume";
     vol.value = Math.round((track.volume ?? 1) * 100);
     vol.addEventListener("input", () => { track.volume = vol.value / 100; });
     vol.addEventListener("change", () => PUT(`/tracks/${track.id}/volume`, { volume: track.volume }));
@@ -526,6 +526,24 @@ function onExport(res) {
   if (res && res.summary) console.log("[export] " + (res.dir ? res.dir + "\n" : "") + res.summary);
 }
 
+// ── Per-track param push (host automation / generic editor -> UI) ────────────
+function onParams(changed) {
+  if (!project || !Array.isArray(changed)) return;
+  for (const c of changed) {
+    const t = project.tracks[c.index];
+    if (!t) continue;
+    if (c.volume !== undefined) t.volume = c.volume;
+    if (c.pan !== undefined) t.pan = c.pan;
+    const row = document.querySelector(`[data-track-id="${t.id}"]`);
+    if (!row) continue;
+    const volEl = row.querySelector(".vol");
+    const panEl = row.querySelector(".pan");
+    // Don't fight a slider the user is actively dragging.
+    if (volEl && volEl !== document.activeElement && c.volume !== undefined) volEl.value = Math.round(c.volume * 100);
+    if (panEl && panEl !== document.activeElement && c.pan !== undefined) panEl.value = Math.round(c.pan * 100);
+  }
+}
+
 // ── Project reload (DAW state load swapped in a whole new Project) ────────────
 async function onProjectReload() {
   try { project = await GET("/project"); } catch { return; }
@@ -622,6 +640,7 @@ async function boot() {
     window.__JUCE__.backend.addEventListener("status", onStatus);
     window.__JUCE__.backend.addEventListener("export", onExport);
     window.__JUCE__.backend.addEventListener("project", onProjectReload);
+    window.__JUCE__.backend.addEventListener("params", onParams);
   }
 
   project = await GET("/project");
