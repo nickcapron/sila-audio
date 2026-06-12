@@ -29,8 +29,9 @@ struct TrigEvent
     float length            = 1.0f;
     int   microTiming       = 0;     // ±23 micro-steps
     std::optional<float> pStart, pEnd;   // p_lock start/end overrides
-    float cutoff            = 1.0f;  // resolved LP cutoff (step p-lock or track base)
+    float cutoff            = 1.0f;  // resolved cutoff (step p-lock or track base)
     float resonance         = 0.0f;  // resolved resonance
+    FilterMode filterMode   = FilterMode::LowPass;  // resolved filter mode
     // Resolved LFO config for this trigger (step p-lock overrides track base).
     LfoShape lfoShape       = LfoShape::Sine;
     LfoDest  lfoDest        = LfoDest::Cutoff;
@@ -99,6 +100,7 @@ public:
             // Resolve filter: per-step p-lock overrides the track base.
             ev.cutoff      = step.pCutoff.value_or (track.cutoff);
             ev.resonance   = step.pResonance.value_or (track.resonance);
+            ev.filterMode  = step.pFilterMode.value_or (track.filterMode);
             // Resolve LFO: depth/rate are p-lockable; shape/dest/sync track-level.
             ev.lfoShape    = track.lfoShape;
             ev.lfoDest     = track.lfoDest;

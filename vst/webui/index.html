@@ -36,14 +36,21 @@
     #transport.playing .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
     /* active song-mode pattern badge */
     #active-pattern { color: var(--accent-2); font-weight: 700; letter-spacing: 1px; }
-    /* export button (pinned to the right of the header) */
-    #export-btn {
-      margin-left: auto; background: var(--surface); color: var(--accent);
+    /* header action buttons (pinned to the right) */
+    #projects-btn, #export-btn {
+      background: var(--surface); color: var(--accent);
       border: 1px solid var(--accent); border-radius: 4px; padding: 5px 14px;
       font: inherit; font-size: 11px; letter-spacing: 1.5px; font-weight: 700; cursor: pointer;
     }
-    #export-btn:hover { background: var(--accent); color: #04110d; }
-    #export-btn:disabled { opacity: .5; cursor: default; border-color: var(--border); color: var(--text-dim); background: var(--surface); }
+    #projects-btn { margin-left: auto; }
+    #projects-btn:hover, #export-btn:hover { background: var(--accent); color: #04110d; }
+    #proj-save {
+      background: var(--accent); color: #04110d; border: none; border-radius: 4px;
+      padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    .proj-item { display: flex; justify-content: space-between; }
+    .proj-item .del { color: var(--text-dim); padding: 0 6px; }
+    .proj-item .del:hover { color: #ffae57; }
     input[type=range] { width: 120px; accent-color: var(--accent); }
     input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
     label { user-select: none; cursor: pointer; }
@@ -64,6 +71,8 @@
     .track-mix { display: grid; grid-template-columns: 74px 74px; gap: 3px 6px; flex-shrink: 0; }
     .track-mix input[type=range] { width: 74px; height: 13px; margin: 0; }
     .track-mix .pan, .track-mix .res { accent-color: var(--accent-2); }
+    .track-mix .fmode { grid-column: 1 / -1; width: 154px; background: var(--bg); color: var(--text-dim);
+      border: 1px solid var(--border); border-radius: 3px; font: inherit; font-size: 10px; padding: 2px; cursor: pointer; }
     .step-grid { display: flex; gap: 4px; }
     .step {
       width: 30px; height: 30px; border-radius: 4px; background: var(--step-off);
@@ -188,6 +197,7 @@
     <span class="meta">Swing <input type="range" id="swing" min="0" max="100" value="0"><span id="swing-pct" class="val" style="min-width:34px">0%</span></span>
     <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>
+    <button id="projects-btn" title="Save / load projects in ~/SILA/projects">PROJECTS</button>
     <button id="export-btn" title="Transcode all project samples to 48k/16-bit mono WAVs for the Elektron Digitakt">EXPORT</button>
   </header>
 
@@ -274,6 +284,14 @@
           <input type="range" id="i-res" min="0" max="100" value="0">
         </div>
         <div class="field">
+          <div class="row"><label>Filter Mode</label></div>
+          <select id="i-fmode">
+            <option value="lowpass">Low-pass</option>
+            <option value="highpass">High-pass</option>
+            <option value="bandpass">Band-pass</option>
+          </select>
+        </div>
+        <div class="field">
           <div class="row"><label>LFO Depth</label><span class="fv" id="iv-lfo-depth">0%</span></div>
           <input type="range" id="i-lfo-depth" min="0" max="100" value="0">
         </div>
@@ -318,6 +336,19 @@
       </div>
       <div id="lib-target"></div>
       <div class="lib-tree" id="lib-tree"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="projects-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>PROJECTS</h2>
+        <input id="proj-name" type="text" placeholder="project name…" autocomplete="off" spellcheck="false">
+        <button id="proj-save">Save</button>
+        <button class="close" id="proj-close" title="close">×</button>
+      </div>
+      <div id="lib-target">~/SILA/projects — click a name to load</div>
+      <div class="lib-tree" id="proj-list"></div>
     </div>
   </div>
 

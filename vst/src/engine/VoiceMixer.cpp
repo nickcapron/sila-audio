@@ -29,21 +29,27 @@ static float hermite4 (const float* src, int n, double pos)
     return ((c3 * frac + c2) * frac + c1) * frac + c0;
 }
 
-// One TPT-SVF lowpass sample (Andrew Simper / Cytomic). Coeffs are baked on the
-// voice; this only advances the two integrators — ~10 mul/add, unconditionally
-// stable at any cutoff/Q. LP output is v2.
-static float svfLowpass (Voice& v, float x)
+// One TPT-SVF sample (Andrew Simper / Cytomic). Coeffs are baked on the voice;
+// this only advances the two integrators — ~10 mul/add, unconditionally stable
+// at any cutoff/Q. The same state yields LP (v2), BP (v1) and HP (x - k*v1 - v2).
+static float svfProcess (Voice& v, float x, int mode)
 {
     const float v3 = x - v.ic2eq;
     const float v1 = v.svfA1 * v.ic1eq + v.svfA2 * v3;
     const float v2 = v.ic2eq + v.svfA2 * v.ic1eq + v.svfA3 * v3;
     v.ic1eq = 2.0f * v1 - v.ic1eq;
     v.ic2eq = 2.0f * v2 - v.ic2eq;
+    switch ((FilterMode) mode)
+    {
+        case FilterMode::HighPass: return x - v.svfK * v1 - v2;
+        case FilterMode::BandPass: return v1;
+        case FilterMode::LowPass:  break;
+    }
     return v2;
 }
 
 // Shared by the trigger bake (PluginProcessor) and the LFO control-rate update.
-void bakeSvfLowpass (Voice& v, float cutoff, float resonance, double sampleRate)
+void bakeSvf (Voice& v, float cutoff, float resonance, double sampleRate)
 {
     const double fc = juce::jlimit (20.0, sampleRate * 0.49,
                                     20.0 * std::pow (1000.0, (double) cutoff));
@@ -54,6 +60,7 @@ void bakeSvfLowpass (Voice& v, float cutoff, float resonance, double sampleRate)
     v.svfA1 = (float) a1;
     v.svfA2 = (float) (g * a1);
     v.svfA3 = (float) (g * g * a1);    // a3 = g*a2
+    v.svfK  = (float) k;
 }
 
 // LFO shape in [-1,1] for the current phase (sine/tri/square/saw match lfo.py;
@@ -79,7 +86,7 @@ void VoiceMixer::updateVoiceLfo (Voice& v)
     switch ((LfoDest) v.lfo.dest)
     {
         case LfoDest::Cutoff:
-            bakeSvfLowpass (v, juce::jlimit (0.0f, 1.0f, v.baseCutoff + val), v.baseResonance, sampleRate);
+            bakeSvf (v, juce::jlimit (0.0f, 1.0f, v.baseCutoff + val), v.baseResonance, sampleRate);
             break;
         case LfoDest::Volume:                                       // tremolo
             v.volume = juce::jlimit (0.0f, 1.0f, v.baseGain * (1.0f + val));
@@ -165,7 +172,7 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<
             }
 
             float x = hermite4 (src, srcN, v.pos);
-            if (v.filterOn) x = svfLowpass (v, x);   // filter -> envelope -> gain/pan
+            if (v.filterOn) x = svfProcess (v, x, v.filterMode);   // filter -> envelope -> gain/pan
             const float s = x * v.volume * env * tm.gain;
             L[j] += tm.panL * s;
             if (R != nullptr) R[j] += tm.panR * s;

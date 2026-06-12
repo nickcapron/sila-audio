@@ -4,38 +4,17 @@
 #include <cmath>
 #include <algorithm>
 
-// ---------------------------------------------------------------------------
-// Bring-up tracer. Writes a flushed line to "SILA_trace.log" on the Desktop so
-// we can see exactly how far the Standalone gets before a silent exit/crash.
-// Each call appends + flushes immediately, so the last line in the file is the
-// last point we reached. Remove this block (and the SILA_TRACE calls) once the
-// startup path is proven.
-namespace
-{
-    void silaTrace (const juce::String& msg)
-    {
-        static juce::FileLogger logger (
-            juce::File::getSpecialLocation (juce::File::userDesktopDirectory)
-                .getChildFile ("SILA_trace.log"),
-            "SILA standalone startup trace");
-        logger.logMessage (msg);
-    }
-}
-#define SILA_TRACE(msg) silaTrace (msg)
-
 SilaAudioProcessor::SilaAudioProcessor()
     : juce::AudioProcessor (BusesProperties()
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "SILA", makeParameters())
 {
-    SILA_TRACE ("ctor: body entered (apvts constructed OK)");
 }
 
 SilaAudioProcessor::~SilaAudioProcessor() = default;
 
 juce::AudioProcessorValueTreeState::ParameterLayout SilaAudioProcessor::makeParameters()
 {
-    SILA_TRACE ("makeParameters: building layout (runs during apvts construction)");
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
     layout.add (std::make_unique<AudioParameterFloat>(
@@ -46,7 +25,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout SilaAudioProcessor::makePara
         ParameterID { "smallSpeaker", 1 }, "Small-Speaker Monitor", false));
     layout.add (std::make_unique<AudioParameterBool>(
         ParameterID { "songMode", 1 }, "Song Mode", true));
-    SILA_TRACE ("makeParameters: layout built (4 params)");
     return layout;
 }
 
@@ -111,10 +89,8 @@ juce::AudioBuffer<float> SilaAudioProcessor::makeHat (double sr)
     return b;
 }
 
-void SilaAudioProcessor::prepareToPlay (double sr, int samplesPerBlock)
+void SilaAudioProcessor::prepareToPlay (double sr, int /*samplesPerBlock*/)
 {
-    SILA_TRACE ("prepareToPlay: enter sr=" + juce::String (sr)
-                + " block=" + juce::String (samplesPerBlock));
     sampleRate = sr;
     internalPpq = 0.0;
     lastFiredSixteenth = -1;
@@ -132,10 +108,6 @@ void SilaAudioProcessor::prepareToPlay (double sr, int samplesPerBlock)
     }
 
     mixer.prepare (sr);
-    const auto live = liveProject.load (std::memory_order_acquire);
-    const int trackCount = live != nullptr ? (int) live->tracks.size() : 0;
-    SILA_TRACE ("prepareToPlay: exit (" + juce::String (trackCount)
-                + " tracks, samplers + mixer ready)");
 }
 
 void SilaAudioProcessor::reapRetired()
@@ -158,6 +130,20 @@ juce::File SilaAudioProcessor::libraryRoot()
 {
     return juce::File::getSpecialLocation (juce::File::userHomeDirectory)
                .getChildFile ("SILA").getChildFile ("library");
+}
+
+juce::File SilaAudioProcessor::projectsDir()
+{
+    return juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+               .getChildFile ("SILA").getChildFile ("projects");
+}
+
+void SilaAudioProcessor::loadProject (ProjectPtr proj)
+{
+    if (proj == nullptr)
+        return;
+    auto bank = std::make_shared<const SamplerBank> (buildBankForProject (*proj, sampleRate));
+    setProject (std::move (proj), std::move (bank));
 }
 
 std::shared_ptr<sila::engine::Sampler>
@@ -348,15 +334,6 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
-    static bool firstBlock = true;
-    if (firstBlock)
-    {
-        firstBlock = false;
-        SILA_TRACE ("processBlock: first call ch=" + juce::String (buffer.getNumChannels())
-                    + " n=" + juce::String (buffer.getNumSamples())
-                    + " wrapper=" + juce::String ((int) wrapperType));
-    }
-
     const int numSamples = buffer.getNumSamples();
 
     // --- Resolve transport: host if playing, else internal (Standalone only) --
@@ -546,13 +523,17 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                                       ? lfoRng.nextFloat() * 2.0f - 1.0f : 0.0f;
                 }
 
-                // Filter on when the base cutoff filters OR an LFO sweeps cutoff.
-                // (The LFO update recomputes the coeffs each control block.)
+                // Filter engages when: LP with a non-open cutoff, any HP/BP mode,
+                // or an LFO that sweeps cutoff. (LP at fully-open = transparent =
+                // skip, for zero cost; the LFO update re-bakes coeffs each block.)
                 const bool lfoCutoff = lfoOn && ev.lfoDest == sila::engine::LfoDest::Cutoff;
-                if (ev.cutoff < 0.999f || lfoCutoff)
+                const bool lpOpen    = ev.filterMode == sila::engine::FilterMode::LowPass
+                                           && ev.cutoff >= 0.999f;
+                if (! lpOpen || lfoCutoff)
                 {
-                    v.filterOn = true;
-                    sila::engine::bakeSvfLowpass (v, ev.cutoff, ev.resonance, sampleRate);
+                    v.filterOn   = true;
+                    v.filterMode = (int) ev.filterMode;
+                    sila::engine::bakeSvf (v, ev.cutoff, ev.resonance, sampleRate);
                 }
 
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends
@@ -619,14 +600,10 @@ void SilaAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 juce::AudioProcessorEditor* SilaAudioProcessor::createEditor()
 {
     // Phase 4: the WebView editor hosts the vanilla HTML/JS UI + native bridge.
-    SILA_TRACE ("createEditor: creating SilaAudioProcessorEditor (WebView)");
-    auto* ed = new SilaAudioProcessorEditor (*this);
-    SILA_TRACE ("createEditor: done");
-    return ed;
+    return new SilaAudioProcessorEditor (*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    SILA_TRACE ("createPluginFilter: instantiating SilaAudioProcessor");
     return new SilaAudioProcessor();
 }

@@ -111,6 +111,13 @@ public:
     // ~/SILA/library — root for resolving relative sample paths from the browser.
     static juce::File libraryRoot();
 
+    // ~/SILA/projects — standalone project files (Save/Load).
+    static juce::File projectsDir();
+
+    // Load a project wholesale: build its sampler bank at the current rate, RCU-
+    // swap it in, and bump projectEpoch so the editor refreshes. Message thread.
+    void loadProject (ProjectPtr proj);
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameters();
 

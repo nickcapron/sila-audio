@@ -8,18 +8,6 @@ using namespace sila::engine;
 
 namespace
 {
-// Bring-up tracer for the WebView resource provider — confirms which UI assets
-// the page requested. Separate file from the processor's SILA_TRACE so the two
-// loggers don't share a handle. Remove once the bridge is proven.
-void silaUiTrace (const juce::String& msg)
-{
-    static juce::FileLogger logger (
-        juce::File::getSpecialLocation (juce::File::userDesktopDirectory)
-            .getChildFile ("SILA_ui_trace.log"),
-        "SILA WebView resource trace");
-    logger.logMessage (msg);
-}
-
 // All Project<->var helpers now live in engine/ProjectJson.{h,cpp} (one source
 // of truth shared with the processor's DAW state). `using namespace sila::engine`
 // (above) resolves stepToVar/applyStepVar/trackToVar/parseSampleLayers here.
@@ -290,6 +278,21 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
+    // PUT /tracks/{id}/filter_mode { mode: lowpass|highpass|bandpass }
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "filter_mode")
+    {
+        const juce::String id = seg[1];
+        const juce::String m  = body.getProperty ("mode", "lowpass").toString();
+        const FilterMode fm = m == "highpass" ? FilterMode::HighPass
+                            : m == "bandpass" ? FilterMode::BandPass : FilterMode::LowPass;
+        processor.editProject ([&] (Project& proj)
+        {
+            for (auto& t : proj.tracks)
+                if (t.id == id) { t.filterMode = fm; break; }
+        });
+        return emptyObject();
+    }
+
     // PUT /tracks/{id}/lfo { shape?, rate?, depth?, destination?, sync? } — only
     // the present fields are updated (track-level LFO base config).
     if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "lfo")
@@ -448,6 +451,64 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return juce::var (o);
     }
 
+    // GET /projects — list saved project names in ~/SILA/projects.
+    if (method == "GET" && path == "/projects")
+    {
+        auto* o = new juce::DynamicObject();
+        juce::Array<juce::var> names;
+        const auto dir = SilaAudioProcessor::projectsDir();
+        if (dir.isDirectory())
+        {
+            auto files = dir.findChildFiles (juce::File::findFiles | juce::File::ignoreHiddenFiles, false, "*.json");
+            std::sort (files.begin(), files.end(),
+                       [] (const juce::File& a, const juce::File& b)
+                       { return a.getFileName().compareNatural (b.getFileName()) < 0; });
+            for (const auto& f : files)
+                names.add (f.getFileNameWithoutExtension());
+        }
+        o->setProperty ("projects", names);
+        return juce::var (o);
+    }
+
+    // POST /projects/save { name } — serialize the snapshot to ~/SILA/projects.
+    if (method == "POST" && path == "/projects/save")
+    {
+        const juce::String name = juce::File::createLegalFileName (body.getProperty ("name", "untitled").toString()).trim();
+        auto* o = new juce::DynamicObject();
+        if (name.isEmpty())
+        {
+            o->setProperty ("error", "invalid name");
+            return juce::var (o);
+        }
+        if (auto snap = processor.snapshot())
+        {
+            const auto dir = SilaAudioProcessor::projectsDir();
+            dir.createDirectory();
+            dir.getChildFile (name + ".json")
+               .replaceWithText (juce::JSON::toString (sila::engine::projectToVar (*snap), false));
+            o->setProperty ("saved", name);
+        }
+        return juce::var (o);
+    }
+
+    // POST /projects/load { name } — read a project file + RCU-swap it in. The UI
+    // refreshes via the projectEpoch "project" event that loadProject triggers.
+    if (method == "POST" && path == "/projects/load")
+    {
+        const juce::String name = juce::File::createLegalFileName (body.getProperty ("name", juce::String()).toString());
+        auto*  o    = new juce::DynamicObject();
+        const auto file = SilaAudioProcessor::projectsDir().getChildFile (name + ".json");
+        const juce::var pv = file.existsAsFile() ? juce::JSON::parse (file.loadFileAsString()) : juce::var();
+        if (pv.isObject())
+        {
+            processor.loadProject (std::make_shared<const Project> (sila::engine::projectFromVar (pv)));
+            o->setProperty ("loaded", name);
+        }
+        else
+            o->setProperty ("error", "not found or invalid");
+        return juce::var (o);
+    }
+
     // GET /sequencer/status — current transport status for the initial fetch on
     // boot (live updates after that arrive via the pushed "status" event).
     if (method == "GET" && path == "/sequencer/status")
@@ -497,13 +558,12 @@ SilaAudioProcessorEditor::serveResource (const juce::String& url)
     const auto path = (url == "/") ? juce::String ("index.html")
                                    : url.fromFirstOccurrenceOf ("/", false, false);
 
-    auto give = [&path] (const char* resourceName, juce::String mime)
+    auto give = [] (const char* resourceName, juce::String mime)
         -> std::optional<juce::WebBrowserComponent::Resource>
     {
         int size = 0;
         if (const auto* data = BinaryData::getNamedResource (resourceName, size))
         {
-            silaUiTrace ("served '" + path + "' (" + juce::String (size) + " bytes)");
             std::vector<std::byte> bytes (static_cast<size_t> (size));
             std::memcpy (bytes.data(), data, static_cast<size_t> (size));
             return juce::WebBrowserComponent::Resource { std::move (bytes), std::move (mime) };
@@ -520,6 +580,5 @@ SilaAudioProcessorEditor::serveResource (const juce::String& url)
     if (path == "js/juce/check_native_interop.js")
         return give ("check_native_interop_js", "text/javascript");
 
-    silaUiTrace ("MISS '" + path + "' (no resource)");
     return std::nullopt;
 }

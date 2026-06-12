@@ -14,9 +14,10 @@ namespace sila::engine
 {
 struct Voice;   // fwd
 
-// Compute + store the TPT-SVF lowpass coefficients on a voice from cutoff (0..1)
-// / resonance (0..1). Shared by the trigger bake and the LFO control-rate update.
-void bakeSvfLowpass (Voice& v, float cutoff, float resonance, double sampleRate);
+// Compute + store the TPT-SVF coefficients (a1/a2/a3 + k) on a voice from cutoff
+// (0..1) / resonance (0..1). Mode-independent — the output tap (LP/HP/BP) is
+// chosen at render. Shared by the trigger bake and the LFO control-rate update.
+void bakeSvf (Voice& v, float cutoff, float resonance, double sampleRate);
 
 // Per-track mixer params, recomputed each block from the snapshot and looked up
 // by Voice.trackIndex — so volume/pan apply CONTINUOUSLY (a fader/pan move
@@ -48,7 +49,8 @@ struct Voice
     // sample. filterOn=false => bypassed (zero cost). Own state => the tail rings
     // at this voice's cutoff even when a later step opens a brighter voice.
     bool  filterOn = false;
-    float svfA1 = 0.0f, svfA2 = 0.0f, svfA3 = 0.0f;
+    int   filterMode = 0;     // FilterMode (LP/HP/BP) — selects the SVF output tap
+    float svfA1 = 0.0f, svfA2 = 0.0f, svfA3 = 0.0f, svfK = 0.0f;
     float ic1eq = 0.0f, ic2eq = 0.0f;
 
     // Base (pre-LFO) values the LFO retargets at control rate (volume/rate also

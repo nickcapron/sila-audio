@@ -64,6 +64,24 @@ static LfoDest lfoDestFromString (const juce::String& s)
     return LfoDest::Cutoff;
 }
 
+static const char* filterModeToString (FilterMode m)
+{
+    switch (m)
+    {
+        case FilterMode::HighPass: return "highpass";
+        case FilterMode::BandPass: return "bandpass";
+        case FilterMode::LowPass:  break;
+    }
+    return "lowpass";
+}
+
+static FilterMode filterModeFromString (const juce::String& s)
+{
+    if (s == "highpass") return FilterMode::HighPass;
+    if (s == "bandpass") return FilterMode::BandPass;
+    return FilterMode::LowPass;
+}
+
 juce::var stepToVar (const Step& s)
 {
     auto* o = new juce::DynamicObject();
@@ -82,6 +100,8 @@ juce::var stepToVar (const Step& s)
     if (s.pResonance.has_value()) pl->setProperty ("resonance", (double) *s.pResonance);
     if (s.pLfoDepth.has_value())  pl->setProperty ("lfo_depth", (double) *s.pLfoDepth);
     if (s.pLfoRate.has_value())   pl->setProperty ("lfo_rate",  (double) *s.pLfoRate);
+    if (s.pFilterMode.has_value())
+        pl->setProperty ("filter_mode", juce::String (filterModeToString (*s.pFilterMode)));
     o->setProperty ("p_locks", juce::var (pl));
     return juce::var (o);
 }
@@ -113,6 +133,7 @@ void applyStepVar (Step& s, const juce::var& v)
             if (pl.hasProperty ("resonance")) s.pResonance = (float) (double) pl["resonance"];
             if (pl.hasProperty ("lfo_depth")) s.pLfoDepth  = (float) (double) pl["lfo_depth"];
             if (pl.hasProperty ("lfo_rate"))  s.pLfoRate   = (float) (double) pl["lfo_rate"];
+            if (pl.hasProperty ("filter_mode")) s.pFilterMode = filterModeFromString (pl["filter_mode"].toString());
         }
     }
 }
@@ -165,6 +186,7 @@ juce::var trackToVar (const Track& t)
     o->setProperty ("pan",        (double) t.pan);
     o->setProperty ("cutoff",     (double) t.cutoff);
     o->setProperty ("resonance",  (double) t.resonance);
+    o->setProperty ("filter_mode", juce::String (filterModeToString (t.filterMode)));
 
     auto* lfo = new juce::DynamicObject();
     lfo->setProperty ("shape",       juce::String (lfoShapeToString (t.lfoShape)));
@@ -194,6 +216,7 @@ Track trackFromVar (const juce::var& v)
     t.pan       = (float) (double) v.getProperty ("pan", 0.0);
     t.cutoff    = (float) (double) v.getProperty ("cutoff", 1.0);
     t.resonance = (float) (double) v.getProperty ("resonance", 0.0);
+    t.filterMode = filterModeFromString (v.getProperty ("filter_mode", "lowpass").toString());
 
     const juce::var lv = v.getProperty ("lfo", juce::var());
     if (lv.isObject())

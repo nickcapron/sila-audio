@@ -64,6 +64,12 @@ const lfoRateV   = document.getElementById("lfo-rate-v");
 const lfoDepthEl = document.getElementById("lfo-depth");
 const lfoDepthV  = document.getElementById("lfo-depth-v");
 const lfoSyncEl  = document.getElementById("lfo-sync");
+const projectsBtn = document.getElementById("projects-btn");
+const projModal  = document.getElementById("projects-modal");
+const projName   = document.getElementById("proj-name");
+const projSaveBtn = document.getElementById("proj-save");
+const projCloseEl = document.getElementById("proj-close");
+const projListEl = document.getElementById("proj-list");
 
 let project = null;
 let sel = { trackId: null, idx: null };   // selected step
@@ -85,7 +91,7 @@ function stepIsLocked(s) {
   return s.probability < 100 || (s.trig_condition && s.trig_condition !== "always") ||
          (s.micro_timing || 0) !== 0 || pl.start !== undefined || pl.end !== undefined ||
          pl.cutoff !== undefined || pl.resonance !== undefined ||
-         pl.lfo_depth !== undefined || pl.lfo_rate !== undefined ||
+         pl.lfo_depth !== undefined || pl.lfo_rate !== undefined || pl.filter_mode !== undefined ||
          (s.velocity !== undefined && s.velocity !== 100);
 }
 
@@ -142,11 +148,19 @@ function renderTracks() {
     res.value = Math.round((track.resonance ?? 0) * 100);
     res.addEventListener("input", () => { track.resonance = res.value / 100; });
     res.addEventListener("change", () => PUT(`/tracks/${track.id}/resonance`, { resonance: track.resonance }));
-    // grid order: row1 = vol, cutoff ; row2 = pan, resonance
+    const fmode = document.createElement("select");
+    fmode.className = "fmode"; fmode.title = "filter mode";
+    [["lowpass", "LP"], ["highpass", "HP"], ["bandpass", "BP"]].forEach(([v, t]) => {
+      const o = document.createElement("option"); o.value = v; o.textContent = t; fmode.appendChild(o);
+    });
+    fmode.value = track.filter_mode || "lowpass";
+    fmode.addEventListener("change", () => { track.filter_mode = fmode.value; PUT(`/tracks/${track.id}/filter_mode`, { mode: fmode.value }); });
+    // grid order: row1 = vol, cutoff ; row2 = pan, resonance ; row3 = filter mode (spans)
     mix.appendChild(vol);
     mix.appendChild(cut);
     mix.appendChild(pan);
     mix.appendChild(res);
+    mix.appendChild(fmode);
 
     const grid = document.createElement("div");
     grid.className = "step-grid";
@@ -237,6 +251,7 @@ function selectStep(trackId, idx) {
   $("i-mt").value    = step.micro_timing ?? 0;   $("iv-mt").textContent   = fmtSigned($("i-mt").value);
   $("i-cutoff").value = Math.round((pl.cutoff ?? track.cutoff ?? 1) * 100);   $("iv-cutoff").textContent = $("i-cutoff").value + "%";
   $("i-res").value    = Math.round((pl.resonance ?? track.resonance ?? 0) * 100); $("iv-res").textContent = $("i-res").value + "%";
+  $("i-fmode").value = pl.filter_mode ?? track.filter_mode ?? "lowpass";
   const _L = track.lfo || {};
   $("i-lfo-depth").value = Math.round((pl.lfo_depth ?? _L.depth ?? 0) * 100); $("iv-lfo-depth").textContent = $("i-lfo-depth").value + "%";
   const _lr = pl.lfo_rate ?? _L.rate ?? 1; $("i-lfo-rate").value = rateToSlider(_lr); $("iv-lfo-rate").textContent = fmtHz(_lr);
@@ -269,6 +284,7 @@ function wireInspector() {
   ["i-vel", "i-prob", "i-mt", "i-start", "i-end", "i-pitch", "i-cutoff", "i-res", "i-lfo-depth", "i-lfo-rate"].forEach(id =>
     $(id).addEventListener("change", saveSelectedStep));
   $("i-trig").addEventListener("change", () => { const s = cur(); if (s) { s.trig_condition = $("i-trig").value; saveSelectedStep(); } });
+  $("i-fmode").addEventListener("change", () => { const s = cur(); if (s) { (s.p_locks = s.p_locks || {}).filter_mode = $("i-fmode").value; saveSelectedStep(); } });
   $("i-length").addEventListener("change", () => { const s = cur(); if (s) { s.length = parseFloat($("i-length").value); saveSelectedStep(); } });
 }
 
@@ -554,6 +570,51 @@ function sendLfo(patch) {
   PUT(`/tracks/${lfoTrackId}/lfo`, patch);
 }
 
+// ── Projects (standalone Save / Load to ~/SILA/projects) ─────────────────────
+async function openProjects() {
+  projModal.classList.add("open");
+  projName.focus();
+  await refreshProjectList();
+}
+function closeProjects() { projModal.classList.remove("open"); }
+
+async function refreshProjectList() {
+  projListEl.innerHTML = '<div class="lib-empty">loading…</div>';
+  let res;
+  try { res = await GET("/projects"); } catch { projListEl.innerHTML = '<div class="lib-empty">could not list projects</div>'; return; }
+  const names = (res && res.projects) || [];
+  projListEl.innerHTML = "";
+  if (!names.length) { projListEl.innerHTML = '<div class="lib-empty">no saved projects yet</div>'; return; }
+  for (const name of names) {
+    const row = document.createElement("div");
+    row.className = "lib-sample proj-item";
+    const label = document.createElement("span");
+    label.textContent = name;
+    label.onclick = () => loadProject(name);
+    row.appendChild(label);
+    projListEl.appendChild(row);
+  }
+}
+
+async function saveProject() {
+  const name = projName.value.trim();
+  if (!name) { setStatus("enter a project name", false); return; }
+  try {
+    const res = await POST("/projects/save", { name });
+    if (res && res.saved) { setStatus(`saved "${res.saved}"`, true); projName.value = ""; refreshProjectList(); }
+    else setStatus("save failed: " + ((res && res.error) || "?"), false);
+  } catch { setStatus("save failed", false); }
+}
+
+async function loadProject(name) {
+  try {
+    const res = await POST("/projects/load", { name });
+    if (res && res.loaded) { closeProjects(); setStatus(`loaded "${res.loaded}"`, true); }
+    else setStatus("load failed: " + ((res && res.error) || "?"), false);
+  } catch { setStatus("load failed", false); }
+  // grid refresh arrives via the "project" event (projectEpoch bump)
+}
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
@@ -595,6 +656,13 @@ async function boot() {
 
   // Digitakt export.
   exportBtn.addEventListener("click", triggerExport);
+
+  // Projects (save/load).
+  projectsBtn.addEventListener("click", openProjects);
+  projSaveBtn.addEventListener("click", saveProject);
+  projCloseEl.addEventListener("click", closeProjects);
+  projModal.addEventListener("click", (e) => { if (e.target === projModal) closeProjects(); });
+  projName.addEventListener("keydown", (e) => { if (e.key === "Enter") saveProject(); });
 
   // LFO panel controls.
   lfoShapeEl.addEventListener("change", () => sendLfo({ shape: lfoShapeEl.value }));
