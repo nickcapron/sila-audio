@@ -30,6 +30,36 @@ const PUT  = (p, b) => api("PUT", p, b);
 const POST = (p, b) => api("POST", p, b ?? null);
 const DEL  = (p)    => api("DELETE", p, null);
 
+// ── Tooltips ─────────────────────────────────────────────────────────────────
+// attachTip(el, html): a small themed tooltip after a short hover delay. `html`
+// is trusted (our own strings), shown above the element. Used to ID a control
+// and explain how it shapes the sound.
+let _tipEl = null, _tipTimer = null;
+function _hideTip() { clearTimeout(_tipTimer); if (_tipEl) _tipEl.classList.remove("show"); }
+function _showTip(el, html) {
+  if (!_tipEl) { _tipEl = document.createElement("div"); _tipEl.id = "tooltip"; document.body.appendChild(_tipEl); }
+  _tipEl.innerHTML = html;
+  const r = el.getBoundingClientRect();
+  const tw = _tipEl.offsetWidth, th = _tipEl.offsetHeight, vw = window.innerWidth;
+  // Centre on the control, but clamp horizontally so it never runs off an edge.
+  const cx = Math.max(tw / 2 + 4, Math.min(vw - tw / 2 - 4, r.left + r.width / 2));
+  _tipEl.style.left = Math.round(cx) + "px";
+  // Above by default; flip below when there isn't room (e.g. top-row knobs).
+  if (r.top - th - 10 > 4) {
+    _tipEl.style.top = Math.round(r.top - 8) + "px";
+    _tipEl.style.transform = "translate(-50%, -100%)";
+  } else {
+    _tipEl.style.top = Math.round(r.bottom + 8) + "px";
+    _tipEl.style.transform = "translate(-50%, 0)";
+  }
+  _tipEl.classList.add("show");
+}
+function attachTip(el, html) {
+  el.addEventListener("mouseenter", () => { _tipTimer = setTimeout(() => _showTip(el, html), 350); });
+  el.addEventListener("mouseleave", _hideTip);
+  el.addEventListener("mousedown", _hideTip);
+}
+
 const tracksEl   = document.getElementById("tracks");
 const ppqEl      = document.getElementById("ppq");
 const barBeatEl  = document.getElementById("barbeat");
@@ -90,7 +120,7 @@ const findTrack = (id) => project.tracks.find(t => t.id === id);
 // { el, set(v) } — set() updates the visual without firing onInput, and is a
 // no-op while the user is dragging this knob (so host-automation pushes don't
 // fight a drag). The cap shows the label, swapping to the live value while dragging.
-function makeKnob({ min, max, value, label, def, color, format, onInput, onChange, valueInCap }) {
+function makeKnob({ min, max, value, label, def, color, format, onInput, onChange, valueInCap, tip }) {
   const wrap = document.createElement("div");
   wrap.className = "knob-wrap";
   const knob = document.createElement("div");
@@ -140,6 +170,19 @@ function makeKnob({ min, max, value, label, def, color, format, onInput, onChang
     document.addEventListener("mouseup", onUp);
   });
   if (def !== undefined) knob.addEventListener("dblclick", () => { set(def, true); if (onChange) onChange(val); });
+
+  // Mouse wheel: fine adjust (~2% of range per notch). Commit (onChange) is
+  // debounced so wheeling doesn't spam; the cap flashes the value (non-cap mode).
+  let wheelCommit = null, capRevert = null;
+  knob.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    set(val + (e.deltaY < 0 ? 1 : -1) * (max - min) / 50, true);
+    if (!valueInCap) { cap.textContent = fmt(val); clearTimeout(capRevert); capRevert = setTimeout(() => { cap.textContent = label; }, 800); }
+    clearTimeout(wheelCommit);
+    wheelCommit = setTimeout(() => { if (onChange) onChange(val); }, 160);
+  }, { passive: false });
+
+  if (tip) attachTip(knob, tip);
 
   return { el: wrap, set: (v) => { if (!dragging) set(v, false); } };
 }
@@ -211,12 +254,16 @@ function renderTracks() {
     knobRow.className = "knob-row";
     const pct = v => Math.round(v * 100);
     const kVol = makeKnob({ min: 0, max: 1, value: track.volume ?? 1, label: "Vol", def: 1, format: pct,
+      tip: "<b>Volume</b> — output level of this track.",
       onInput: v => { track.volume = v; PUT(`/tracks/${track.id}/volume`, { volume: v }); } });
     const kCut = makeKnob({ min: 0, max: 1, value: track.cutoff ?? 1, label: "Cut", def: 1, format: pct,
+      tip: "<b>Cutoff</b> — filter frequency. Lower = darker/muffled.",
       onInput: v => { track.cutoff = v; PUT(`/tracks/${track.id}/cutoff`, { cutoff: v }); } });
     const kPan = makeKnob({ min: -1, max: 1, value: track.pan ?? 0, label: "Pan", def: 0, color: "v2", format: pct,
+      tip: "<b>Pan</b> — left / right position in the stereo field.",
       onInput: v => { track.pan = v; PUT(`/tracks/${track.id}/pan`, { pan: v }); } });
     const kRes = makeKnob({ min: 0, max: 1, value: track.resonance ?? 0, label: "Res", def: 0, color: "v2", format: pct,
+      tip: "<b>Resonance</b> — emphasis at the cutoff; high adds a whistle/peak.",
       onInput: v => { track.resonance = v; PUT(`/tracks/${track.id}/resonance`, { resonance: v }); } });
     knobRow.append(kVol.el, kCut.el, kPan.el, kRes.el);
     mix.appendChild(knobRow);
@@ -364,25 +411,35 @@ const curStep = () => findTrack(sel.trackId)?.steps[sel.idx];
 const inspKnobs = {};
 const INSP_KNOBS = [
   { id:"vel",   label:"Vel",     min:0,   max:127, def:100, fmt:v=>Math.round(v),
+    tip:"<b>Velocity</b> — how hard this step hits (louder / brighter).",
     read:s=>s.velocity ?? 100,                                write:(s,v)=>{ s.velocity = Math.round(v); } },
   { id:"prob",  label:"Prob",    min:0,   max:100, def:100, fmt:v=>Math.round(v)+"%",
+    tip:"<b>Probability</b> — chance this step fires on each pass.",
     read:s=>s.probability ?? 100,                             write:(s,v)=>{ s.probability = Math.round(v); } },
   { id:"micro", label:"Micro",   min:-23, max:23,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
+    tip:"<b>Micro-timing</b> — nudge this hit earlier / later than the grid.",
     read:s=>s.micro_timing ?? 0,                              write:(s,v)=>{ s.micro_timing = Math.round(v); } },
   { id:"pitch", label:"Pitch",   min:-24, max:24,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
+    tip:"<b>Pitch</b> — transpose this step in semitones.",
     read:s=>s.pitch_offset ?? 0,                              write:(s,v)=>{ s.pitch_offset = Math.round(v); } },
   { id:"cut",   label:"Cut",     min:0, max:1, def:1, color:"v2", fmt:v=>Math.round(v*100)+"%",
+    tip:"<b>Cutoff</b> — filter for this step (overrides the track). Lower = darker.",
     read:(s,t)=> (s.p_locks?.cutoff ?? t.cutoff ?? 1),        write:(s,v)=>{ (s.p_locks=s.p_locks||{}).cutoff = v; } },
   { id:"res",   label:"Res",     min:0, max:1, def:0, color:"v2", fmt:v=>Math.round(v*100)+"%",
+    tip:"<b>Resonance</b> — filter emphasis for this step; high adds a peak.",
     read:(s,t)=> (s.p_locks?.resonance ?? t.resonance ?? 0),  write:(s,v)=>{ (s.p_locks=s.p_locks||{}).resonance = v; } },
   { id:"ldep",  label:"LFO Dep", min:0, max:1, def:0, color:"v2", fmt:v=>Math.round(v*100)+"%",
+    tip:"<b>LFO Depth</b> — how far the LFO modulates, for this step.",
     read:(s,t)=> (s.p_locks?.lfo_depth ?? (t.lfo && t.lfo.depth) ?? 0), write:(s,v)=>{ (s.p_locks=s.p_locks||{}).lfo_depth = v; } },
   { id:"lrate", label:"LFO Hz",  min:0, max:1, def:0.435, color:"v2", fmt:v=>fmtHz(sliderToRate(v*100)),
+    tip:"<b>LFO Rate</b> — speed of the modulation, for this step.",
     read:(s,t)=> rateToSlider((s.p_locks && s.p_locks.lfo_rate) ?? (t.lfo && t.lfo.rate) ?? 1)/100,
     write:(s,v)=>{ (s.p_locks=s.p_locks||{}).lfo_rate = sliderToRate(v*100); } },
   { id:"start", label:"Start",   min:0, max:1, def:0, fmt:v=>Math.round(v*100)+"%",
+    tip:"<b>Sample Start</b> — trim where the sample begins, for this step.",
     read:s=> (s.p_locks?.start ?? 0),                         write:(s,v)=>{ (s.p_locks=s.p_locks||{}).start = v; } },
   { id:"end",   label:"End",     min:0, max:1, def:1, fmt:v=>Math.round(v*100)+"%",
+    tip:"<b>Sample End</b> — trim where the sample ends, for this step.",
     read:s=> (s.p_locks?.end ?? 1),                           write:(s,v)=>{ (s.p_locks=s.p_locks||{}).end = v; } },
 ];
 
@@ -392,7 +449,7 @@ function buildInspectorKnobs() {
   for (const p of INSP_KNOBS) {
     const k = makeKnob({
       min: p.min, max: p.max, value: p.def, label: p.label, def: p.def, color: p.color,
-      format: p.fmt, valueInCap: true,
+      format: p.fmt, valueInCap: true, tip: p.tip,
       onInput: v => { const s = curStep(); if (s) p.write(s, v); },
       onChange: () => { if (curStep()) saveSelectedStep(); }
     });
