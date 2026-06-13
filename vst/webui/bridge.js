@@ -86,16 +86,62 @@ function setStatus(msg, ok) {
 
 const findTrack = (id) => project.tracks.find(t => t.id === id);
 
-// A labeled channel-strip control cell (tiny uppercase caption above the slider).
-function mkCtl(labelText, input, purple) {
-  const c = document.createElement("div");
-  c.className = "ctl";
-  const lab = document.createElement("span");
-  lab.textContent = labelText;
-  if (purple) lab.className = "v2";
-  c.appendChild(lab);
-  c.appendChild(input);
-  return c;
+// Rotary knob: drag vertically to turn, double-click to reset to `def`. Returns
+// { el, set(v) } — set() updates the visual without firing onInput, and is a
+// no-op while the user is dragging this knob (so host-automation pushes don't
+// fight a drag). The cap shows the label, swapping to the live value while dragging.
+function makeKnob({ min, max, value, label, def, color, format, onInput, onChange, valueInCap }) {
+  const wrap = document.createElement("div");
+  wrap.className = "knob-wrap";
+  const knob = document.createElement("div");
+  knob.className = "knob" + (color === "v2" ? " v2" : "");
+  const ring = document.createElement("div"); ring.className = "knob-ring";
+  const face = document.createElement("div"); face.className = "knob-face";
+  const ind = document.createElement("div"); ind.className = "knob-ind"; ind.innerHTML = "<i></i>";
+  knob.append(ring, face, ind);
+  // valueInCap: name label above + the live value in the cap (inspector style).
+  // otherwise: label in the cap, value shown only while dragging (channel strip).
+  if (valueInCap) { const n = document.createElement("span"); n.className = "knob-name"; n.textContent = label; wrap.appendChild(n); }
+  wrap.appendChild(knob);
+  const cap = document.createElement("span"); cap.className = "knob-cap";
+  wrap.appendChild(cap);
+
+  const arc = color === "v2" ? "#8b6cf0" : "#34e3c4";
+  const fmt = format || (v => Math.round(v));
+  let val = value, dragging = false;
+  function paint() {
+    const norm = (val - min) / (max - min);
+    const deg = norm * 270;
+    ring.style.background = `conic-gradient(from 225deg, ${arc} 0deg ${deg}deg, #1c2836 ${deg}deg 270deg, transparent 270deg 360deg)`;
+    ind.style.transform = `rotate(${-135 + norm * 270}deg)`;
+    cap.textContent = valueInCap ? fmt(val) : label;
+  }
+  function set(v, fire) {
+    val = Math.max(min, Math.min(max, v));
+    paint();
+    if (fire && onInput) onInput(val);
+  }
+  paint();
+
+  knob.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    dragging = true;
+    const startY = e.clientY, startVal = val, span = max - min;
+    if (!valueInCap) cap.textContent = fmt(val);
+    const onMove = (ev) => { set(startVal + ((startY - ev.clientY) / 160) * span, true); if (!valueInCap) cap.textContent = fmt(val); };
+    const onUp = () => {
+      dragging = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      if (!valueInCap) cap.textContent = label;
+      if (onChange) onChange(val);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+  if (def !== undefined) knob.addEventListener("dblclick", () => { set(def, true); if (onChange) onChange(val); });
+
+  return { el: wrap, set: (v) => { if (!dragging) set(v, false); } };
 }
 
 // A step carries non-default params worth flagging with a dot.
@@ -161,26 +207,20 @@ function renderTracks() {
 
     const mix = document.createElement("div");
     mix.className = "track-mix";
-    const vol = document.createElement("input");
-    vol.type = "range"; vol.className = "vol"; vol.min = 0; vol.max = 100; vol.title = "volume";
-    vol.value = Math.round((track.volume ?? 1) * 100);
-    vol.addEventListener("input", () => { track.volume = vol.value / 100; });
-    vol.addEventListener("change", () => PUT(`/tracks/${track.id}/volume`, { volume: track.volume }));
-    const cut = document.createElement("input");
-    cut.type = "range"; cut.className = "cut"; cut.min = 0; cut.max = 100; cut.title = "filter cutoff";
-    cut.value = Math.round((track.cutoff ?? 1) * 100);
-    cut.addEventListener("input", () => { track.cutoff = cut.value / 100; });
-    cut.addEventListener("change", () => PUT(`/tracks/${track.id}/cutoff`, { cutoff: track.cutoff }));
-    const pan = document.createElement("input");
-    pan.type = "range"; pan.className = "pan"; pan.min = -100; pan.max = 100; pan.title = "pan (L–R)";
-    pan.value = Math.round((track.pan ?? 0) * 100);
-    pan.addEventListener("input", () => { track.pan = pan.value / 100; });
-    pan.addEventListener("change", () => PUT(`/tracks/${track.id}/pan`, { pan: track.pan }));
-    const res = document.createElement("input");
-    res.type = "range"; res.className = "res"; res.min = 0; res.max = 100; res.title = "filter resonance";
-    res.value = Math.round((track.resonance ?? 0) * 100);
-    res.addEventListener("input", () => { track.resonance = res.value / 100; });
-    res.addEventListener("change", () => PUT(`/tracks/${track.id}/resonance`, { resonance: track.resonance }));
+    const knobRow = document.createElement("div");
+    knobRow.className = "knob-row";
+    const pct = v => Math.round(v * 100);
+    const kVol = makeKnob({ min: 0, max: 1, value: track.volume ?? 1, label: "Vol", def: 1, format: pct,
+      onInput: v => { track.volume = v; PUT(`/tracks/${track.id}/volume`, { volume: v }); } });
+    const kCut = makeKnob({ min: 0, max: 1, value: track.cutoff ?? 1, label: "Cut", def: 1, format: pct,
+      onInput: v => { track.cutoff = v; PUT(`/tracks/${track.id}/cutoff`, { cutoff: v }); } });
+    const kPan = makeKnob({ min: -1, max: 1, value: track.pan ?? 0, label: "Pan", def: 0, color: "v2", format: pct,
+      onInput: v => { track.pan = v; PUT(`/tracks/${track.id}/pan`, { pan: v }); } });
+    const kRes = makeKnob({ min: 0, max: 1, value: track.resonance ?? 0, label: "Res", def: 0, color: "v2", format: pct,
+      onInput: v => { track.resonance = v; PUT(`/tracks/${track.id}/resonance`, { resonance: v }); } });
+    knobRow.append(kVol.el, kCut.el, kPan.el, kRes.el);
+    mix.appendChild(knobRow);
+
     const fmode = document.createElement("select");
     fmode.className = "fmode"; fmode.title = "filter mode";
     [["lowpass", "LP"], ["highpass", "HP"], ["bandpass", "BP"]].forEach(([v, t]) => {
@@ -188,12 +228,9 @@ function renderTracks() {
     });
     fmode.value = track.filter_mode || "lowpass";
     fmode.addEventListener("change", () => { track.filter_mode = fmode.value; PUT(`/tracks/${track.id}/filter_mode`, { mode: fmode.value }); });
-    // grid order: row1 = Vol, Cut ; row2 = Pan, Res ; row3 = filter mode (spans)
-    mix.appendChild(mkCtl("Vol", vol));
-    mix.appendChild(mkCtl("Cut", cut));
-    mix.appendChild(mkCtl("Pan", pan, true));
-    mix.appendChild(mkCtl("Res", res, true));
     mix.appendChild(fmode);
+
+    row._mix = { vol: kVol.set, cut: kCut.set, pan: kPan.set, res: kRes.set };
 
     const grid = document.createElement("div");
     grid.className = "step-grid";
@@ -319,6 +356,50 @@ async function resetStep(trackId, idx) {
 
 // ── Inspector ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
+const curStep = () => findTrack(sel.trackId)?.steps[sel.idx];
+
+// The per-step knobs (built once into #insp-knobs). Each descriptor reads its
+// value for the selected step (p-lock ?? track base) and writes it back; PUT
+// happens on release (onChange). Scalars live on the step; the rest are p-locks.
+const inspKnobs = {};
+const INSP_KNOBS = [
+  { id:"vel",   label:"Vel",     min:0,   max:127, def:100, fmt:v=>Math.round(v),
+    read:s=>s.velocity ?? 100,                                write:(s,v)=>{ s.velocity = Math.round(v); } },
+  { id:"prob",  label:"Prob",    min:0,   max:100, def:100, fmt:v=>Math.round(v)+"%",
+    read:s=>s.probability ?? 100,                             write:(s,v)=>{ s.probability = Math.round(v); } },
+  { id:"micro", label:"Micro",   min:-23, max:23,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
+    read:s=>s.micro_timing ?? 0,                              write:(s,v)=>{ s.micro_timing = Math.round(v); } },
+  { id:"pitch", label:"Pitch",   min:-24, max:24,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
+    read:s=>s.pitch_offset ?? 0,                              write:(s,v)=>{ s.pitch_offset = Math.round(v); } },
+  { id:"cut",   label:"Cut",     min:0, max:1, def:1, color:"v2", fmt:v=>Math.round(v*100)+"%",
+    read:(s,t)=> (s.p_locks?.cutoff ?? t.cutoff ?? 1),        write:(s,v)=>{ (s.p_locks=s.p_locks||{}).cutoff = v; } },
+  { id:"res",   label:"Res",     min:0, max:1, def:0, color:"v2", fmt:v=>Math.round(v*100)+"%",
+    read:(s,t)=> (s.p_locks?.resonance ?? t.resonance ?? 0),  write:(s,v)=>{ (s.p_locks=s.p_locks||{}).resonance = v; } },
+  { id:"ldep",  label:"LFO Dep", min:0, max:1, def:0, color:"v2", fmt:v=>Math.round(v*100)+"%",
+    read:(s,t)=> (s.p_locks?.lfo_depth ?? (t.lfo && t.lfo.depth) ?? 0), write:(s,v)=>{ (s.p_locks=s.p_locks||{}).lfo_depth = v; } },
+  { id:"lrate", label:"LFO Hz",  min:0, max:1, def:0.435, color:"v2", fmt:v=>fmtHz(sliderToRate(v*100)),
+    read:(s,t)=> rateToSlider((s.p_locks && s.p_locks.lfo_rate) ?? (t.lfo && t.lfo.rate) ?? 1)/100,
+    write:(s,v)=>{ (s.p_locks=s.p_locks||{}).lfo_rate = sliderToRate(v*100); } },
+  { id:"start", label:"Start",   min:0, max:1, def:0, fmt:v=>Math.round(v*100)+"%",
+    read:s=> (s.p_locks?.start ?? 0),                         write:(s,v)=>{ (s.p_locks=s.p_locks||{}).start = v; } },
+  { id:"end",   label:"End",     min:0, max:1, def:1, fmt:v=>Math.round(v*100)+"%",
+    read:s=> (s.p_locks?.end ?? 1),                           write:(s,v)=>{ (s.p_locks=s.p_locks||{}).end = v; } },
+];
+
+function buildInspectorKnobs() {
+  const grid = $("insp-knobs");
+  if (!grid) return;
+  for (const p of INSP_KNOBS) {
+    const k = makeKnob({
+      min: p.min, max: p.max, value: p.def, label: p.label, def: p.def, color: p.color,
+      format: p.fmt, valueInCap: true,
+      onInput: v => { const s = curStep(); if (s) p.write(s, v); },
+      onChange: () => { if (curStep()) saveSelectedStep(); }
+    });
+    inspKnobs[p.id] = k;
+    grid.appendChild(k.el);
+  }
+}
 
 // Clicking a track name selects the track (no step): surface its LFO + trimmer
 // panels without needing to click a step first.
@@ -345,19 +426,9 @@ function selectStep(trackId, idx) {
   $("insp-empty").style.display = "none";
   $("insp-fields").style.display = "block";   // explicit: "" would revert to the CSS display:none
 
-  $("i-vel").value   = step.velocity ?? 100;     $("iv-vel").textContent  = $("i-vel").value;
-  $("i-prob").value  = step.probability ?? 100;  $("iv-prob").textContent = $("i-prob").value + "%";
-  $("i-trig").value  = step.trig_condition || "always";
-  $("i-mt").value    = step.micro_timing ?? 0;   $("iv-mt").textContent   = fmtSigned($("i-mt").value);
-  $("i-cutoff").value = Math.round((pl.cutoff ?? track.cutoff ?? 1) * 100);   $("iv-cutoff").textContent = $("i-cutoff").value + "%";
-  $("i-res").value    = Math.round((pl.resonance ?? track.resonance ?? 0) * 100); $("iv-res").textContent = $("i-res").value + "%";
-  $("i-fmode").value = pl.filter_mode ?? track.filter_mode ?? "lowpass";
-  const _L = track.lfo || {};
-  $("i-lfo-depth").value = Math.round((pl.lfo_depth ?? _L.depth ?? 0) * 100); $("iv-lfo-depth").textContent = $("i-lfo-depth").value + "%";
-  const _lr = pl.lfo_rate ?? _L.rate ?? 1; $("i-lfo-rate").value = rateToSlider(_lr); $("iv-lfo-rate").textContent = fmtHz(_lr);
-  $("i-start").value = Math.round((pl.start ?? 0) * 100);   $("iv-start").textContent = $("i-start").value + "%";
-  $("i-end").value   = Math.round((pl.end ?? 1) * 100);     $("iv-end").textContent   = $("i-end").value + "%";
-  $("i-pitch").value = step.pitch_offset ?? 0;   $("iv-pitch").textContent = fmtSigned($("i-pitch").value);
+  for (const p of INSP_KNOBS) inspKnobs[p.id].set(p.read(step, track));
+  $("i-trig").value   = step.trig_condition || "always";
+  $("i-fmode").value  = pl.filter_mode ?? track.filter_mode ?? "lowpass";
   $("i-length").value = String(step.length ?? 0);   // 0 = ∞ one-shot (default)
 
   showTrimmer(trackId);   // trimmer follows the selected track's sample
@@ -367,25 +438,10 @@ function selectStep(trackId, idx) {
 const fmtSigned = (v) => (Number(v) > 0 ? "+" + v : String(v));
 
 function wireInspector() {
-  const cur = () => findTrack(sel.trackId)?.steps[sel.idx];
-
-  $("i-vel").addEventListener("input", () => { const s = cur(); if (!s) return; s.velocity = parseInt($("i-vel").value); $("iv-vel").textContent = s.velocity; });
-  $("i-prob").addEventListener("input", () => { const s = cur(); if (!s) return; s.probability = parseInt($("i-prob").value); $("iv-prob").textContent = s.probability + "%"; });
-  $("i-mt").addEventListener("input", () => { const s = cur(); if (!s) return; s.micro_timing = parseInt($("i-mt").value); $("iv-mt").textContent = fmtSigned(s.micro_timing); });
-  $("i-cutoff").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).cutoff = parseInt($("i-cutoff").value) / 100; $("iv-cutoff").textContent = $("i-cutoff").value + "%"; });
-  $("i-res").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).resonance = parseInt($("i-res").value) / 100; $("iv-res").textContent = $("i-res").value + "%"; });
-  $("i-lfo-depth").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).lfo_depth = parseInt($("i-lfo-depth").value) / 100; $("iv-lfo-depth").textContent = $("i-lfo-depth").value + "%"; });
-  $("i-lfo-rate").addEventListener("input", () => { const s = cur(); if (!s) return; const hz = sliderToRate(+$("i-lfo-rate").value); (s.p_locks = s.p_locks || {}).lfo_rate = hz; $("iv-lfo-rate").textContent = fmtHz(hz); });
-  $("i-pitch").addEventListener("input", () => { const s = cur(); if (!s) return; s.pitch_offset = parseInt($("i-pitch").value); $("iv-pitch").textContent = fmtSigned(s.pitch_offset); });
-  $("i-start").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).start = parseInt($("i-start").value) / 100; $("iv-start").textContent = $("i-start").value + "%"; });
-  $("i-end").addEventListener("input", () => { const s = cur(); if (!s) return; (s.p_locks = s.p_locks || {}).end = parseInt($("i-end").value) / 100; $("iv-end").textContent = $("i-end").value + "%"; });
-
-  // Commit (PUT) on release / change so we don't spam the bridge per pixel.
-  ["i-vel", "i-prob", "i-mt", "i-start", "i-end", "i-pitch", "i-cutoff", "i-res", "i-lfo-depth", "i-lfo-rate"].forEach(id =>
-    $(id).addEventListener("change", saveSelectedStep));
-  $("i-trig").addEventListener("change", () => { const s = cur(); if (s) { s.trig_condition = $("i-trig").value; saveSelectedStep(); } });
-  $("i-fmode").addEventListener("change", () => { const s = cur(); if (s) { (s.p_locks = s.p_locks || {}).filter_mode = $("i-fmode").value; saveSelectedStep(); } });
-  $("i-length").addEventListener("change", () => { const s = cur(); if (s) { s.length = parseFloat($("i-length").value); saveSelectedStep(); } });
+  buildInspectorKnobs();   // the per-step knobs (commit on release via onChange)
+  $("i-trig").addEventListener("change", () => { const s = curStep(); if (s) { s.trig_condition = $("i-trig").value; saveSelectedStep(); } });
+  $("i-fmode").addEventListener("change", () => { const s = curStep(); if (s) { (s.p_locks = s.p_locks || {}).filter_mode = $("i-fmode").value; saveSelectedStep(); } });
+  $("i-length").addEventListener("change", () => { const s = curStep(); if (s) { s.length = parseFloat($("i-length").value); saveSelectedStep(); } });
 }
 
 // ── Playhead (C++ -> UI) ────────────────────────────────────────────────────
@@ -639,13 +695,15 @@ function onParams(changed) {
     if (c.filter_mode !== undefined) t.filter_mode = c.filter_mode;
     const row = document.querySelector(`[data-track-id="${t.id}"]`);
     if (!row) continue;
-    // Don't fight a control the user is actively dragging.
-    const set = (sel, val) => { const el = row.querySelector(sel); if (el && el !== document.activeElement && val !== undefined) el.value = val; };
-    set(".vol", c.volume !== undefined ? Math.round(c.volume * 100) : undefined);
-    set(".pan", c.pan !== undefined ? Math.round(c.pan * 100) : undefined);
-    set(".cut", c.cutoff !== undefined ? Math.round(c.cutoff * 100) : undefined);
-    set(".res", c.resonance !== undefined ? Math.round(c.resonance * 100) : undefined);
-    set(".fmode", c.filter_mode);
+    // Knob.set() is a no-op while that knob is being dragged, so this won't fight.
+    if (row._mix) {
+      if (c.volume !== undefined)    row._mix.vol(c.volume);
+      if (c.cutoff !== undefined)    row._mix.cut(c.cutoff);
+      if (c.pan !== undefined)       row._mix.pan(c.pan);
+      if (c.resonance !== undefined) row._mix.res(c.resonance);
+    }
+    const fmEl = row.querySelector(".fmode");
+    if (fmEl && fmEl !== document.activeElement && c.filter_mode !== undefined) fmEl.value = c.filter_mode;
   }
 }
 

@@ -98,17 +98,32 @@
     #add-track { margin-top: 8px; background: transparent; color: var(--text-dim); border: 1px dashed var(--border); border-radius: var(--radius); padding: 6px 14px; font: inherit; font-size: 11px; letter-spacing: 1px; cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
     #add-track:hover { color: var(--accent); border-color: var(--accent); background: rgba(52,227,196,.04); }
     #add-track:disabled { opacity: .35; cursor: default; }
-    /* per-track channel strip: a small labeled mixer (vol/cut, pan/res, mode) */
+    /* per-track channel strip: rotary dials (vol/cut/pan/res) + filter mode */
     .track-mix {
-      display: grid; grid-template-columns: 80px 80px; gap: 6px 10px; flex-shrink: 0;
-      padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: var(--radius);
+      display: flex; flex-direction: column; gap: 7px; flex-shrink: 0;
+      padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: var(--radius);
     }
-    .ctl { display: flex; flex-direction: column; gap: 3px; }
-    .ctl > span { font-size: 8px; letter-spacing: 1.2px; color: var(--text-dim); text-transform: uppercase; }
-    .ctl > span.v2 { color: #6a5a9a; }
-    .track-mix input[type=range] { width: 80px; }
-    .track-mix .fmode { grid-column: 1 / -1; width: 100%; background: var(--bg); color: var(--text-dim);
+    .knob-row { display: flex; gap: 9px; }
+    .track-mix .fmode { width: 100%; background: var(--bg); color: var(--text-dim);
       border: 1px solid var(--border); border-radius: 4px; font: inherit; font-size: 10px; letter-spacing: .5px; padding: 3px; cursor: pointer; }
+    /* ── rotary knob (drag vertically; double-click resets) ── */
+    .knob-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 34px; }
+    .knob { width: 32px; height: 32px; border-radius: 50%; position: relative; cursor: ns-resize; flex-shrink: 0; }
+    .knob-ring { position: absolute; inset: 0; border-radius: 50%; }
+    .knob-face {
+      position: absolute; inset: 4px; border-radius: 50%;
+      background: radial-gradient(circle at 50% 32%, #2c3c50 0%, #131b27 78%);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,.08), 0 2px 5px rgba(0,0,0,.45);
+    }
+    .knob-ind { position: absolute; inset: 0; pointer-events: none; }
+    .knob-ind > i { position: absolute; left: 50%; top: 4px; transform: translateX(-50%); width: 2.5px; height: 7px; border-radius: 2px; background: #e8f3f5; box-shadow: 0 0 5px rgba(52,227,196,.6); }
+    .knob.v2 .knob-ind > i { box-shadow: 0 0 5px rgba(139,108,240,.65); }
+    .knob-cap { font-size: 8px; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; font-variant-numeric: tabular-nums; }
+    .knob-name { font-size: 8px; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; text-align: center; }
+    /* inspector knob grid (value shown in the cap, name above) */
+    .knob-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px 2px; margin-bottom: 16px; }
+    .knob-grid .knob-wrap { width: 100%; gap: 2px; }
+    .knob-grid .knob-cap { color: var(--accent-2); font-size: 10px; }
     .step-grid { display: flex; gap: 4px; }
     .step {
       width: 30px; height: 30px; border-radius: 5px; background: var(--step-off);
@@ -292,14 +307,7 @@
       <div id="insp-empty">Select a step to edit its velocity, probability, trig condition, micro-timing and sample slice.</div>
 
       <div id="insp-fields">
-        <div class="field">
-          <div class="row"><label>Velocity</label><span class="fv" id="iv-vel">100</span></div>
-          <input type="range" id="i-vel" min="0" max="127" value="100">
-        </div>
-        <div class="field">
-          <div class="row"><label>Probability</label><span class="fv" id="iv-prob">100%</span></div>
-          <input type="range" id="i-prob" min="0" max="100" value="100">
-        </div>
+        <div id="insp-knobs" class="knob-grid"></div>
         <div class="field">
           <div class="row"><label>Trig condition</label></div>
           <select id="i-trig">
@@ -311,44 +319,12 @@
           </select>
         </div>
         <div class="field">
-          <div class="row"><label>Micro-timing</label><span class="fv" id="iv-mt">0</span></div>
-          <input type="range" id="i-mt" min="-23" max="23" value="0">
-        </div>
-        <div class="field">
-          <div class="row"><label>Cutoff</label><span class="fv" id="iv-cutoff">100%</span></div>
-          <input type="range" id="i-cutoff" min="0" max="100" value="100">
-        </div>
-        <div class="field">
-          <div class="row"><label>Resonance</label><span class="fv" id="iv-res">0%</span></div>
-          <input type="range" id="i-res" min="0" max="100" value="0">
-        </div>
-        <div class="field">
           <div class="row"><label>Filter Mode</label></div>
           <select id="i-fmode">
             <option value="lowpass">Low-pass</option>
             <option value="highpass">High-pass</option>
             <option value="bandpass">Band-pass</option>
           </select>
-        </div>
-        <div class="field">
-          <div class="row"><label>LFO Depth</label><span class="fv" id="iv-lfo-depth">0%</span></div>
-          <input type="range" id="i-lfo-depth" min="0" max="100" value="0">
-        </div>
-        <div class="field">
-          <div class="row"><label>LFO Rate</label><span class="fv" id="iv-lfo-rate">1.0 Hz</span></div>
-          <input type="range" id="i-lfo-rate" min="0" max="100" value="50">
-        </div>
-        <div class="field">
-          <div class="row"><label>Sample start</label><span class="fv" id="iv-start">0%</span></div>
-          <input type="range" id="i-start" min="0" max="100" value="0">
-        </div>
-        <div class="field">
-          <div class="row"><label>Sample end</label><span class="fv" id="iv-end">100%</span></div>
-          <input type="range" id="i-end" min="0" max="100" value="100">
-        </div>
-        <div class="field">
-          <div class="row"><label>Pitch</label><span class="fv" id="iv-pitch">0</span></div>
-          <input type="range" id="i-pitch" min="-24" max="24" value="0">
         </div>
         <div class="field">
           <div class="row"><label>Length</label></div>
