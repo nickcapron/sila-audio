@@ -202,7 +202,7 @@ function renderTracks() {
       cell.dataset.stepIdx = idx;
       paintCell(cell, track.id, idx, step);
       cell.onclick = () => { toggleStep(track.id, idx); selectStep(track.id, idx); };
-      cell.oncontextmenu = (e) => { e.preventDefault(); selectStep(track.id, idx); };
+      cell.oncontextmenu = (e) => { e.preventDefault(); resetStep(track.id, idx); };
       grid.appendChild(cell);
     });
 
@@ -296,6 +296,25 @@ async function toggleSolo(trackId) {
   project.tracks.forEach(t => { t.solo = (t.id === trackId) ? !!res.solo : t.solo; });
   if (!res.any_solo) project.tracks.forEach(t => { t.solo = false; });
   renderTracks();
+}
+
+// Right-click a step: wipe its p-locks + per-step tweaks back to a plain step
+// (keeps the on/off state), then select it so the inspector shows the defaults.
+async function resetStep(trackId, idx) {
+  const track = findTrack(trackId);
+  const step = track && track.steps[idx];
+  if (!step) return;
+  step.velocity = 100;
+  step.pitch_offset = 0;
+  step.probability = 100;
+  step.trig_condition = "always";
+  step.length = 0;          // ∞ one-shot (default)
+  step.micro_timing = 0;
+  step.p_locks = {};        // clears start/end/cutoff/resonance/lfo/filter_mode
+  repaintCell(trackId, idx);
+  selectStep(trackId, idx); // select + refresh the inspector to the reset values
+  await PUT(`/tracks/${trackId}/steps/${idx}`, { step });
+  setStatus("step reset", true);
 }
 
 // ── Inspector ───────────────────────────────────────────────────────────────
