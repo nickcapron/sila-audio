@@ -41,6 +41,22 @@ struct TrigEvent
     bool     lfoSync        = true;
 };
 
+// Digitakt Song Mode (Phase 6). The active row/repeat/step is a PURE FUNCTION of
+// the absolute transport position (resolveSong walks the row prefix-sums) — no
+// audio-thread mutation, so a host loop/seek relocates exactly. The processor
+// derives this each block/boundary and feeds it to forEachTrigSong.
+struct SongPosition
+{
+    bool     valid       = false;   // false => no song authored => fall back to pattern mode
+    bool     stopped     = false;   // past the last row with SongEnd::Stop (hold silent)
+    int      row         = 0;       // active row index
+    long     repeat      = 0;       // completed repeats of this row (drives A:B trig conditions)
+    long     rowStep     = 0;       // step within the current repeat (0..rowLength-1)
+    int      patternSlot = 0;       // PTN — which PatternBank slot this row plays
+    uint8_t  mutes       = 0;       // row MUTE mask (authoritative in song mode)
+    float    tempo       = 0.0f;    // row BPM override (<= 0 = global); applied in Standalone only
+};
+
 class Sequencer
 {
 public:
@@ -89,25 +105,65 @@ public:
                 continue;
 
             TrigEvent ev;
-            ev.track       = &track;
-            ev.trackIndex  = ti;
-            ev.stepIndex   = (int) idx;
-            ev.velocity    = step.velocity;
-            ev.pitchOffset = step.pitchOffset;
-            ev.length      = step.length;
-            ev.microTiming = step.microTiming;
-            ev.pStart      = step.pStart;
-            ev.pEnd        = step.pEnd;
-            // Filter p-locks pass through; the processor resolves vs the APVTS base.
-            ev.pCutoff     = step.pCutoff;
-            ev.pResonance  = step.pResonance;
-            ev.pFilterMode = step.pFilterMode;
-            // Resolve LFO: depth/rate are p-lockable; shape/dest/sync track-level.
-            ev.lfoShape    = track.lfoShape;
-            ev.lfoDest     = track.lfoDest;
-            ev.lfoRate     = step.pLfoRate.value_or (track.lfoRate);
-            ev.lfoDepth    = step.pLfoDepth.value_or (track.lfoDepth);
-            ev.lfoSync     = track.lfoSync;
+            fillTrigEvent (ev, track, ti, idx, step);
+            fn (ev);
+        }
+    }
+
+    // Song Mode (Phase 6) evaluation. The position (which slot/step/repeat/mutes)
+    // is already resolved by resolveSong — this just gates + fires. Row mutes are
+    // AUTHORITATIVE (they replace track mutes); solo still applies; the row repeat
+    // index drives A:B trig conditions. Same zero-allocation contract as
+    // forEachTrig: keep `fn`'s capture small; `project` must outlive the call.
+    template <typename Fn>
+    void forEachTrigSong (const Project& project, const SongPosition& song,
+                          bool fillActive, Fn&& fn)
+    {
+        if (! song.valid || song.stopped)
+            return;
+
+        bool anySolo = false;
+        for (auto& t : project.tracks)
+            if (t.solo) { anySolo = true; break; }
+
+        // The active slot's per-track step vectors (parallel to tracks; an empty
+        // per-track entry falls back to the track's live steps).
+        const auto& slot = (song.patternSlot >= 0 && song.patternSlot < PatternBank::kNumSlots)
+                               ? project.patternBank.slots[(size_t) song.patternSlot]
+                               : project.patternBank.slots[0];
+
+        int trackIndex = 0;
+        for (auto& track : project.tracks)
+        {
+            const int ti = trackIndex++;
+
+            // Row MUTE is authoritative in song mode (overrides track.muted).
+            if (song.mutes & (1u << (ti & 7)))
+                continue;
+            if (anySolo && ! track.solo)
+                continue;
+
+            const std::vector<Step>& steps =
+                (ti < (int) slot.size() && ! slot[(size_t) ti].empty()) ? slot[(size_t) ti]
+                                                                        : track.steps;
+            const int stepCount = (int) steps.size();
+            if (stepCount <= 0)
+                continue;
+
+            // The pattern wraps inside the row (rowStep can exceed pattern length),
+            // preserving per-track polyrhythm; the row length governs advancement.
+            const long idx = ((song.rowStep % stepCount) + stepCount) % stepCount;
+            const Step& step = steps[(size_t) idx];
+
+            if (! step.active)
+                continue;
+            if (! trigConditionPasses (step, song.repeat, fillActive))   // iteration = row repeat
+                continue;
+            if (! probabilityPasses (step.probability))
+                continue;
+
+            TrigEvent ev;
+            fillTrigEvent (ev, track, ti, idx, step);
             fn (ev);
         }
     }
@@ -117,9 +173,19 @@ public:
     // Public so the processor can publish it as transport status. (Phase 3b.)
     static int  resolveSongSlot (const Project&, long absSixteenth, bool songMode);
 
+    // Resolve the Digitakt song position at an absolute 16th index by walking the
+    // active song's row prefix-sums (<=99 rows, integer-only, allocation-free).
+    // songSixteenth is the absolute transport 16th (= host position since 0). The
+    // result is a pure function of position, so a DAW loop/seek relocates exactly.
+    static SongPosition resolveSong (const Project&, long songSixteenth);
+
 private:
     static bool trigConditionPasses (const Step&, long iteration, bool fillActive);
     bool        probabilityPasses (int probability);
+
+    // Build a TrigEvent from a fired step (p-locks + LFO resolution). Shared by
+    // both pattern mode and song mode so the two paths can never drift.
+    static void fillTrigEvent (TrigEvent&, const Track&, int trackIndex, long stepIndex, const Step&);
 
     // Song mode (Phase 3b): derived from the absolute position — no allocation
     // or mutation, safe to call on the audio thread.

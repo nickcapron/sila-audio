@@ -14,7 +14,7 @@
 // part of this; the editor layers them onto the GET /project payload itself.
 namespace sila::engine
 {
-constexpr int kProjectSchemaVersion = 1;
+constexpr int kProjectSchemaVersion = 2;   // v2 adds `songs` (Digitakt Song Mode)
 
 // Step / trig.
 juce::var      stepToVar (const Step&);
@@ -28,6 +28,13 @@ std::vector<SampleRef> parseSampleLayers (const juce::var& samplesArray);
 // Track (includes UI-friendly id/name/muted/solo/step_count + steps + samples).
 juce::var trackToVar (const Track&);
 Track     trackFromVar (const juce::var&);
+
+// Song Mode (Phase 6). Exposed so the editor bridge can serve/parse a single
+// song for the song-edit routes without round-tripping the whole project.
+juce::var  songRowToVar (const SongRow&);
+SongRow    songRowFromVar (const juce::var&);
+juce::var  songToVar (const Song&);
+Song       songFromVar (const juce::var&);
 
 // Full structural project: { schema_version, tracks, song_chain, pattern_bank }.
 juce::var projectToVar (const Project&);

@@ -65,6 +65,11 @@ public:
     std::atomic<double> currentBpm       { kDefaultBpm };
     std::atomic<int>    currentSongSlot  { -1 };   // -1 = song mode off / not playing
 
+    // Song Mode playhead (Phase 6), published once per block for the song-edit UI.
+    // currentSongSlot above carries the active row's pattern slot in song mode.
+    std::atomic<int>    currentSongRow    { -1 };  // -1 = not in a song
+    std::atomic<int>    currentSongRepeat { 0 };
+
     // Bumped whenever a whole new Project is published (DAW state load). The
     // editor polls this on its timer to re-fetch GET /project — keeps the
     // processor decoupled from the editor (no cross-thread listener).
@@ -205,6 +210,13 @@ private:
     std::atomic<float>* pCutoff[kMaxTracks] {};
     std::atomic<float>* pRes[kMaxTracks]    {};
     std::atomic<float>* pFmode[kMaxTracks]  {};
+
+    // Cached pointers for the global params too — same rationale as the slot bank:
+    // processBlock reads these every block, so resolve the string keys once here.
+    std::atomic<float>* pSwing        = nullptr;
+    std::atomic<float>* pSongMode     = nullptr;
+    std::atomic<float>* pMasterVol    = nullptr;
+    std::atomic<float>* pSmallSpeaker = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessor)
 };

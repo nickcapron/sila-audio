@@ -19,6 +19,12 @@ SilaAudioProcessor::SilaAudioProcessor()
         pRes[s]    = apvts.getRawParameterValue (pfx + "res");
         pFmode[s]  = apvts.getRawParameterValue (pfx + "fmode");
     }
+
+    // Same caching for the globals — read every block, so look the keys up once.
+    pSwing        = apvts.getRawParameterValue ("swing");
+    pSongMode     = apvts.getRawParameterValue ("songMode");
+    pMasterVol    = apvts.getRawParameterValue ("masterVol");
+    pSmallSpeaker = apvts.getRawParameterValue ("smallSpeaker");
 }
 
 SilaAudioProcessor::~SilaAudioProcessor() = default;
@@ -392,7 +398,24 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         steps16 ({ 2, 6, 10, 14 }, 80),                      // offbeat hats
     };
 
-    proj->songChain = { 0, 1, 0, 2 };    // A B A C, one bar each (active slot gated by songMode param)
+    proj->songChain = { 0, 1, 0, 2 };    // legacy Phase 3b chain (kept for back-compat)
+
+    // Song Mode (Phase 6) demo arrangement so row-by-row playback is audible
+    // without a UI. Rows reference the slots authored above; ↺ = repeat, +I = row
+    // length in steps, MUTE = per-slot bitmask (kick=0, snare=1, hat=2).
+    {
+        using namespace sila::engine;
+        Song song;
+        song.name = "Demo Song";
+        song.end  = SongEnd::Loop;
+        //                  LABEL     PTN ↺  +I  BPM   MUTE
+        song.rows.push_back ({ "INTRO",  0, 2, 16, 0.0f, (uint8_t) (1u << 1) }); // base groove, snare muted
+        song.rows.push_back ({ "VERSE",  1, 2, 16, 0.0f, 0 });                   // variation
+        song.rows.push_back ({ "FILL",   2, 1, 16, 0.0f, (uint8_t) (1u << 2) }); // snare roll, hat muted
+        song.rows.push_back ({ "CHORUS", 1, 2, 16, 0.0f, 0 });                   // back to variation
+        proj->songs.push_back (std::move (song));
+        proj->activeSong = 0;
+    }
 
     // Publish the matching sampler bank (parallel to proj->tracks by index).
     liveSamplers.store (std::make_shared<const SamplerBank> (std::move (*samplerBank)),
@@ -435,24 +458,35 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // One atomic load of the immutable snapshot for the whole block (RCU read).
     const ProjectPtr proj = snapshot();
 
-    // Live performance scalars from the automatable params / atomics.
-    const auto* swParam = apvts.getRawParameterValue ("swing");
-    const auto* smParam = apvts.getRawParameterValue ("songMode");
-    const float swing      = swParam != nullptr ? swParam->load() : 0.0f;
-    const bool  songMode   = smParam != nullptr && smParam->load() > 0.5f;
+    // Live performance scalars from the automatable params (cached atomic ptrs).
+    const float swing      = pSwing    != nullptr ? pSwing->load()    : 0.0f;
+    const bool  songMode   = pSongMode != nullptr && pSongMode->load() > 0.5f;
     const bool  fill       = fillActive.load (std::memory_order_relaxed);
 
-    // Publish the transport position + status for the editor (C++ -> UI). The
-    // active song slot is a pure function of position (-1 when off/stopped).
+    // Resolve the Song Mode position at the block start (a pure function of the
+    // transport 16th — see Sequencer::resolveSong). Used for the row-tempo
+    // override and the UI playhead; the per-boundary firing re-derives it too.
+    sila::engine::SongPosition blockSong;
+    if (proj != nullptr && playing && songMode)
+    {
+        const long absStart = (long) std::floor (ppqStart * 4.0 + 1e-9);
+        blockSong = sila::engine::Sequencer::resolveSong (*proj, absStart);
+
+        // Row BPM override is Standalone-only — a host owns the tempo/timeline, so
+        // overriding there would fight the DAW grid. Sub-block row-boundary tempo
+        // changes are clamped to the next block (same as sub-block swing).
+        if (wrapperType == wrapperType_Standalone
+            && blockSong.valid && ! blockSong.stopped && blockSong.tempo > 0.0f)
+            bpm = (double) blockSong.tempo;
+    }
+
+    // Publish the transport position + status for the editor (C++ -> UI).
     currentPpq.store (ppqStart, std::memory_order_relaxed);
     transportPlaying.store (playing, std::memory_order_relaxed);
     currentBpm.store (bpm, std::memory_order_relaxed);
-    {
-        const long absSixteenth = (long) std::floor (ppqStart * 4.0 + 1e-9);
-        const int  slot = (proj != nullptr && playing && songMode)
-                            ? sequencer.resolveSongSlot (*proj, absSixteenth, songMode) : -1;
-        currentSongSlot.store (slot, std::memory_order_relaxed);
-    }
+    currentSongSlot.store   (blockSong.valid ? blockSong.patternSlot : -1, std::memory_order_relaxed);
+    currentSongRow.store    (blockSong.valid ? blockSong.row : -1, std::memory_order_relaxed);
+    currentSongRepeat.store (blockSong.valid ? (int) blockSong.repeat : 0, std::memory_order_relaxed);
 
     if (proj != nullptr && playing && bpm > 0.0)
     {
@@ -494,11 +528,9 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // Tails keep ringing even when stopped, so always render + master.
     mixer.renderInto (buffer, trackMix);
 
-    const auto* masterVolParam   = apvts.getRawParameterValue ("masterVol");
-    const auto* smallSpeakerParam = apvts.getRawParameterValue ("smallSpeaker");
-    jassert (masterVolParam != nullptr && smallSpeakerParam != nullptr);
-    const float masterVol    = masterVolParam   != nullptr ? masterVolParam->load() : 1.0f;
-    const bool  smallSpeaker = smallSpeakerParam != nullptr && smallSpeakerParam->load() > 0.5f;
+    jassert (pMasterVol != nullptr && pSmallSpeaker != nullptr);
+    const float masterVol    = pMasterVol    != nullptr ? pMasterVol->load() : 1.0f;
+    const bool  smallSpeaker = pSmallSpeaker != nullptr && pSmallSpeaker->load() > 0.5f;
     mixer.applyMaster (buffer, smallSpeaker, masterVol);
 }
 
@@ -522,18 +554,13 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
     if (bank == nullptr)
         return;
 
-    long idx = (long) std::ceil (sixteenthStart - 1e-9);
-    for (;;)
-    {
-        const double offset = (idx - sixteenthStart) * samplesPer16;
-        if (offset >= numSamples)
-            break;
-        if (offset >= 0.0 && idx > lastFiredSixteenth)
-        {
-            lastFiredSixteenth = idx;
-            const long absIdx = idx;
+    // Loop-varying boundary state, read by spawn() below. The voice-spawn body is
+    // defined ONCE here so the song-mode and pattern-mode branches share it (no
+    // duplication, identical DSP resolution in both).
+    double offset = 0.0;
+    long   absIdx = 0;
 
-            sequencer.forEachTrig (proj, absIdx, songMode, fill, [&] (const sila::engine::TrigEvent& ev)
+    auto spawn = [&] (const sila::engine::TrigEvent& ev)
             {
                 if (ev.trackIndex < 0 || ev.trackIndex >= (int) bank->size())
                     return;
@@ -617,16 +644,43 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 const bool lpOpen    = fmode == sila::engine::FilterMode::LowPass && cutoff >= 0.999f;
                 if (! lpOpen || lfoCutoff)
                 {
-                    v.filterOn   = true;
-                    v.filterMode = (int) fmode;
-                    sila::engine::bakeSvf (v, cutoff, reso, sampleRate);
+                    v.filterOn = true;
+                    v.svf.mode = fmode;
+                    v.svf.bake (cutoff, reso, sampleRate);
                 }
 
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends
                                        // (an RCU bank swap must not free a buffer a
                                        // ringing voice still points into)
                 mixer.addVoice (v);
-            });
+            };
+
+    long idx = (long) std::ceil (sixteenthStart - 1e-9);
+    for (;;)
+    {
+        offset = (idx - sixteenthStart) * samplesPer16;
+        if (offset >= numSamples)
+            break;
+        if (offset >= 0.0 && idx > lastFiredSixteenth)
+        {
+            lastFiredSixteenth = idx;
+            absIdx = idx;
+
+            // Song Mode derives the row / step / mutes from the absolute position
+            // (Sequencer::resolveSong) and fires that pattern slot; if no song is
+            // authored it falls back to plain pattern playback for this boundary.
+            if (songMode)
+            {
+                const auto sp = sila::engine::Sequencer::resolveSong (proj, absIdx);
+                if (sp.valid)
+                    sequencer.forEachTrigSong (proj, sp, fill, spawn);
+                else
+                    sequencer.forEachTrig (proj, absIdx, false, fill, spawn);
+            }
+            else
+            {
+                sequencer.forEachTrig (proj, absIdx, false, fill, spawn);
+            }
         }
         ++idx;
     }

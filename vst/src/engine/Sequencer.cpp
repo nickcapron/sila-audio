@@ -66,4 +66,85 @@ const std::vector<Step>& Sequencer::resolveSteps (const Project& project, const 
     }
     return track.steps;
 }
+
+// Shared TrigEvent builder (pattern mode + song mode). Copies the raw step fields
+// + p-lock optionals through; the processor resolves them against the APVTS base.
+void Sequencer::fillTrigEvent (TrigEvent& ev, const Track& track, int trackIndex,
+                               long stepIndex, const Step& step)
+{
+    ev.track       = &track;
+    ev.trackIndex  = trackIndex;
+    ev.stepIndex   = (int) stepIndex;
+    ev.velocity    = step.velocity;
+    ev.pitchOffset = step.pitchOffset;
+    ev.length      = step.length;
+    ev.microTiming = step.microTiming;
+    ev.pStart      = step.pStart;
+    ev.pEnd        = step.pEnd;
+    // Filter p-locks pass through; the processor resolves vs the APVTS base.
+    ev.pCutoff     = step.pCutoff;
+    ev.pResonance  = step.pResonance;
+    ev.pFilterMode = step.pFilterMode;
+    // Resolve LFO: depth/rate are p-lockable; shape/dest/sync track-level.
+    ev.lfoShape    = track.lfoShape;
+    ev.lfoDest     = track.lfoDest;
+    ev.lfoRate     = step.pLfoRate.value_or (track.lfoRate);
+    ev.lfoDepth    = step.pLfoDepth.value_or (track.lfoDepth);
+    ev.lfoSync     = track.lfoSync;
+}
+
+// Walk the active song's rows, summing each row's span (length * repeat) in 16ths,
+// to find which row/repeat/step the absolute position lands in. Pure function of
+// position (no mutation), <=99 iterations, integer-only — safe on the audio thread
+// and exactly seek/loop-relocatable.
+SongPosition Sequencer::resolveSong (const Project& project, long songSixteenth)
+{
+    SongPosition out;
+    if (project.songs.empty())
+        return out;                                   // valid stays false => pattern fallback
+
+    const int si = juce::jlimit (0, (int) project.songs.size() - 1, project.activeSong);
+    const Song& song = project.songs[(size_t) si];
+    if (song.rows.empty())
+        return out;
+
+    // Total span of the whole song, in 16ths.
+    long total = 0;
+    for (const auto& r : song.rows)
+        total += (long) r.length * (long) r.repeat;
+    if (total <= 0)
+        return out;
+
+    long pos = songSixteenth < 0 ? 0 : songSixteenth;
+    if (song.end == SongEnd::Loop)
+    {
+        pos %= total;                                 // wrap to the top
+    }
+    else if (pos >= total)                            // Stop: past the end => hold silent
+    {
+        out.valid   = true;
+        out.stopped = true;
+        out.row     = (int) song.rows.size() - 1;
+        return out;
+    }
+
+    for (int r = 0; r < (int) song.rows.size(); ++r)
+    {
+        const SongRow& row = song.rows[(size_t) r];
+        const long span = (long) row.length * (long) row.repeat;
+        if (pos < span)
+        {
+            out.valid       = true;
+            out.row         = r;
+            out.repeat      = pos / row.length;
+            out.rowStep     = pos % row.length;
+            out.patternSlot = row.patternSlot;
+            out.mutes       = row.mutes;
+            out.tempo       = row.tempo;
+            return out;
+        }
+        pos -= span;
+    }
+    return out;   // unreachable (pos < total guarantees a hit) — defensive
+}
 } // namespace sila::engine

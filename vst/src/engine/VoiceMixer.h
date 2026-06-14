@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
+#include "engine/Project.h"   // FilterMode (the SVF output tap)
 #include <vector>
 #include <memory>
 
@@ -14,10 +15,37 @@ namespace sila::engine
 {
 struct Voice;   // fwd
 
-// Compute + store the TPT-SVF coefficients (a1/a2/a3 + k) on a voice from cutoff
-// (0..1) / resonance (0..1). Mode-independent — the output tap (LP/HP/BP) is
-// chosen at render. Shared by the trigger bake and the LFO control-rate update.
-void bakeSvf (Voice& v, float cutoff, float resonance, double sampleRate);
+// Self-contained Trapezoidal TPT (zero-delay-feedback) state-variable filter
+// (Andrew Simper / Cytomic). bake() is called once per trigger (and re-baked at
+// LFO control rate); only process() runs per sample — ~10 mul/add, unconditionally
+// stable at any cutoff/Q. The same integrator state yields LP/HP/BP via `mode`.
+struct TptSvf
+{
+    FilterMode mode = FilterMode::LowPass;            // output tap
+    float a1 = 0.0f, a2 = 0.0f, a3 = 0.0f, k = 0.0f;  // baked coeffs
+    float ic1eq = 0.0f, ic2eq = 0.0f;                 // integrator state
+
+    // Compute coeffs from cutoff (0..1, log-mapped 20 Hz..~open) and resonance
+    // (0..1 -> Q 0.5..20). Mode-independent — the tap is chosen in process().
+    void bake (float cutoff, float resonance, double sampleRate);
+
+    // One sample: advance the two integrators, return the selected tap.
+    float process (float x)
+    {
+        const float v3 = x - ic2eq;
+        const float v1 = a1 * ic1eq + a2 * v3;
+        const float v2 = ic2eq + a2 * ic1eq + a3 * v3;
+        ic1eq = 2.0f * v1 - ic1eq;
+        ic2eq = 2.0f * v2 - ic2eq;
+        switch (mode)
+        {
+            case FilterMode::HighPass: return x - k * v1 - v2;
+            case FilterMode::BandPass: return v1;
+            case FilterMode::LowPass:  break;
+        }
+        return v2;
+    }
+};
 
 // Per-track mixer params, recomputed each block from the snapshot and looked up
 // by Voice.trackIndex — so volume/pan apply CONTINUOUSLY (a fader/pan move
@@ -44,14 +72,12 @@ struct Voice
     int   gateSamples = 0;
     int   elapsed     = 0;
 
-    // Per-voice TPT (zero-delay-feedback) state-variable lowpass. Coeffs baked at
-    // trigger from the (p-locked) cutoff/resonance; only the integrator ticks per
-    // sample. filterOn=false => bypassed (zero cost). Own state => the tail rings
-    // at this voice's cutoff even when a later step opens a brighter voice.
-    bool  filterOn = false;
-    int   filterMode = 0;     // FilterMode (LP/HP/BP) — selects the SVF output tap
-    float svfA1 = 0.0f, svfA2 = 0.0f, svfA3 = 0.0f, svfK = 0.0f;
-    float ic1eq = 0.0f, ic2eq = 0.0f;
+    // Per-voice TPT state-variable filter. Coeffs baked at trigger from the
+    // (p-locked) cutoff/resonance; only the integrator ticks per sample.
+    // filterOn=false => bypassed (zero cost). Own state => the tail rings at this
+    // voice's cutoff even when a later step opens a brighter voice.
+    bool   filterOn = false;
+    TptSvf svf;
 
     // Base (pre-LFO) values the LFO retargets at control rate (volume/rate also
     // double as the live values when the LFO doesn't target them).
@@ -99,6 +125,9 @@ private:
     // (recompute SVF coeffs / set gain / set rate), advance phase a control block.
     void updateVoiceLfo (Voice& v);
 
+    // Audio-thread voice pool. reserve()d in prepare() so steady-state addVoice()
+    // never reallocates; a transient burst past this still grows correctly.
+    static constexpr int kMaxVoices = 512;
     std::vector<Voice> voices;
     double sampleRate { 48000.0 };
     juce::Random rng;                  // sample-and-hold random source (audio thread only)

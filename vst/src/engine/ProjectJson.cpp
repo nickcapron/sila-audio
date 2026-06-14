@@ -273,6 +273,58 @@ static void patternBankFromVar (PatternBank& bank, const juce::var& v)
     }
 }
 
+// ── Song Mode (Phase 6) ────────────────────────────────────────────────────
+juce::var songRowToVar (const SongRow& r)
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("label",        r.label);
+    o->setProperty ("pattern_slot", r.patternSlot);
+    o->setProperty ("repeat",       r.repeat);
+    o->setProperty ("length",       r.length);
+    o->setProperty ("tempo",        (double) r.tempo);   // <= 0 => use global tempo
+    o->setProperty ("mutes",        (int) r.mutes);       // 8-bit mask, one bit per track slot
+    return juce::var (o);
+}
+
+SongRow songRowFromVar (const juce::var& v)
+{
+    SongRow r;
+    if (! v.isObject()) return r;
+    r.label       = v.getProperty ("label", juce::String()).toString();
+    r.patternSlot = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) v.getProperty ("pattern_slot", 0));
+    r.repeat      = juce::jlimit (1, 32,   (int) v.getProperty ("repeat", 1));
+    r.length      = juce::jlimit (2, 1024, (int) v.getProperty ("length", 16));
+    r.tempo       = (float) (double) v.getProperty ("tempo", 0.0);
+    r.mutes       = (uint8_t) ((int) v.getProperty ("mutes", 0) & 0xFF);
+    return r;
+}
+
+juce::var songToVar (const Song& s)
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("name", s.name);
+    o->setProperty ("end",  juce::String (s.end == SongEnd::Stop ? "stop" : "loop"));
+    juce::Array<juce::var> rows;
+    for (const auto& r : s.rows) rows.add (songRowToVar (r));
+    o->setProperty ("rows", rows);
+    return juce::var (o);
+}
+
+Song songFromVar (const juce::var& v)
+{
+    Song s;
+    if (! v.isObject()) return s;
+    s.name = v.getProperty ("name", juce::String()).toString();
+    s.end  = v.getProperty ("end", "loop").toString() == "stop" ? SongEnd::Stop : SongEnd::Loop;
+    if (auto* rows = v.getProperty ("rows", juce::var()).getArray())
+        for (const auto& rv : *rows)
+        {
+            if ((int) s.rows.size() >= Song::kMaxRows) break;
+            s.rows.push_back (songRowFromVar (rv));
+        }
+    return s;
+}
+
 juce::var projectToVar (const Project& p)
 {
     auto* o = new juce::DynamicObject();
@@ -287,6 +339,11 @@ juce::var projectToVar (const Project& p)
     o->setProperty ("song_chain", chain);
 
     o->setProperty ("pattern_bank", patternBankToVar (p.patternBank));
+
+    juce::Array<juce::var> songs;
+    for (const auto& s : p.songs) songs.add (songToVar (s));
+    o->setProperty ("songs", songs);
+    o->setProperty ("active_song", p.activeSong);
     return juce::var (o);
 }
 
@@ -302,6 +359,14 @@ Project projectFromVar (const juce::var& v)
             p.songChain.push_back ((int) sv);
 
     patternBankFromVar (p.patternBank, v.getProperty ("pattern_bank", juce::var()));
+
+    if (auto* songs = v.getProperty ("songs", juce::var()).getArray())
+        for (const auto& sv : *songs)
+        {
+            if ((int) p.songs.size() >= Project::kMaxSongs) break;
+            p.songs.push_back (songFromVar (sv));
+        }
+    p.activeSong = (int) v.getProperty ("active_song", 0);
     return p;
 }
 } // namespace sila::engine

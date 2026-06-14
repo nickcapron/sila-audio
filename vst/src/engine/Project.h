@@ -83,21 +83,55 @@ struct PatternBank
     std::array<std::vector<std::vector<Step>>, kNumSlots> slots;
 };
 
+// Digitakt-style Song Mode (Phase 6). A Song is an arrangement of pattern rows
+// played in sequence; a project holds up to kMaxSongs of them. Each SongRow is a
+// 1:1 mapping of the Elektron song editor columns. The audio thread reads these
+// as immutable data and DERIVES the active row/repeat/step from the absolute
+// transport position (see Sequencer::resolveSong) — no mutation on the hot path,
+// so a host loop/seek relocates exactly.
+struct SongRow
+{
+    juce::String label;            // LABEL — free text ("VERSE", "CHORUS", a pattern name)
+    int     patternSlot = 0;       // PTN  — index into PatternBank::slots (0..kNumSlots-1)
+    int     repeat      = 1;       // ↺    — 1..32  times the row repeats before advancing
+    int     length      = 16;      // +I   — 2..1024 steps per repeat (overrides pattern length)
+    float   tempo       = 0.0f;    // BPM  — per-row override; <= 0 = use global/host tempo
+    uint8_t mutes       = 0;       // MUTE — bit s set => track slot s muted for this row (8 slots)
+};
+
+// What happens after the last row finishes — the Elektron "end behaviour" row.
+enum class SongEnd { Loop, Stop };
+
+struct Song
+{
+    juce::String         name;
+    std::vector<SongRow> rows;              // up to kMaxRows
+    SongEnd              end = SongEnd::Loop;
+
+    static constexpr int kMaxRows = 99;     // Elektron caps a song at 99 rows
+};
+
 // Port of project.py::ProjectModel (structural subset).
 //
 // Phase 4: this is the immutable RCU snapshot the audio thread reads. It holds
-// only STRUCTURE (tracks/steps/chain/bank). The performance scalars
+// only STRUCTURE (tracks/steps/chain/bank/songs). The performance scalars
 // (swing/songMode/fillActive) are live APVTS params/atomics on the processor —
 // kept out of here so the published snapshot is truly read-only on the audio
 // thread.
 struct Project
 {
+    static constexpr int kMaxSongs = 16;    // Elektron caps a project at 16 songs
+
     std::vector<Track> tracks;
 
-    // Song mode (Phase 3b): a chain of slot indices played one bar each. The
-    // active slot is DERIVED from the transport position on the audio thread
-    // (Sequencer::resolveSongSlot) — never swapped/mutated there.
+    // Legacy Phase 3b "song chain" (one slot per bar). Kept for back-compat
+    // deserialization + as a fallback when no Song is authored; superseded by the
+    // `songs` arrangement below for real Song Mode.
     std::vector<int> songChain;     // ordered slot indices into patternBank
     PatternBank      patternBank;
+
+    // Digitakt Song Mode (Phase 6). The active song plays when songMode is on.
+    std::vector<Song> songs;        // up to kMaxSongs
+    int               activeSong = 0;   // which song plays (structural, read lock-free)
 };
 } // namespace sila::engine
