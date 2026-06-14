@@ -534,6 +534,10 @@ function onStatus(s) {
   const slot = s.current_song_slot;
   activePatEl.textContent = (slot != null) ? "PATTERN " + String.fromCharCode(65 + slot) : "";
 
+  // Song-mode playhead row (null = not in a song). Highlight it in the editor.
+  songPlayRow = (s.current_song_row != null) ? s.current_song_row : -1;
+  if (songScreen.classList.contains("open")) highlightSongRow();
+
   // When the transport stops, clear any lit playhead column.
   if (!playing) {
     document.querySelectorAll(".step.playing").forEach(c => c.classList.remove("playing"));
@@ -852,6 +856,178 @@ async function loadProject(name) {
   // grid refresh arrives via the "project" event (projectEpoch bump)
 }
 
+// ── Song Mode editor (Digitakt-style row arrangement) ────────────────────────
+//   GET  /song                  -> active song + song list + limits
+//   PUT  /song/active|name|end  -> select / rename / end-behaviour
+//   POST /song/new              -> create + select an empty song
+//   POST /song/rows {index?,row?}-> insert a row (append if no index)
+//   PUT  /song/rows/{i}         -> edit one row's fields (label/ptn/repeat/
+//                                  length/tempo/mutes/mute_toggle)
+//   DELETE /song/rows/{i}       -> delete a row
+// Every mutation returns the fresh song state; the playing row comes from the
+// "status" event's current_song_row.
+const songScreen   = document.getElementById("song-screen");
+const songBtn      = document.getElementById("song-btn");
+const songSelect   = document.getElementById("song-select");
+const songNewBtn   = document.getElementById("song-new");
+const songNameEl   = document.getElementById("song-name");
+const songEndEl    = document.getElementById("song-end");
+const songCloseEl  = document.getElementById("song-close");
+const songRowsEl   = document.getElementById("song-rows");
+const songEmptyEl  = document.getElementById("song-empty");
+const songAddRowEl = document.getElementById("song-add-row");
+
+let songState  = null;   // { song, songs, active_song, max_rows, max_songs, pattern_slots }
+let songPlayRow = -1;    // playing row from the status event
+
+const ptnLabel = (slot) => "A" + String(slot + 1).padStart(2, "0");
+
+async function openSongEditor() { songScreen.classList.add("open"); await refreshSong(); }
+function closeSongEditor() { songScreen.classList.remove("open"); }
+
+async function refreshSong() {
+  try { songState = await GET("/song"); } catch { return; }
+  renderSong();
+}
+
+// Structural changes (insert/delete/select/new) re-render from the response;
+// field edits keep focus by NOT re-rendering (see editRow).
+function applySongState(state) { if (state) { songState = state; renderSong(); } }
+
+function renderSong() {
+  if (!songState) return;
+  songSelect.innerHTML = "";
+  (songState.songs || []).forEach((name, i) => {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = (name && name.trim()) ? name : ("Song " + (i + 1));
+    songSelect.appendChild(o);
+  });
+  if (songState.active_song >= 0) songSelect.value = songState.active_song;
+
+  const song = songState.song;
+  songNameEl.value = song ? (song.name || "") : "";
+  songEndEl.value  = song ? (song.end || "loop") : "loop";
+
+  const maxRows = songState.max_rows || 99;
+  const rowCount = song && song.rows ? song.rows.length : 0;
+  songAddRowEl.disabled = rowCount >= maxRows;
+
+  songRowsEl.innerHTML = "";
+  if (!song || !rowCount) {
+    songEmptyEl.textContent = song ? "No rows yet — click “+ Insert Row” to begin the arrangement."
+                                   : "No song yet — “+ Insert Row” starts one automatically.";
+    songEmptyEl.style.display = "block";
+    return;
+  }
+  songEmptyEl.style.display = "none";
+  song.rows.forEach((row, i) => songRowsEl.appendChild(buildSongRow(row, i)));
+  highlightSongRow();
+}
+
+function numCell(value, min, max, onCommit) {
+  const td = document.createElement("td");
+  const inp = document.createElement("input");
+  inp.className = "s-num"; inp.type = "number"; inp.min = min; inp.max = max; inp.value = value;
+  inp.addEventListener("change", () => {
+    let v = parseInt(inp.value); if (isNaN(v)) v = min;
+    v = Math.max(min, Math.min(max, v)); inp.value = v; onCommit(v);
+  });
+  td.appendChild(inp); return td;
+}
+
+function buildSongRow(row, i) {
+  const tr = document.createElement("tr");
+  tr.dataset.rowIdx = i;
+
+  const idx = document.createElement("td");
+  idx.className = "song-idx";
+  idx.textContent = String(i + 1).padStart(2, "0");
+  tr.appendChild(idx);
+
+  // LABEL
+  const tdL = document.createElement("td");
+  const label = document.createElement("input");
+  label.className = "s-label"; label.value = row.label || ""; label.placeholder = "label…";
+  label.addEventListener("change", () => editRow(i, { label: label.value }));
+  tdL.appendChild(label); tr.appendChild(tdL);
+
+  // PTN
+  const tdP = document.createElement("td");
+  const ptn = document.createElement("select"); ptn.className = "s-ptn"; ptn.title = "pattern slot";
+  for (let s = 0; s < (songState.pattern_slots || 8); s++) {
+    const o = document.createElement("option"); o.value = s; o.textContent = ptnLabel(s); ptn.appendChild(o);
+  }
+  ptn.value = row.pattern_slot || 0;
+  ptn.addEventListener("change", () => editRow(i, { pattern_slot: parseInt(ptn.value) }));
+  tdP.appendChild(ptn); tr.appendChild(tdP);
+
+  // ↺ repeat (1..32), +I length (2..1024)
+  tr.appendChild(numCell(row.repeat ?? 1, 1, 32,   v => editRow(i, { repeat: v })));
+  tr.appendChild(numCell(row.length ?? 16, 2, 1024, v => editRow(i, { length: v })));
+
+  // BPM override (blank/0 = global; Standalone only)
+  const tdB = document.createElement("td");
+  const bpm = document.createElement("input");
+  bpm.className = "s-num s-bpm"; bpm.type = "number"; bpm.min = 0; bpm.max = 300; bpm.step = "0.1";
+  bpm.value = row.tempo ? row.tempo : ""; bpm.placeholder = "—";
+  bpm.title = "row tempo override — blank/0 uses the global tempo (Standalone only)";
+  bpm.addEventListener("change", () => editRow(i, { tempo: parseFloat(bpm.value) || 0 }));
+  tdB.appendChild(bpm); tr.appendChild(tdB);
+
+  // MUTE — 8 per-track toggles (only as many as there are tracks are enabled)
+  const tdM = document.createElement("td");
+  const mutes = document.createElement("div"); mutes.className = "s-mutes";
+  const trackCount = project ? project.tracks.length : 8;
+  for (let s = 0; s < 8; s++) {
+    const b = document.createElement("button");
+    const muted = (row.mutes & (1 << s)) !== 0;
+    if (muted) b.classList.add("on");
+    b.textContent = String(s + 1);
+    if (s >= trackCount) b.disabled = true;
+    const tname = (project && project.tracks[s]) ? project.tracks[s].name : ("Track " + (s + 1));
+    b.title = tname + (muted ? " — muted for this row" : "");
+    b.addEventListener("click", () => toggleRowMute(i, s, b));
+    mutes.appendChild(b);
+  }
+  tdM.appendChild(mutes); tr.appendChild(tdM);
+
+  // delete
+  const tdD = document.createElement("td");
+  const del = document.createElement("button"); del.className = "s-del"; del.textContent = "×"; del.title = "delete row";
+  del.addEventListener("click", () => deleteRow(i));
+  tdD.appendChild(del); tr.appendChild(tdD);
+
+  return tr;
+}
+
+// Field edit: reflect locally, PUT, keep the authoritative response WITHOUT a
+// re-render so the focused input isn't torn out mid-edit.
+async function editRow(i, patch) {
+  if (songState && songState.song && songState.song.rows[i])
+    Object.assign(songState.song.rows[i], patch);
+  try { const s = await PUT(`/song/rows/${i}`, patch); if (s) songState = s; } catch {}
+}
+
+async function toggleRowMute(i, slot, btn) {
+  const on = btn.classList.toggle("on");
+  const r = songState && songState.song && songState.song.rows[i];
+  if (r) r.mutes = on ? (r.mutes | (1 << slot)) : (r.mutes & ~(1 << slot));
+  btn.title = ((project && project.tracks[slot]) ? project.tracks[slot].name : ("Track " + (slot + 1)))
+            + (on ? " — muted for this row" : "");
+  try { const s = await PUT(`/song/rows/${i}`, { mute_toggle: slot }); if (s) songState = s; } catch {}
+}
+
+async function addSongRow()      { applySongState(await POST("/song/rows", {})); }
+async function deleteRow(i)      { applySongState(await DEL(`/song/rows/${i}`)); }
+async function selectSong(i)     { applySongState(await PUT("/song/active", { index: i })); }
+async function newSong()         { applySongState(await POST("/song/new", {})); }
+async function renameSong()      { applySongState(await PUT("/song/name", { name: songNameEl.value.trim() })); }
+async function setSongEnd()      { applySongState(await PUT("/song/end", { end: songEndEl.value })); }
+
+function highlightSongRow() {
+  songRowsEl.querySelectorAll("tr").forEach((tr, i) => tr.classList.toggle("playing", i === songPlayRow));
+}
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
@@ -876,10 +1052,20 @@ async function boot() {
   swingEl.addEventListener("change", () => PUT("/project/swing", { swing: parseInt(swingEl.value) / 100 }));
 
   const songMode = getToggleState("songModeToggle");
-  const reflect = () => { songEl.checked = songMode.getValue(); };
+  const reflect = () => { songEl.checked = songMode.getValue(); songBtn.classList.toggle("engaged", songMode.getValue()); };
   songMode.valueChangedEvent.addListener(reflect);
   reflect();
   songEl.addEventListener("change", () => songMode.setValue(songEl.checked));
+
+  // Song Mode editor (Digitakt-style arrangement).
+  songBtn.addEventListener("click", openSongEditor);
+  songCloseEl.addEventListener("click", closeSongEditor);
+  songSelect.addEventListener("change", () => selectSong(parseInt(songSelect.value)));
+  songNewBtn.addEventListener("click", newSong);
+  songNameEl.addEventListener("change", renameSong);
+  songEndEl.addEventListener("change", setSongEnd);
+  songAddRowEl.addEventListener("click", addSongRow);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && songScreen.classList.contains("open")) closeSongEditor(); });
 
   // Library browser controls.
   libSearch.addEventListener("input", () => renderLibrary(libSearch.value));

@@ -34,6 +34,10 @@ private:
     // thread; routes to GET project / step + track edits over editProject().
     juce::var handleBackendCall (const juce::Array<juce::var>& args);
 
+    // Song Mode (Phase 6): the active song + song list + limits, the payload the
+    // song-edit grid renders from and every /song mutation returns.
+    juce::var songStateVar() const;
+
     float currentSwing() const;
     bool  currentSongMode() const;
 
@@ -66,6 +70,7 @@ private:
     bool   lastSentPlaying  = false;
     double lastSentBpm      = 0.0;
     int    lastSentSongSlot = -2;   // -2 = nothing sent yet (-1 is a real value)
+    int    lastSentSongRow  = -2;   // song-mode playhead row (-2 = nothing sent yet)
 
     // Last project epoch the UI has seen; a change means the processor swapped in
     // a whole new Project (DAW state load) and the grid must re-fetch.

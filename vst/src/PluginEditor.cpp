@@ -109,7 +109,7 @@ juce::var libraryTreeVar (const juce::File& root)
 // server clock to fail, so healthy is always true and error/startup_warning are
 // null; current_song_slot is null (not -1) when song mode is off/stopped, to
 // match the Python contract the UI already speaks.
-juce::var statusVar (bool playing, double bpm, int songSlot)
+juce::var statusVar (bool playing, double bpm, int songSlot, int songRow, int songRepeat)
 {
     auto* o = new juce::DynamicObject();
     o->setProperty ("playing", playing);
@@ -118,6 +118,9 @@ juce::var statusVar (bool playing, double bpm, int songSlot)
     o->setProperty ("error", juce::var());
     o->setProperty ("startup_warning", juce::var());
     o->setProperty ("current_song_slot", songSlot >= 0 ? juce::var (songSlot) : juce::var());
+    // Song-mode playhead (Phase 6): which row is playing + how many repeats in.
+    o->setProperty ("current_song_row",    songRow >= 0 ? juce::var (songRow) : juce::var());
+    o->setProperty ("current_song_repeat", songRepeat);
     return juce::var (o);
 }
 }
@@ -219,12 +222,16 @@ void SilaAudioProcessorEditor::timerCallback()
     const bool   playing = processor.transportPlaying.load (std::memory_order_relaxed);
     const double bpm     = processor.currentBpm.load (std::memory_order_relaxed);
     const int    slot    = processor.currentSongSlot.load (std::memory_order_relaxed);
-    if (playing != lastSentPlaying || bpm != lastSentBpm || slot != lastSentSongSlot)
+    const int    row     = processor.currentSongRow.load (std::memory_order_relaxed);
+    const int    repeat  = processor.currentSongRepeat.load (std::memory_order_relaxed);
+    if (playing != lastSentPlaying || bpm != lastSentBpm || slot != lastSentSongSlot
+        || row != lastSentSongRow)
     {
         lastSentPlaying  = playing;
         lastSentBpm      = bpm;
         lastSentSongSlot = slot;
-        webView.emitEventIfBrowserIsVisible ("status", statusVar (playing, bpm, slot));
+        lastSentSongRow  = row;
+        webView.emitEventIfBrowserIsVisible ("status", statusVar (playing, bpm, slot, row, repeat));
     }
 
     // The processor bumps projectEpoch when DAW state load (setStateInformation)
@@ -644,15 +651,168 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return juce::var (o);
     }
 
+    // ── Song Mode (Phase 6) ──────────────────────────────────────────────────
+    // All mutations run on the message thread via editProject() (RCU copy-on-
+    // write — the audio thread never blocks) and return the fresh song state, so
+    // the UI re-renders straight from the response with no extra round-trip.
+
+    // Edit the active song in place (no-op if the project has no songs).
+    auto editActiveSong = [this] (auto&& fn)
+    {
+        processor.editProject ([&] (Project& proj)
+        {
+            if (proj.songs.empty()) return;
+            const int as = juce::jlimit (0, (int) proj.songs.size() - 1, proj.activeSong);
+            fn (proj.songs[(size_t) as]);
+        });
+    };
+
+    // GET /song — the active song + song list + limits for the song-edit grid.
+    if (method == "GET" && path == "/song")
+        return songStateVar();
+
+    // PUT /song/active { index } — select which song plays / is edited.
+    if (method == "PUT" && path == "/song/active")
+    {
+        const int idx = (int) body.getProperty ("index", 0);
+        processor.editProject ([&] (Project& proj)
+        {
+            if (! proj.songs.empty())
+                proj.activeSong = juce::jlimit (0, (int) proj.songs.size() - 1, idx);
+        });
+        return songStateVar();
+    }
+
+    // POST /song/new { name? } — append a new empty song and select it.
+    if (method == "POST" && path == "/song/new")
+    {
+        const juce::String nm = body.getProperty ("name", juce::String()).toString().trim();
+        processor.editProject ([&] (Project& proj)
+        {
+            if ((int) proj.songs.size() >= Project::kMaxSongs) return;
+            Song s;
+            s.name = nm.isNotEmpty() ? nm : ("Song " + juce::String ((int) proj.songs.size() + 1));
+            proj.songs.push_back (std::move (s));
+            proj.activeSong = (int) proj.songs.size() - 1;
+        });
+        return songStateVar();
+    }
+
+    // PUT /song/name { name } — rename the active song.
+    if (method == "PUT" && path == "/song/name")
+    {
+        const juce::String nm = body.getProperty ("name", juce::String()).toString().trim();
+        if (nm.isNotEmpty())
+            editActiveSong ([&] (Song& s) { s.name = nm; });
+        return songStateVar();
+    }
+
+    // PUT /song/end { end: loop|stop } — the end-behaviour row.
+    if (method == "PUT" && path == "/song/end")
+    {
+        const juce::String e = body.getProperty ("end", "loop").toString();
+        editActiveSong ([&] (Song& s) { s.end = e == "stop" ? SongEnd::Stop : SongEnd::Loop; });
+        return songStateVar();
+    }
+
+    // POST /song/rows { index?, row? } — insert a row (append if index omitted).
+    // Auto-creates a first song if the project has none.
+    if (method == "POST" && path == "/song/rows")
+    {
+        processor.editProject ([&] (Project& proj)
+        {
+            if (proj.songs.empty())
+            {
+                Song s; s.name = "Song 1";
+                proj.songs.push_back (std::move (s));
+                proj.activeSong = 0;
+            }
+            const int as = juce::jlimit (0, (int) proj.songs.size() - 1, proj.activeSong);
+            Song& song = proj.songs[(size_t) as];
+            if ((int) song.rows.size() >= Song::kMaxRows) return;
+
+            SongRow row = sila::engine::songRowFromVar (body.getProperty ("row", juce::var()));
+            const juce::var iv = body.getProperty ("index", juce::var());
+            const int at = iv.isVoid() ? (int) song.rows.size()
+                                       : juce::jlimit (0, (int) song.rows.size(), (int) iv);
+            song.rows.insert (song.rows.begin() + at, row);
+        });
+        return songStateVar();
+    }
+
+    // PUT /song/rows/{index} { label?, pattern_slot?, repeat?, length?, tempo?,
+    //   mutes?, mute_toggle? } — partial edit of one row's fields.
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "song" && seg[1] == "rows")
+    {
+        const int idx = seg[2].getIntValue();
+        editActiveSong ([&] (Song& s)
+        {
+            if (idx < 0 || idx >= (int) s.rows.size()) return;
+            SongRow& r = s.rows[(size_t) idx];
+            if (body.hasProperty ("label"))        r.label       = body["label"].toString();
+            if (body.hasProperty ("pattern_slot")) r.patternSlot = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) body["pattern_slot"]);
+            if (body.hasProperty ("repeat"))       r.repeat      = juce::jlimit (1, 32,   (int) body["repeat"]);
+            if (body.hasProperty ("length"))       r.length      = juce::jlimit (2, 1024, (int) body["length"]);
+            if (body.hasProperty ("tempo"))        r.tempo       = (float) (double) body["tempo"];
+            if (body.hasProperty ("mutes"))        r.mutes       = (uint8_t) ((int) body["mutes"] & 0xFF);
+            if (body.hasProperty ("mute_toggle"))
+            {
+                const int slot = (int) body["mute_toggle"];
+                if (slot >= 0 && slot < 8) r.mutes ^= (uint8_t) (1u << slot);
+            }
+        });
+        return songStateVar();
+    }
+
+    // DELETE /song/rows/{index}
+    if (method == "DELETE" && seg.size() == 3 && seg[0] == "song" && seg[1] == "rows")
+    {
+        const int idx = seg[2].getIntValue();
+        editActiveSong ([&] (Song& s)
+        {
+            if (idx >= 0 && idx < (int) s.rows.size())
+                s.rows.erase (s.rows.begin() + idx);
+        });
+        return songStateVar();
+    }
+
     // GET /sequencer/status — current transport status for the initial fetch on
     // boot (live updates after that arrive via the pushed "status" event).
     if (method == "GET" && path == "/sequencer/status")
         return statusVar (processor.transportPlaying.load (std::memory_order_relaxed),
                           processor.currentBpm.load (std::memory_order_relaxed),
-                          processor.currentSongSlot.load (std::memory_order_relaxed));
+                          processor.currentSongSlot.load (std::memory_order_relaxed),
+                          processor.currentSongRow.load (std::memory_order_relaxed),
+                          processor.currentSongRepeat.load (std::memory_order_relaxed));
 
     // Unimplemented endpoints: benign empty object (full app.js cutover is Step 2b+).
     return emptyObject();
+}
+
+juce::var SilaAudioProcessorEditor::songStateVar() const
+{
+    auto* o = new juce::DynamicObject();
+    auto snap = processor.snapshot();
+
+    juce::Array<juce::var> names;
+    int active = -1;
+    if (snap != nullptr && ! snap->songs.empty())
+    {
+        active = juce::jlimit (0, (int) snap->songs.size() - 1, snap->activeSong);
+        for (const auto& s : snap->songs) names.add (s.name);
+        o->setProperty ("song", sila::engine::songToVar (snap->songs[(size_t) active]));
+    }
+    else
+    {
+        o->setProperty ("song", juce::var());   // no song authored yet
+    }
+    o->setProperty ("songs",       names);
+    o->setProperty ("active_song", active);
+    // Limits the UI needs to populate dropdowns / clamp inputs.
+    o->setProperty ("max_rows",      sila::engine::Song::kMaxRows);
+    o->setProperty ("max_songs",     sila::engine::Project::kMaxSongs);
+    o->setProperty ("pattern_slots", sila::engine::PatternBank::kNumSlots);
+    return juce::var (o);
 }
 
 void SilaAudioProcessorEditor::launchDigitaktExport()

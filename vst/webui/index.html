@@ -48,14 +48,16 @@
     /* active song-mode pattern badge */
     #active-pattern { color: var(--accent-2); font-weight: 700; letter-spacing: 1px; }
     /* header action buttons (pinned to the right) */
-    #projects-btn, #export-btn {
+    #projects-btn, #export-btn, #song-btn {
       background: rgba(52,227,196,.06); color: var(--accent);
       border: 1px solid #2a5650; border-radius: var(--radius); padding: 6px 14px;
       font: inherit; font-size: 11px; letter-spacing: 1.5px; font-weight: 700; cursor: pointer;
       transition: background .12s, border-color .12s, color .12s, box-shadow .12s;
     }
-    #projects-btn { margin-left: auto; }
-    #projects-btn:hover, #export-btn:hover { background: var(--accent); color: #04110d; border-color: var(--accent); box-shadow: 0 0 14px rgba(52,227,196,.35); }
+    #song-btn { margin-left: auto; }
+    #projects-btn:hover, #export-btn:hover, #song-btn:hover { background: var(--accent); color: #04110d; border-color: var(--accent); box-shadow: 0 0 14px rgba(52,227,196,.35); }
+    /* SONG button reads as "active" while song mode is engaged */
+    #song-btn.engaged { background: rgba(139,108,240,.12); color: var(--accent-2); border-color: #4a3d7a; }
     #proj-save {
       background: var(--accent); color: #04110d; border: none; border-radius: var(--radius);
       padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: box-shadow .12s, filter .12s;
@@ -248,6 +250,54 @@
     .lfo-ctl .fv { color: var(--accent-2); font-variant-numeric: tabular-nums; }
     .lfo-ctl.lfo-sync { flex-direction: row; align-items: center; gap: 6px; }
     .lfo-knobs { display: flex; gap: 16px; align-items: flex-end; }
+
+    /* ── Song Mode editor (full-screen overlay; Elektron-style row grid) ── */
+    #song-screen { position: fixed; inset: 0; z-index: 1500; display: none; flex-direction: column;
+      background: radial-gradient(125% 80% at 50% -12%, #101a28 0%, var(--bg) 58%); }
+    #song-screen.open { display: flex; }
+    .song-head { display: flex; align-items: center; gap: 12px; padding: 12px 18px; position: relative;
+      border-bottom: 1px solid var(--border); background: linear-gradient(180deg, #131c28 0%, var(--bg) 100%); }
+    .song-head::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--aurora); opacity: .5; }
+    .song-head h2 { font-size: 13px; letter-spacing: 3px; background: var(--aurora);
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .song-head select, .song-head input { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: 5px 8px; font: inherit; font-size: 12px; }
+    .song-head #song-name { width: 150px; }
+    .song-end-lbl { color: var(--text-dim); font-size: 11px; letter-spacing: .5px; display: flex; align-items: center; gap: 6px; }
+    #song-new { background: rgba(52,227,196,.06); color: var(--accent); border: 1px solid #2a5650; border-radius: var(--radius);
+      padding: 5px 12px; font: inherit; font-size: 11px; letter-spacing: 1px; font-weight: 700; cursor: pointer; }
+    #song-new:hover { background: var(--accent); color: #04110d; }
+    .song-head .close { margin-left: auto; background: none; border: none; color: var(--text-dim); font-size: 22px; line-height: 1; cursor: pointer; }
+    .song-head .close:hover { color: var(--text); }
+    .song-grid-wrap { flex: 1; overflow: auto; padding: 12px 18px; }
+    .song-grid { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+    .song-grid th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--text-dim);
+      font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    .song-grid td { padding: 5px 10px; border-bottom: 1px solid var(--border-soft); }
+    .song-grid tr:hover td { background: rgba(255,255,255,.02); }
+    .song-grid tr.playing td { background: rgba(139,108,240,.13); box-shadow: inset 2px 0 0 var(--accent-2); }
+    .song-idx { color: var(--accent-2); font-weight: 700; width: 34px; }
+    .song-grid input.s-label { width: 132px; }
+    .song-grid input.s-num { width: 58px; }
+    .song-grid input.s-bpm { width: 66px; }
+    .song-grid select.s-ptn { color: var(--accent); font-weight: 700; }
+    .s-mutes { display: flex; gap: 3px; }
+    .s-mutes button { width: 20px; height: 20px; border: 1px solid var(--border); background: var(--surface);
+      color: var(--text-dim); border-radius: 4px; cursor: pointer; font: inherit; font-size: 10px;
+      transition: background .1s, color .1s, border-color .1s; }
+    .s-mutes button:hover:not(:disabled) { border-color: var(--text-dim); color: var(--text); }
+    .s-mutes button.on { background: #ffae57; border-color: #ffae57; color: #04110d; font-weight: 700; }
+    .s-mutes button:disabled { opacity: .22; cursor: default; }
+    .s-del { background: var(--surface); border: 1px solid var(--border); color: var(--text-dim);
+      width: 24px; height: 24px; border-radius: 4px; cursor: pointer; }
+    .s-del:hover { background: var(--danger); border-color: var(--danger); color: #04110d; }
+    .song-empty { color: var(--text-dim); padding: 34px; text-align: center; font-size: 13px; line-height: 1.6; }
+    .song-foot { display: flex; align-items: center; gap: 14px; padding: 11px 18px; border-top: 1px solid var(--border); background: var(--surface-2); }
+    #song-add-row { background: transparent; color: var(--text-dim); border: 1px dashed var(--border); border-radius: var(--radius);
+      padding: 7px 16px; font: inherit; font-size: 11px; letter-spacing: 1px; cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+    #song-add-row:hover { color: var(--accent); border-color: var(--accent); background: rgba(52,227,196,.04); }
+    #song-add-row:disabled { opacity: .35; cursor: default; }
+    .song-hint { color: var(--text-dim); font-size: 11px; }
   </style>
 </head>
 <body>
@@ -260,6 +310,7 @@
     <span class="meta">Swing <input type="range" id="swing" min="0" max="100" value="0"><span id="swing-pct" class="val" style="min-width:34px">0%</span></span>
     <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>
+    <button id="song-btn" title="Open the Song arrangement editor (Digitakt-style row chain)">SONG</button>
     <button id="projects-btn" title="Save / load projects in ~/SILA/projects">PROJECTS</button>
     <button id="export-btn" title="Transcode all project samples to 48k/16-bit mono WAVs for the Elektron Digitakt">EXPORT</button>
   </header>
@@ -346,6 +397,44 @@
   </div>
 
   <div id="status">connecting…</div>
+
+  <div id="song-screen">
+    <div class="song-head">
+      <h2>SONG MODE</h2>
+      <select id="song-select" title="active song"></select>
+      <button id="song-new" title="create a new song">+ Song</button>
+      <input id="song-name" type="text" placeholder="song name…" autocomplete="off" spellcheck="false" title="rename the active song">
+      <label class="song-end-lbl">End
+        <select id="song-end" title="what happens after the last row">
+          <option value="loop">Loop</option>
+          <option value="stop">Stop</option>
+        </select>
+      </label>
+      <button class="close" id="song-close" title="close">×</button>
+    </div>
+    <div class="song-grid-wrap">
+      <table class="song-grid">
+        <thead>
+          <tr>
+            <th title="row number">#</th>
+            <th title="label">LABEL</th>
+            <th title="pattern to play">PTN</th>
+            <th title="row repeats">↺</th>
+            <th title="row length in steps">+I</th>
+            <th title="tempo override (Standalone only)">BPM</th>
+            <th title="per-track mutes for this row">MUTE</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="song-rows"></tbody>
+      </table>
+      <div id="song-empty" class="song-empty"></div>
+    </div>
+    <div class="song-foot">
+      <button id="song-add-row">+ Insert Row</button>
+      <span class="song-hint">Rows play top → bottom · ↺ repeats · +I row length in steps · BPM overrides tempo (Standalone) · MUTE silences a track for the row</span>
+    </div>
+  </div>
 
   <div class="modal-backdrop" id="library-modal">
     <div class="modal">
