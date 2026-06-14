@@ -90,11 +90,8 @@ const lfoPanel   = document.getElementById("lfo-panel");
 const lfoNameEl  = document.getElementById("lfo-name");
 const lfoShapeEl = document.getElementById("lfo-shape");
 const lfoDestEl  = document.getElementById("lfo-dest");
-const lfoRateEl  = document.getElementById("lfo-rate");
-const lfoRateV   = document.getElementById("lfo-rate-v");
-const lfoDepthEl = document.getElementById("lfo-depth");
-const lfoDepthV  = document.getElementById("lfo-depth-v");
 const lfoSyncEl  = document.getElementById("lfo-sync");
+let   lfoRateKnob = null, lfoDepthKnob = null;   // LFO rate/depth dials (built in boot)
 const projectsBtn = document.getElementById("projects-btn");
 const projModal  = document.getElementById("projects-modal");
 const projName   = document.getElementById("proj-name");
@@ -211,10 +208,12 @@ function renderTracks() {
     mute.className = "mute" + (track.muted ? " on" : "");
     mute.textContent = "M";
     mute.onclick = () => toggleMute(track.id);
+    attachTip(mute, "<b>Mute</b> — silence this track.");
     const solo = document.createElement("button");
     solo.className = "solo" + (track.solo ? " on" : "");
     solo.textContent = "S";
     solo.onclick = () => toggleSolo(track.id);
+    attachTip(solo, "<b>Solo</b> — hear only soloed tracks.");
     const del = document.createElement("button");
     del.className = "del";
     del.textContent = "×";
@@ -245,8 +244,10 @@ function renderTracks() {
     const slot = document.createElement("div");
     slot.className = "sample-slot" + (track.samples && track.samples.length ? " loaded" : "");
     slot.textContent = sampleLabel(track);
-    slot.title = (track.samples && track.samples[0]) ? track.samples[0].path : "no sample — click to assign";
     slot.onclick = (e) => { e.stopPropagation(); openLibrary(track.id, track.name); };
+    attachTip(slot, (track.samples && track.samples[0])
+      ? "<b>Sample</b> — " + track.samples[0].path.split("/").pop() + " · click to change"
+      : "<b>Sample</b> — click to load one from the library.");
 
     const mix = document.createElement("div");
     mix.className = "track-mix";
@@ -793,10 +794,8 @@ function showLfo(trackId) {
   lfoNameEl.textContent = t.name;
   lfoShapeEl.value = L.shape || "sine";
   lfoDestEl.value  = L.destination || "cutoff";
-  const hz = L.rate ?? 1;
-  lfoRateEl.value = rateToSlider(hz);  lfoRateV.textContent = fmtHz(hz);
-  const d = Math.round((L.depth ?? 0) * 100);
-  lfoDepthEl.value = d;  lfoDepthV.textContent = d + "%";
+  if (lfoRateKnob)  lfoRateKnob.set(rateToSlider(L.rate ?? 1) / 100);
+  if (lfoDepthKnob) lfoDepthKnob.set(L.depth ?? 0);
   lfoSyncEl.checked = L.sync !== false;
   lfoPanel.classList.add("visible");
 }
@@ -907,14 +906,26 @@ async function boot() {
   projModal.addEventListener("click", (e) => { if (e.target === projModal) closeProjects(); });
   projName.addEventListener("keydown", (e) => { if (e.key === "Enter") saveProject(); });
 
-  // LFO panel controls.
+  // LFO panel: shape/dest/sync controls + the rate/depth dials.
   lfoShapeEl.addEventListener("change", () => sendLfo({ shape: lfoShapeEl.value }));
   lfoDestEl.addEventListener("change", () => sendLfo({ destination: lfoDestEl.value }));
-  lfoRateEl.addEventListener("input", () => { lfoRateV.textContent = fmtHz(sliderToRate(+lfoRateEl.value)); });
-  lfoRateEl.addEventListener("change", () => sendLfo({ rate: sliderToRate(+lfoRateEl.value) }));
-  lfoDepthEl.addEventListener("input", () => { lfoDepthV.textContent = lfoDepthEl.value + "%"; });
-  lfoDepthEl.addEventListener("change", () => sendLfo({ depth: +lfoDepthEl.value / 100 }));
   lfoSyncEl.addEventListener("change", () => sendLfo({ sync: lfoSyncEl.checked }));
+  lfoRateKnob = makeKnob({ min: 0, max: 1, value: 0.435, label: "Rate", def: 0.435, color: "v2", valueInCap: true,
+    format: v => fmtHz(sliderToRate(v * 100)), tip: "<b>LFO Rate</b> — modulation speed (Hz).",
+    onChange: v => sendLfo({ rate: sliderToRate(v * 100) }) });
+  lfoDepthKnob = makeKnob({ min: 0, max: 1, value: 0, label: "Depth", def: 0, color: "v2", valueInCap: true,
+    format: v => Math.round(v * 100) + "%", tip: "<b>LFO Depth</b> — how strongly the LFO modulates its destination.",
+    onChange: v => sendLfo({ depth: v }) });
+  document.getElementById("lfo-knobs").append(lfoRateKnob.el, lfoDepthKnob.el);
+  attachTip(lfoShapeEl, "<b>LFO Shape</b> — modulation waveform (sine, saw, square, S&amp;H…).");
+  attachTip(lfoDestEl, "<b>LFO Destination</b> — what the LFO modulates (cutoff / volume / pitch).");
+  attachTip(lfoSyncEl, "<b>Sync</b> — restart the LFO each note; off = free-running.");
+
+  // Tooltips on the header swing + the inspector's discrete selects.
+  attachTip(swingEl, "<b>Swing</b> — shuffle feel; delays the off-beat 16ths.");
+  attachTip($("i-trig"), "<b>Trig condition</b> — when this step is allowed to fire.");
+  attachTip($("i-fmode"), "<b>Filter mode</b> — low-pass / high-pass / band-pass.");
+  attachTip($("i-length"), "<b>Length</b> — note length / gate (∞ = one-shot).");
 
   setStatus(`connected — ${project.tracks.length} tracks · click a step, right-click to inspect`, true);
 }

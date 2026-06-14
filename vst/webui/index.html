@@ -247,6 +247,7 @@
     .lfo-ctl select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 4px; font: inherit; font-size: 12px; }
     .lfo-ctl .fv { color: var(--accent-2); font-variant-numeric: tabular-nums; }
     .lfo-ctl.lfo-sync { flex-direction: row; align-items: center; gap: 6px; }
+    .lfo-knobs { display: flex; gap: 16px; align-items: flex-end; }
   </style>
 </head>
 <body>
@@ -298,12 +299,7 @@
               <option value="pitch">Pitch</option>
             </select>
           </label>
-          <label class="lfo-ctl">Rate <span id="lfo-rate-v" class="fv">1.0 Hz</span>
-            <input type="range" id="lfo-rate" min="0" max="100" value="50">
-          </label>
-          <label class="lfo-ctl">Depth <span id="lfo-depth-v" class="fv">0%</span>
-            <input type="range" id="lfo-depth" min="0" max="100" value="0">
-          </label>
+          <div id="lfo-knobs" class="lfo-knobs"></div>
           <label class="lfo-ctl lfo-sync"><input type="checkbox" id="lfo-sync" checked> Sync</label>
         </div>
       </div>
