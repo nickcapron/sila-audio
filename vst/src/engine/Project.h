@@ -51,9 +51,10 @@ struct SampleRef
     int   rrGroup = 0;
 };
 
-// Port of project.py::TrackModel. `steps.size()` is the per-track loop length,
-// so tracks of different lengths run as polyrhythms (matches the Python
-// per-track counter). FX/LFO/humanize come with later phases.
+// Port of project.py::TrackModel. The track no longer owns its step data —
+// steps live in the PatternBank (unified Phase 6), so the same track plays a
+// different pattern per slot. The track keeps only its identity, gating, LFO
+// config and sample layers.
 struct Track
 {
     juce::String           id;
@@ -68,18 +69,21 @@ struct Track
     float                  lfoRate  = 1.0f;   // Hz (Speed)
     float                  lfoDepth = 0.0f;   // 0..1
     bool                   lfoSync  = true;   // true = trig-sync, false = free-run
-    std::vector<Step>      steps;
     std::vector<SampleRef> samples;     // velocity layers; empty = synthesized/unset
 };
 
-// Port of project.py::PatternBank. kNumSlots named pattern snapshots; each slot
-// stores one Step vector per track, parallel to Project::tracks. An empty
-// per-track entry means "no pattern stored for this track in this slot" → the
-// Sequencer falls back to the track's live `steps`. Authored off the audio
-// thread (setup now, the UI bridge in Phase 4); the audio thread only reads it.
+// Default steps in a freshly-materialized pattern (one 4/4 bar of 16ths).
+constexpr int kDefaultPatternLength = 16;
+
+// Unified pattern store (Phase 6). kNumSlots named patterns (A01..A16); each slot
+// holds one Step vector PER TRACK, parallel to Project::tracks by index. A slot is
+// either EMPTY (unauthored => silent, blank grid) or "materialized" to exactly
+// tracks.size() columns of equal length (master length per pattern). The grid
+// edits the project's currentPattern slot; Song Mode rows pick a slot by index.
+// Read-only on the audio thread; authored on the message thread via editProject.
 struct PatternBank
 {
-    static constexpr int kNumSlots = 8;
+    static constexpr int kNumSlots = 16;
     std::array<std::vector<std::vector<Step>>, kNumSlots> slots;
 };
 
@@ -125,13 +129,39 @@ struct Project
     std::vector<Track> tracks;
 
     // Legacy Phase 3b "song chain" (one slot per bar). Kept for back-compat
-    // deserialization + as a fallback when no Song is authored; superseded by the
-    // `songs` arrangement below for real Song Mode.
+    // deserialization only; superseded by the `songs` arrangement for real Song
+    // Mode. The engine no longer reads it.
     std::vector<int> songChain;     // ordered slot indices into patternBank
-    PatternBank      patternBank;
+
+    // Unified pattern bank (Phase 6): the single source of truth for step data.
+    // currentPattern is the slot the grid edits and pattern mode plays. Both read
+    // lock-free on the audio thread; switched on the message thread via editProject.
+    PatternBank patternBank;
+    int         currentPattern = 0;     // 0..kNumSlots-1
 
     // Digitakt Song Mode (Phase 6). The active song plays when songMode is on.
     std::vector<Song> songs;        // up to kMaxSongs
     int               activeSong = 0;   // which song plays (structural, read lock-free)
 };
+
+// Materialize a pattern slot to exactly tracks.size() columns of equal length,
+// filling any missing/empty column with inactive steps (master length per
+// pattern). No-op for a valid already-rectangular slot. Message thread only
+// (mutates the Project copy inside editProject). The length is taken from the
+// slot's first non-empty column, else kDefaultPatternLength.
+inline void ensurePatternColumns (Project& p, int slot)
+{
+    if (slot < 0 || slot >= PatternBank::kNumSlots)
+        return;
+    auto& cols = p.patternBank.slots[(size_t) slot];
+
+    int len = kDefaultPatternLength;
+    for (const auto& c : cols)
+        if (! c.empty()) { len = (int) c.size(); break; }
+
+    cols.resize (p.tracks.size());
+    for (auto& c : cols)
+        if ((int) c.size() != len)
+            c.assign ((size_t) len, Step{});
+}
 } // namespace sila::engine

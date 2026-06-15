@@ -60,20 +60,17 @@ struct SongPosition
 class Sequencer
 {
 public:
-    // Evaluate every track of `project` at the absolute 16th index and invoke
-    // `fn` for each step that fires (mute/solo gating + trig condition +
-    // probability — port of tick() + _evaluate_track). `songMode`/`fillActive`
-    // are the live performance scalars (from APVTS params). Templated +
-    // zero-allocation so it is safe to call on the audio thread; keep `fn`'s
-    // capture small. `project` must outlive the call (the caller holds the
-    // snapshot's shared_ptr for the whole block).
+    // Evaluate every track of `project` at the absolute 16th index in PATTERN MODE
+    // and invoke `fn` for each step that fires (mute/solo gating + trig condition +
+    // probability — port of tick() + _evaluate_track). Every track plays the
+    // project's currentPattern slot. Templated + zero-allocation so it is safe to
+    // call on the audio thread; keep `fn`'s capture small. `project` must outlive
+    // the call (the caller holds the snapshot's shared_ptr for the whole block).
     template <typename Fn>
-    void forEachTrig (const Project& project, long absSixteenth,
-                      bool songMode, bool fillActive, Fn&& fn)
+    void forEachTrig (const Project& project, long absSixteenth, bool fillActive, Fn&& fn)
     {
-        // Song mode: the active pattern slot is a pure function of position
-        // (no mutation, no allocation — see resolveSongSlot/resolveSteps).
-        const int activeSlot = resolveSongSlot (project, absSixteenth, songMode);
+        // Pattern mode: every track plays the project's currentPattern slot.
+        const int activeSlot = juce::jlimit (0, PatternBank::kNumSlots - 1, project.currentPattern);
 
         bool anySolo = false;
         for (auto& t : project.tracks)
@@ -88,7 +85,7 @@ public:
             if (anySolo && ! track.solo)
                 continue;                        // silenced by another track's solo
 
-            const std::vector<Step>& steps = resolveSteps (project, track, ti, activeSlot);
+            const std::vector<Step>& steps = resolveSteps (project, ti, activeSlot);
             const int stepCount = (int) steps.size();
             if (stepCount <= 0)
                 continue;
@@ -126,12 +123,6 @@ public:
         for (auto& t : project.tracks)
             if (t.solo) { anySolo = true; break; }
 
-        // The active slot's per-track step vectors (parallel to tracks; an empty
-        // per-track entry falls back to the track's live steps).
-        const auto& slot = (song.patternSlot >= 0 && song.patternSlot < PatternBank::kNumSlots)
-                               ? project.patternBank.slots[(size_t) song.patternSlot]
-                               : project.patternBank.slots[0];
-
         int trackIndex = 0;
         for (auto& track : project.tracks)
         {
@@ -143,9 +134,8 @@ public:
             if (anySolo && ! track.solo)
                 continue;
 
-            const std::vector<Step>& steps =
-                (ti < (int) slot.size() && ! slot[(size_t) ti].empty()) ? slot[(size_t) ti]
-                                                                        : track.steps;
+            // The row's pattern slot for this track; empty/unauthored => silent.
+            const std::vector<Step>& steps = resolveSteps (project, ti, song.patternSlot);
             const int stepCount = (int) steps.size();
             if (stepCount <= 0)
                 continue;
@@ -168,11 +158,6 @@ public:
         }
     }
 
-    // Active song-mode pattern slot for the given absolute position (-1 = off),
-    // derived purely from position — no allocation/mutation, audio-thread safe.
-    // Public so the processor can publish it as transport status. (Phase 3b.)
-    static int  resolveSongSlot (const Project&, long absSixteenth, bool songMode);
-
     // Resolve the Digitakt song position at an absolute 16th index by walking the
     // active song's row prefix-sums (<=99 rows, integer-only, allocation-free).
     // songSixteenth is the absolute transport 16th (= host position since 0). The
@@ -187,11 +172,10 @@ private:
     // both pattern mode and song mode so the two paths can never drift.
     static void fillTrigEvent (TrigEvent&, const Track&, int trackIndex, long stepIndex, const Step&);
 
-    // Song mode (Phase 3b): derived from the absolute position — no allocation
-    // or mutation, safe to call on the audio thread.
-    static const std::vector<Step>& resolveSteps (const Project&, const Track&,
-                                                  int trackIndex, int activeSlot);
-    static int  barLengthInSixteenths (const Project&);
+    // The Step vector for (trackIndex, slot) in the unified PatternBank — a const
+    // reference, no copy. Empty (a static empty vector) when the slot is
+    // unauthored or the track has no column => that track is silent for the slot.
+    static const std::vector<Step>& resolveSteps (const Project&, int trackIndex, int slot);
 
     juce::Random rng;
 };

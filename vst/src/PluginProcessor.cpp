@@ -192,8 +192,13 @@ void SilaAudioProcessor::addTrack (const juce::String& name)
     sila::engine::Track t;
     t.id   = juce::Uuid().toString();   // stable id, separate from the name
     t.name = name;
-    t.steps.resize (16);                // empty 16-step pattern
     next->tracks.push_back (std::move (t));
+
+    // Keep every MATERIALIZED pattern slot rectangular by appending a blank column
+    // for the new track. Unauthored (empty) slots stay empty.
+    for (auto& cols : next->patternBank.slots)
+        if (! cols.empty())
+            cols.push_back (std::vector<sila::engine::Step> (cols.front().size()));
 
     auto bank = std::make_shared<SamplerBank> (curBank != nullptr ? *curBank : SamplerBank {});
     auto smp  = std::make_shared<sila::engine::Sampler>();
@@ -318,61 +323,23 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
     auto proj = std::make_shared<Project>();
     auto samplerBank = std::make_shared<SamplerBank>();
 
-    auto addTrack = [&] (const juce::String& name, juce::AudioBuffer<float> sample) -> Track&
+    auto addTrack = [&] (const juce::String& name, juce::AudioBuffer<float> sample)
     {
         Track t;
         t.id   = name;
         t.name = name;
-        t.steps.resize (16);            // 16-step loop
         proj->tracks.push_back (std::move (t));
 
         auto smp = std::make_shared<Sampler>();
         smp->prepare (sr);
         smp->addBuffer (std::move (sample));   // synthesized demo kit (no file path)
         samplerBank->push_back (std::move (smp));
-        return proj->tracks.back();
     };
+    addTrack ("Kick",  makeKick (sr));     // track 0
+    addTrack ("Snare", makeSnare (sr));    // track 1
+    addTrack ("Hat",   makeHat (sr));      // track 2
 
-    // Kick — 4-on-the-floor.
-    {
-        Track& k = addTrack ("Kick", makeKick (sr));
-        for (int i = 0; i < 16; i += 4)
-        {
-            k.steps[(size_t) i].active   = true;
-            k.steps[(size_t) i].velocity = 110;
-        }
-    }
-
-    // Snare — beats 2 & 4, plus a 1:2 ghost on step 14.
-    {
-        Track& s = addTrack ("Snare", makeSnare (sr));
-        for (int i : { 4, 12 })
-        {
-            s.steps[(size_t) i].active   = true;
-            s.steps[(size_t) i].velocity = 100;
-        }
-        Step& ghost = s.steps[14];
-        ghost.active   = true;
-        ghost.velocity = 70;
-        ghost.trig     = TrigCondition::OneIn2;   // fires every other loop
-    }
-
-    // Hats — offbeats, with a 50% step and a micro-timed (late) step.
-    {
-        Track& h = addTrack ("Hat", makeHat (sr));
-        for (int i : { 2, 6, 10, 14 })
-        {
-            h.steps[(size_t) i].active   = true;
-            h.steps[(size_t) i].velocity = 80;
-        }
-        h.steps[6].microTiming = 12;     // pushed late (clock.py: micro * interval / 6)
-        h.steps[10].probability = 50;    // fires ~half the time
-    }
-
-    // Phase 3b — song mode. Author a pattern bank + chain so bar-by-bar swaps
-    // are audible without a UI. Each slot is parallel to project.tracks
-    // (Kick=0, Snare=1, Hat=2). Slot 0 is left empty → the Sequencer falls back
-    // to the live base groove above, so chain entry 0 == the Phase 3a pattern.
+    // A 16-step column (one track's row in a pattern slot) with `on` steps active.
     auto steps16 = [] (std::initializer_list<int> on, int velocity)
     {
         std::vector<Step> v (16);
@@ -384,21 +351,36 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         return v;
     };
 
+    // Unified pattern bank (Phase 6): step data lives here, parallel to tracks
+    // (Kick=0, Snare=1, Hat=2). The grid + pattern mode play currentPattern (=0).
     auto& bank = proj->patternBank;
-    // Slot 1 — variation: a kick pickup and straight-8th hats.
+
+    // Slot 0 (A01) — the base groove: kick 4-on-the-floor, snare backbeat + a 1:2
+    // ghost on step 14, offbeat hats with a 50% step and a micro-timed late hat.
+    {
+        auto kick  = steps16 ({ 0, 4, 8, 12 }, 110);
+        auto snare = steps16 ({ 4, 12 }, 100);
+        snare[14].active = true; snare[14].velocity = 70; snare[14].trig = TrigCondition::OneIn2;
+        auto hats  = steps16 ({ 2, 6, 10, 14 }, 80);
+        hats[6].microTiming  = 12;   // pushed late (clock.py: micro * interval / 6)
+        hats[10].probability = 50;   // fires ~half the time
+        bank.slots[0] = { kick, snare, hats };
+    }
+    // Slot 1 (A02) — variation: a kick pickup and straight-8th hats.
     bank.slots[1] = {
         steps16 ({ 0, 4, 8, 12, 14 }, 110),                 // kick + pickup on the "a" of 4
         steps16 ({ 4, 12 }, 100),                            // backbeat snare
         steps16 ({ 0, 2, 4, 6, 8, 10, 12, 14 }, 75),         // driving 8th-note hats
     };
-    // Slot 2 — fill: a snare roll into the turnaround.
+    // Slot 2 (A03) — fill: a snare roll into the turnaround.
     bank.slots[2] = {
         steps16 ({ 0, 8 }, 110),                             // sparse kick
         steps16 ({ 8, 10, 12, 13, 14, 15 }, 95),             // snare roll
         steps16 ({ 2, 6, 10, 14 }, 80),                      // offbeat hats
     };
 
-    proj->songChain = { 0, 1, 0, 2 };    // legacy Phase 3b chain (kept for back-compat)
+    proj->currentPattern = 0;            // grid + pattern mode show/play the base groove
+    proj->songChain = { 0, 1, 0, 2 };    // legacy Phase 3b chain (unused by the engine)
 
     // Song Mode (Phase 6) demo arrangement so row-by-row playback is audible
     // without a UI. Rows reference the slots authored above; ↺ = repeat, +I = row
@@ -675,11 +657,11 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 if (sp.valid)
                     sequencer.forEachTrigSong (proj, sp, fill, spawn);
                 else
-                    sequencer.forEachTrig (proj, absIdx, false, fill, spawn);
+                    sequencer.forEachTrig (proj, absIdx, fill, spawn);
             }
             else
             {
-                sequencer.forEachTrig (proj, absIdx, false, fill, spawn);
+                sequencer.forEachTrig (proj, absIdx, fill, spawn);
             }
         }
         ++idx;

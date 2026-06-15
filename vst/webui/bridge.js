@@ -66,6 +66,7 @@ const barBeatEl  = document.getElementById("barbeat");
 const swingEl    = document.getElementById("swing");
 const swingPct   = document.getElementById("swing-pct");
 const songEl     = document.getElementById("songMode");
+const patternSelectEl = document.getElementById("pattern-select");
 const statusEl   = document.getElementById("status");
 const transportEl = document.getElementById("transport");
 const playStateEl = document.getElementById("play-state");
@@ -300,6 +301,39 @@ function renderTracks() {
   }
   const addBtn = document.getElementById("add-track");
   if (addBtn) addBtn.disabled = project.tracks.length >= 8;
+}
+
+// ── Pattern selector (which PatternBank slot the grid edits / plays) ─────────
+const patName = (i) => "A" + String(i + 1).padStart(2, "0");
+
+function renderPatternSelect() {
+  if (!project) return;
+  const count = project.pattern_count || 16;
+  const cur = project.current_pattern || 0;
+  patternSelectEl.innerHTML = "";
+  for (let i = 0; i < count; i++) {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = patName(i);
+    patternSelectEl.appendChild(o);
+  }
+  patternSelectEl.value = cur;
+}
+
+// Switch the edited/played pattern: persist, re-fetch the grid (steps come from
+// the new slot), and reset the inspector since the selected step is now stale.
+async function selectPattern(i) {
+  await PUT("/pattern/select", { index: i });
+  project = await GET("/project");
+  sel = { trackId: null, idx: null };
+  renderTracks();
+  renderPatternSelect();
+  hideTrimmer();
+  lfoPanel.classList.remove("visible");
+  $("insp-empty").style.display = "block";
+  $("insp-fields").style.display = "none";
+  $("insp-title").textContent = "INSPECTOR";
+  $("insp-sub").textContent = "left-click toggles · right-click inspects";
+  setStatus(`editing pattern ${patName(i)}`, true);
 }
 
 // ── Track management (add / remove / rename) ─────────────────────────────────
@@ -774,6 +808,7 @@ async function onProjectReload() {
   try { project = await GET("/project"); } catch { return; }
   sel = { trackId: null, idx: null };
   renderTracks();
+  renderPatternSelect();
   hideTrimmer();
   lfoPanel.classList.remove("visible");
   lfoTrackId = null;
@@ -1040,7 +1075,9 @@ async function boot() {
 
   project = await GET("/project");
   renderTracks();
+  renderPatternSelect();
   wireInspector();
+  patternSelectEl.addEventListener("change", () => selectPattern(parseInt(patternSelectEl.value)));
 
   // Initial transport status (live updates after this arrive via the event).
   try { onStatus(await GET("/sequencer/status")); } catch { /* ignore */ }

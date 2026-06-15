@@ -192,11 +192,9 @@ juce::var trackToVar (const Track& t)
     lfo->setProperty ("sync",        t.lfoSync);
     o->setProperty ("lfo", juce::var (lfo));
 
-    o->setProperty ("step_count", (int) t.steps.size());
-
-    juce::Array<juce::var> steps;
-    for (const auto& s : t.steps) steps.add (stepToVar (s));
-    o->setProperty ("steps", steps);
+    // Step data lives in the unified PatternBank now, not on the track. The editor
+    // injects the current pattern's steps into the GET /project payload for the
+    // grid; persistence carries them via pattern_bank below.
     o->setProperty ("samples", sampleLayersToVar (t.samples));
     return juce::var (o);
 }
@@ -218,13 +216,8 @@ Track trackFromVar (const juce::var& v)
         t.lfoSync  = (bool) lv.getProperty ("sync", true);
     }
 
-    if (auto* steps = v.getProperty ("steps", juce::var()).getArray())
-        for (const auto& sv : *steps)
-        {
-            Step s;
-            applyStepVar (s, sv);
-            t.steps.push_back (s);
-        }
+    // Steps no longer live on the track (unified PatternBank). Any legacy `steps`
+    // array is migrated into pattern slot 0 by projectFromVar (back-compat).
     t.samples = parseSampleLayers (v.getProperty ("samples", juce::var()));
     return t;
 }
@@ -339,6 +332,7 @@ juce::var projectToVar (const Project& p)
     o->setProperty ("song_chain", chain);
 
     o->setProperty ("pattern_bank", patternBankToVar (p.patternBank));
+    o->setProperty ("current_pattern", p.currentPattern);
 
     juce::Array<juce::var> songs;
     for (const auto& s : p.songs) songs.add (songToVar (s));
@@ -350,7 +344,8 @@ juce::var projectToVar (const Project& p)
 Project projectFromVar (const juce::var& v)
 {
     Project p;
-    if (auto* tracks = v.getProperty ("tracks", juce::var()).getArray())
+    auto* tracks = v.getProperty ("tracks", juce::var()).getArray();
+    if (tracks != nullptr)
         for (const auto& tv : *tracks)
             p.tracks.push_back (trackFromVar (tv));
 
@@ -359,6 +354,30 @@ Project projectFromVar (const juce::var& v)
             p.songChain.push_back ((int) sv);
 
     patternBankFromVar (p.patternBank, v.getProperty ("pattern_bank", juce::var()));
+    p.currentPattern = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) v.getProperty ("current_pattern", 0));
+
+    // Back-compat: pre-unification projects stored steps on each track. If slot 0
+    // is empty, migrate those per-track `steps` arrays into it (as its columns).
+    if (tracks != nullptr && p.patternBank.slots[0].empty())
+    {
+        std::vector<std::vector<Step>> col0;
+        bool any = false;
+        for (const auto& tv : *tracks)
+        {
+            std::vector<Step> steps;
+            if (auto* sa = tv.getProperty ("steps", juce::var()).getArray())
+                for (const auto& sv : *sa)
+                {
+                    Step s;
+                    applyStepVar (s, sv);
+                    steps.push_back (s);
+                }
+            if (! steps.empty()) any = true;
+            col0.push_back (std::move (steps));
+        }
+        if (any)
+            p.patternBank.slots[0] = std::move (col0);
+    }
 
     if (auto* songs = v.getProperty ("songs", juce::var()).getArray())
         for (const auto& sv : *songs)

@@ -27,44 +27,19 @@ bool Sequencer::probabilityPasses (int probability)
     return rng.nextInt (juce::Range<int> (1, 101)) <= probability;   // 1..100 inclusive
 }
 
-// One "bar" = the longest track's pattern length, in 16ths (port of clock.py's
-// bar_len = max(len(t.steps))). Derived from the live patterns so it stays a
-// fixed grid regardless of which song slot is active. >= 1.
-int Sequencer::barLengthInSixteenths (const Project& project)
+// The Step vector for (trackIndex, slot) in the unified PatternBank. Returns a
+// const reference — no copy. A static empty vector when the slot is unauthored or
+// the track has no column, so that track is simply silent for the slot.
+const std::vector<Step>& Sequencer::resolveSteps (const Project& project, int trackIndex, int slot)
 {
-    int maxLen = 0;
-    for (const auto& t : project.tracks)
-        maxLen = juce::jmax (maxLen, (int) t.steps.size());
-    return juce::jmax (1, maxLen);
-}
-
-// The active song slot for this position, or -1 when song mode is off / no
-// chain. Pure function of absSixteenth — seek/loop-safe, allocation-free.
-int Sequencer::resolveSongSlot (const Project& project, long absSixteenth, bool songMode)
-{
-    if (! songMode || project.songChain.empty())
-        return -1;
-
-    const int  barLen   = barLengthInSixteenths (project);
-    const long absBar    = absSixteenth / barLen;               // floor for absSixteenth >= 0
-    const int  len       = (int) project.songChain.size();
-    const int  chainPos  = (int) (((absBar % len) + len) % len);
-    return project.songChain[(size_t) chainPos];
-}
-
-// The Step vector to evaluate for this track: the active slot's stored pattern,
-// or the track's live `steps` when song mode is off or the slot has no entry
-// for this track. Returns a const reference — no copy.
-const std::vector<Step>& Sequencer::resolveSteps (const Project& project, const Track& track,
-                                                  int trackIndex, int activeSlot)
-{
-    if (activeSlot >= 0 && activeSlot < PatternBank::kNumSlots)
+    static const std::vector<Step> kEmpty;
+    if (slot >= 0 && slot < PatternBank::kNumSlots)
     {
-        const auto& slot = project.patternBank.slots[(size_t) activeSlot];
-        if (trackIndex < (int) slot.size() && ! slot[(size_t) trackIndex].empty())
-            return slot[(size_t) trackIndex];
+        const auto& cols = project.patternBank.slots[(size_t) slot];
+        if (trackIndex >= 0 && trackIndex < (int) cols.size())
+            return cols[(size_t) trackIndex];
     }
-    return track.steps;
+    return kEmpty;
 }
 
 // Shared TrigEvent builder (pattern mode + song mode). Copies the raw step fields

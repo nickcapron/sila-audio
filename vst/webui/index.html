@@ -47,6 +47,9 @@
     #transport.playing .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
     /* active song-mode pattern badge */
     #active-pattern { color: var(--accent-2); font-weight: 700; letter-spacing: 1px; }
+    /* pattern selector (which slot the grid edits / plays) */
+    #pattern-select { background: var(--bg); color: var(--accent-2); border: 1px solid var(--border);
+      border-radius: 4px; font: inherit; font-size: 12px; font-weight: 700; padding: 3px 6px; cursor: pointer; }
     /* header action buttons (pinned to the right) */
     #projects-btn, #export-btn, #song-btn {
       background: rgba(52,227,196,.06); color: var(--accent);
@@ -307,6 +310,7 @@
     <span class="meta">BPM <span id="bpm" class="val" style="min-width:46px">—</span></span>
     <span class="meta">PPQ <span id="ppq" class="val">—</span></span>
     <span class="meta">Bar·Beat <span id="barbeat" class="val">—</span></span>
+    <span class="meta">PTN <select id="pattern-select" title="pattern being edited / played"></select></span>
     <span class="meta">Swing <input type="range" id="swing" min="0" max="100" value="0"><span id="swing-pct" class="val" style="min-width:34px">0%</span></span>
     <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>

@@ -302,6 +302,10 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         {
             juce::var v = projectToVar (*snap, currentSwing(), currentSongMode(),
                                         processor.currentBpm.load (std::memory_order_relaxed));
+            // The grid edits one pattern at a time — inject the currentPattern
+            // slot's steps as each track's `steps` (blank 16 cells if unauthored).
+            const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, snap->currentPattern);
+            const auto& curSlot = snap->patternBank.slots[(size_t) cp];
             if (auto* tracks = v.getProperty ("tracks", juce::var()).getArray())
                 for (int i = 0; i < tracks->size() && i < SilaAudioProcessor::kMaxTracks; ++i)
                     if (auto* to = (*tracks)[i].getDynamicObject())
@@ -311,7 +315,20 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                         to->setProperty ("cutoff",     (double) slotValue (i, "cutoff"));
                         to->setProperty ("resonance",  (double) slotValue (i, "res"));
                         to->setProperty ("filter_mode", fmodeName (juce::roundToInt (slotValue (i, "fmode"))));
+
+                        juce::Array<juce::var> steps;
+                        if (i < (int) curSlot.size())
+                            for (const auto& s : curSlot[(size_t) i]) steps.add (stepToVar (s));
+                        else
+                            for (int k = 0; k < kDefaultPatternLength; ++k) steps.add (stepToVar (Step{}));
+                        to->setProperty ("steps", steps);
+                        to->setProperty ("step_count", steps.size());
                     }
+            if (auto* vo = v.getDynamicObject())
+            {
+                vo->setProperty ("current_pattern", cp);
+                vo->setProperty ("pattern_count", PatternBank::kNumSlots);
+            }
             return v;
         }
 
@@ -368,7 +385,8 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
-    // PUT /tracks/{id}/steps/{idx}  body { step: {...} }
+    // PUT /tracks/{id}/steps/{idx}  body { step: {...} } — edits the CURRENT
+    // pattern slot for this track (materializing the slot on first touch).
     // After removeEmptyStrings the path is ["tracks", id, "steps", idx] (4 segs).
     if (method == "PUT" && seg.size() == 4 && seg[0] == "tracks" && seg[2] == "steps")
     {
@@ -377,13 +395,28 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         const juce::var    stepVar = body.getProperty ("step", juce::var());
         processor.editProject ([&] (Project& proj)
         {
-            for (auto& t : proj.tracks)
-                if (t.id == id)
-                {
-                    if (idx >= 0 && idx < (int) t.steps.size())
-                        applyStepVar (t.steps[(size_t) idx], stepVar);
-                    break;
-                }
+            int ti = -1;
+            for (int i = 0; i < (int) proj.tracks.size(); ++i)
+                if (proj.tracks[(size_t) i].id == id) { ti = i; break; }
+            if (ti < 0) return;
+
+            const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, proj.currentPattern);
+            ensurePatternColumns (proj, cp);   // blank slot -> tracks x default length
+            auto& col = proj.patternBank.slots[(size_t) cp][(size_t) ti];
+            if (idx >= 0 && idx < (int) col.size())
+                applyStepVar (col[(size_t) idx], stepVar);
+        });
+        return emptyObject();
+    }
+
+    // PUT /pattern/select { index } — choose which pattern slot the grid edits and
+    // pattern mode plays. Structural edit; the UI re-fetches GET /project.
+    if (method == "PUT" && path == "/pattern/select")
+    {
+        const int idx = (int) body.getProperty ("index", 0);
+        processor.editProject ([&] (Project& proj)
+        {
+            proj.currentPattern = juce::jlimit (0, PatternBank::kNumSlots - 1, idx);
         });
         return emptyObject();
     }
