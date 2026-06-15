@@ -391,6 +391,19 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
+    // PUT /tracks/{id}/color { color } — UI accent (hex). Pure metadata; the
+    // engine never reads it, so this is just a snapshot edit.
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "color")
+    {
+        const juce::String id  = seg[1];
+        const juce::String col = body.getProperty ("color", juce::String()).toString();
+        processor.editProject ([&] (Project& proj)
+        {
+            for (auto& t : proj.tracks) if (t.id == id) { t.color = col; break; }
+        });
+        return emptyObject();
+    }
+
     // PUT /tracks/{id}/steps/{idx}  body { step: {...} } — edits the CURRENT
     // pattern slot for this track (materializing the slot on first touch).
     // After removeEmptyStrings the path is ["tracks", id, "steps", idx] (4 segs).

@@ -61,7 +61,6 @@ function attachTip(el, html) {
 }
 
 const tracksEl   = document.getElementById("tracks");
-const ppqEl      = document.getElementById("ppq");
 const barBeatEl  = document.getElementById("barbeat");
 const swingEl    = document.getElementById("swing");
 const swingPct   = document.getElementById("swing-pct");
@@ -106,6 +105,11 @@ let project = null;
 let sel = { trackId: null, idx: null };   // selected step
 let currentPage = 0;                        // active 16-step page (front-end view state)
 const STEPS_PER_PAGE = 16;
+
+// SILA-theme track palette. A new track auto-takes the first UNused colour (no
+// duplicate by default); the picker lets the user override with any colour
+// (duplicates allowed when chosen manually). The engine just stores the string.
+const THEME_PALETTE = ["#34e3c4", "#8b6cf0", "#ffae57", "#ff5a5a", "#5fd0e0", "#6ee7a0", "#f08bd0", "#e3d534"];
 
 // Suppress WebView2's native right-click menu so our oncontextmenu handlers
 // (inspect-without-toggle) are what the user gets.
@@ -206,6 +210,7 @@ function renderTracks() {
     const row = document.createElement("div");
     row.className = "track-row";
     row.dataset.trackId = track.id;
+    if (track.color) row.style.setProperty("--track-color", track.color);   // cascades to dot + cells
 
     const ms = document.createElement("div");
     ms.className = "ms";
@@ -238,6 +243,11 @@ function renderTracks() {
     ms.appendChild(mute);
     ms.appendChild(solo);
     ms.appendChild(del);
+
+    const dot = document.createElement("div");
+    dot.className = "track-color-dot";
+    dot.title = "track colour — click to change";
+    dot.onclick = (e) => { e.stopPropagation(); openColorPop(dot, track.id); };
 
     const name = document.createElement("div");
     name.className = "track-name";
@@ -302,6 +312,7 @@ function renderTracks() {
     }
 
     row.appendChild(ms);
+    row.appendChild(dot);
     row.appendChild(name);
     row.appendChild(slot);
     row.appendChild(mix);
@@ -388,6 +399,7 @@ async function selectPattern(i) {
     await PUT("/pattern/select", { index: i });
     project = await GET("/project");
   } catch { setStatus("pattern switch failed", false); return; }
+  ensureTrackColors();
   sel = { trackId: null, idx: null };
   currentPage = 0;
   renderTracks();
@@ -400,6 +412,59 @@ async function selectPattern(i) {
   $("insp-title").textContent = "INSPECTOR";
   $("insp-sub").textContent = "left-click toggles · right-click inspects";
   setStatus(`editing pattern ${patName(i)}`, true);
+}
+
+// ── Per-track colour ─────────────────────────────────────────────────────────
+// Assign the next UNused palette colour to any track without one (new tracks,
+// pre-colour projects). Sets it locally + persists (fire-and-forget). Must run
+// before renderTracks so the row picks up its --track-color with no flash.
+function ensureTrackColors() {
+  if (!project) return;
+  const used = new Set(project.tracks.map(t => t.color).filter(Boolean));
+  project.tracks.forEach((t, i) => {
+    if (t.color) return;
+    const next = THEME_PALETTE.find(c => !used.has(c)) || THEME_PALETTE[i % THEME_PALETTE.length];
+    t.color = next;
+    used.add(next);
+    PUT(`/tracks/${t.id}/color`, { color: next });
+  });
+}
+
+// The row's --track-color cascades to the dot + the active step cells.
+function applyTrackColor(id, color) {
+  const t = findTrack(id); if (t) t.color = color;
+  const row = document.querySelector(`[data-track-id="${id}"]`);
+  if (row) row.style.setProperty("--track-color", color);
+}
+function setTrackColor(id, color) { applyTrackColor(id, color); PUT(`/tracks/${id}/color`, { color }); }
+
+// Palette popover anchored to a track's colour dot.
+let _colorPop = null;
+function closeColorPop() {
+  if (!_colorPop) return;
+  _colorPop.remove(); _colorPop = null;
+  document.removeEventListener("mousedown", _colorPopOutside, true);
+}
+function _colorPopOutside(e) { if (_colorPop && !_colorPop.contains(e.target)) closeColorPop(); }
+function openColorPop(anchorEl, trackId) {
+  closeColorPop();
+  const t = findTrack(trackId);
+  const pop = document.createElement("div");
+  pop.className = "color-pop";
+  for (const c of THEME_PALETTE) {
+    const sw = document.createElement("div");
+    sw.className = "sw" + (t && t.color === c ? " active" : "");
+    sw.style.background = c;
+    sw.title = c + (t && t.color === c ? " (current)" : "");
+    sw.onclick = () => { setTrackColor(trackId, c); closeColorPop(); };
+    pop.appendChild(sw);
+  }
+  document.body.appendChild(pop);
+  const r = anchorEl.getBoundingClientRect();
+  pop.style.left = Math.max(6, Math.min(r.left, window.innerWidth - pop.offsetWidth - 6)) + "px";
+  pop.style.top  = (r.bottom + 6) + "px";
+  _colorPop = pop;
+  setTimeout(() => document.addEventListener("mousedown", _colorPopOutside, true), 0);
 }
 
 // ── Track management (add / remove / rename) ─────────────────────────────────
@@ -606,7 +671,6 @@ function wireInspector() {
 let _lastCol = {};
 function onPlayhead(ppq) {
   const p = Number(ppq);
-  ppqEl.textContent = p.toFixed(3);
   barBeatEl.textContent = `${Math.floor(p / 4) + 1} · ${(Math.floor(p) % 4) + 1}`;
   const globalStep = Math.floor(p * 4);
   if (!project) return;
@@ -879,6 +943,7 @@ function onParams(changed) {
 // ── Project reload (DAW state load swapped in a whole new Project) ────────────
 async function onProjectReload() {
   try { project = await GET("/project"); } catch { return; }
+  ensureTrackColors();
   sel = { trackId: null, idx: null };
   currentPage = 0;
   renderTracks();
@@ -1149,6 +1214,7 @@ async function boot() {
   }
 
   project = await GET("/project");
+  ensureTrackColors();
   renderTracks();
   renderPatternSelect();
   renderPatternMeta();

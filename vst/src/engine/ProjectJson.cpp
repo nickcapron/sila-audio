@@ -179,7 +179,7 @@ juce::var trackToVar (const Track& t)
     auto* o = new juce::DynamicObject();
     o->setProperty ("id",         t.id);
     o->setProperty ("name",       t.name);
-    o->setProperty ("color",      juce::String());     // per-track colour: later step
+    o->setProperty ("color",      t.color);
     o->setProperty ("muted",      t.muted);
     o->setProperty ("solo",       t.solo);
     // cutoff/resonance/filter_mode are APVTS slot params now (Phase 6).
@@ -204,6 +204,7 @@ Track trackFromVar (const juce::var& v)
     Track t;
     t.id    = v.getProperty ("id", juce::String()).toString();
     t.name  = v.getProperty ("name", juce::String()).toString();
+    t.color = v.getProperty ("color", juce::String()).toString();
     t.muted  = (bool) v.getProperty ("muted", false);
     t.solo   = (bool) v.getProperty ("solo", false);
     const juce::var lv = v.getProperty ("lfo", juce::var());

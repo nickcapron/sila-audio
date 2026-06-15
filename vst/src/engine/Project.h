@@ -59,6 +59,7 @@ struct Track
 {
     juce::String           id;
     juce::String           name;
+    juce::String           color;     // UI accent (hex, e.g. "#34e3c4"); engine never reads it
     bool                   muted = false;
     bool                   solo  = false;
     // volume/pan/cutoff/resonance/filterMode moved to the APVTS slot bank
