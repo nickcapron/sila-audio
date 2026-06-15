@@ -72,6 +72,7 @@ const statusEl   = document.getElementById("status");
 const transportEl = document.getElementById("transport");
 const playStateEl = document.getElementById("play-state");
 const bpmEl      = document.getElementById("bpm");
+const playBtn    = document.getElementById("play-btn");
 const activePatEl = document.getElementById("active-pattern");
 const libModal   = document.getElementById("library-modal");
 const libTreeEl  = document.getElementById("lib-tree");
@@ -103,6 +104,9 @@ const projListEl = document.getElementById("proj-list");
 
 let project = null;
 let sel = { trackId: null, idx: null };   // selected step
+// Transport (UI internal): mirror of the published play state + a local tempo
+// target so the BPM wheel feels instant and the status echo doesn't fight it.
+let _playing = false, uiBpm = 120, _bpmWheelAt = 0, _bpmPutTimer = null;
 let currentPage = 0;                        // active 16-step page (front-end view state)
 const STEPS_PER_PAGE = 16;
 
@@ -700,10 +704,18 @@ function onPlayhead(ppq) {
 // Pushed on change (and fetched once on boot) — replaces app.js's 2 s poll.
 function onStatus(s) {
   const playing = !!s.playing;
+  _playing = playing;
   transportEl.classList.toggle("playing", playing);
   playStateEl.textContent = playing ? "PLAYING" : "STOPPED";
+  playBtn.textContent = playing ? "■" : "▶";
+  playBtn.classList.toggle("playing", playing);
+  playBtn.title = playing ? "stop" : "play";
 
-  bpmEl.textContent = s.bpm != null ? Number(s.bpm).toFixed(1) : "—";
+  // Reflect tempo, but don't clobber the display while the user is wheeling it.
+  if (s.bpm != null) {
+    uiBpm = Number(s.bpm);
+    if (Date.now() - _bpmWheelAt > 400) bpmEl.textContent = uiBpm.toFixed(1);
+  }
 
   // Active song-mode pattern (null = off/stopped). Slot 0 -> "A", 1 -> "B"...
   const slot = s.current_song_slot;
@@ -1228,6 +1240,18 @@ async function boot() {
 
   // Initial transport status (live updates after this arrive via the event).
   try { onStatus(await GET("/sequencer/status")); } catch { /* ignore */ }
+
+  // Transport: play/stop toggles the internal transport; the BPM readout is a
+  // scroll wheel (±1 BPM/notch, 20..300). Both no-op against a playing host.
+  playBtn.addEventListener("click", () => PUT("/transport/playing", { playing: !_playing }));
+  bpmEl.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    uiBpm = Math.max(20, Math.min(300, (uiBpm || 120) + (e.deltaY < 0 ? 1 : -1)));
+    bpmEl.textContent = uiBpm.toFixed(1);
+    _bpmWheelAt = Date.now();
+    clearTimeout(_bpmPutTimer);
+    _bpmPutTimer = setTimeout(() => PUT("/transport/bpm", { bpm: uiBpm }), 80);
+  }, { passive: false });
 
   const swing0 = Math.round((project.swing || 0) * 100);
   swingEl.value = swing0;

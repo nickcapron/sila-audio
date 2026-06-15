@@ -38,6 +38,15 @@
     }
     .meta { display: flex; align-items: center; gap: 7px; color: var(--text-dim); font-size: 11px; letter-spacing: .5px; text-transform: uppercase; }
     .meta .val { color: var(--accent-2); font-variant-numeric: tabular-nums; min-width: 58px; text-transform: none; letter-spacing: 0; font-size: 12px; }
+    /* play / stop button (▶ teal when stopped, ■ purple while playing) */
+    #play-btn { background: rgba(52,227,196,.06); color: var(--accent); border: 1px solid #2a5650;
+      border-radius: var(--radius); width: 30px; height: 26px; font-size: 12px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; transition: background .12s, color .12s, border-color .12s; }
+    #play-btn:hover { background: var(--accent); color: #04110d; border-color: var(--accent); }
+    #play-btn.playing { background: rgba(139,108,240,.14); color: var(--accent-2); border-color: #4a3d7a; }
+    #play-btn.playing:hover { background: var(--accent-2); color: #04110d; border-color: var(--accent-2); }
+    /* BPM readout is scroll-adjustable */
+    #bpm { cursor: ns-resize; }
     /* transport play indicator: dim when stopped, glowing accent when playing */
     #transport .dot {
       width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim);
@@ -332,8 +341,9 @@
 <body>
   <header>
     <span class="logo">SILA</span>
+    <button id="play-btn" title="play / stop">▶</button>
     <span class="meta" id="transport"><span class="dot"></span><span id="play-state">—</span></span>
-    <span class="meta">BPM <span id="bpm" class="val" style="min-width:46px">—</span></span>
+    <span class="meta">BPM <span id="bpm" class="val" style="min-width:46px" title="scroll to change tempo">—</span></span>
     <span class="meta">Bar·Beat <span id="barbeat" class="val">—</span></span>
     <span class="meta">PTN <select id="pattern-select" title="pattern being edited / played"></select></span>
     <span class="meta">LEN <input type="number" id="pattern-len" min="1" max="128" title="pattern length in steps (1–128). Shrinking discards steps past the new end."></span>

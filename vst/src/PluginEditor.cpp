@@ -548,6 +548,21 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return juce::var (o);
     }
 
+    // PUT /transport/playing { playing } — UI play/stop (internal transport).
+    if (method == "PUT" && path == "/transport/playing")
+    {
+        processor.internalPlaying.store ((bool) body.getProperty ("playing", true), std::memory_order_relaxed);
+        return emptyObject();
+    }
+
+    // PUT /transport/bpm { bpm } — internal transport tempo (20..300).
+    if (method == "PUT" && path == "/transport/bpm")
+    {
+        const double b = (double) body.getProperty ("bpm", 120.0);
+        processor.internalBpm.store (juce::jlimit (20.0, 300.0, b), std::memory_order_relaxed);
+        return emptyObject();
+    }
+
     // PUT /project/swing { swing }  → drive the APVTS param (already atomic).
     if (method == "PUT" && path == "/project/swing")
     {

@@ -65,6 +65,12 @@ public:
     std::atomic<double> currentBpm       { kDefaultBpm };
     std::atomic<int>    currentSongSlot  { -1 };   // -1 = song mode off / not playing
 
+    // Internal transport (UI play/stop + tempo). Governs playback when no host
+    // transport is driving — i.e. always in Standalone, or a stopped DAW. A host
+    // that is playing always takes priority (its transport + tempo win).
+    std::atomic<bool>   internalPlaying { false };
+    std::atomic<double> internalBpm     { kDefaultBpm };
+
     // Song Mode playhead (Phase 6), published once per block for the song-edit UI.
     // currentSongSlot above carries the active row's pattern slot in song mode.
     std::atomic<int>    currentSongRow    { -1 };  // -1 = not in a song
@@ -176,6 +182,8 @@ private:
     double sampleRate { 48000.0 };
     double internalPpq { 0.0 };       // free-running clock for the Standalone case
     long   lastFiredSixteenth { -1 }; // dedupe boundaries across blocks
+    bool   wasInternalPlaying { false }; // edge-detect internal stop -> reset playhead
+    bool   transportInitialized { false }; // set the wrapper-typed play default once
 
     // Live immutable project snapshot (RCU). Audio thread loads it per block.
     std::atomic<ProjectPtr> liveProject;

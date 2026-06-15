@@ -130,6 +130,15 @@ void SilaAudioProcessor::prepareToPlay (double sr, int /*samplesPerBlock*/)
     internalPpq = 0.0;
     lastFiredSixteenth = -1;
 
+    // Set the internal transport's default ONCE (independent of state-load order):
+    // Standalone auto-plays (no host to start it); hosted starts stopped and waits
+    // for the host transport (or the UI play button). Not persisted — wrapper-typed.
+    if (! transportInitialized)
+    {
+        internalPlaying.store (wrapperType == wrapperType_Standalone, std::memory_order_relaxed);
+        transportInitialized = true;
+    }
+
     if (liveProject.load (std::memory_order_acquire) == nullptr)
     {
         // First prepare: author the in-code demo project + its sampler bank.
@@ -412,9 +421,9 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     const int numSamples = buffer.getNumSamples();
 
-    // --- Resolve transport: host if playing, else internal (Standalone only) --
+    // --- Resolve transport: host if playing, else the UI internal transport ----
     double bpm = kDefaultBpm, ppqStart = internalPpq;
-    bool playing = false;
+    bool playing = false, hostPlaying = false;
 
     if (auto* ph = getPlayHead())
     {
@@ -422,17 +431,25 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             if (pos->getIsPlaying())
             {
-                playing  = true;
-                bpm      = pos->getBpm().orFallback (kDefaultBpm);
-                ppqStart = pos->getPpqPosition().orFallback (internalPpq);
+                hostPlaying = true;
+                playing     = true;
+                bpm         = pos->getBpm().orFallback (kDefaultBpm);
+                ppqStart    = pos->getPpqPosition().orFallback (internalPpq);
             }
         }
     }
 
-    if (! playing && wrapperType == wrapperType_Standalone)
+    if (! hostPlaying)
     {
-        playing  = true;            // free-run so the Standalone app makes sound
-        bpm      = kDefaultBpm;
+        // No host transport (Standalone, or a stopped DAW): the UI-controlled
+        // internal transport governs. Stop resets the playhead to the top
+        // (groovebox-style) — done here on the audio thread so internalPpq is
+        // never written from the message thread (no data race).
+        const bool intPlay = internalPlaying.load (std::memory_order_relaxed);
+        if (wasInternalPlaying && ! intPlay) { internalPpq = 0.0; lastFiredSixteenth = -1; }
+        wasInternalPlaying = intPlay;
+        playing  = intPlay;
+        bpm      = internalBpm.load (std::memory_order_relaxed);
         ppqStart = internalPpq;
     }
 
@@ -683,6 +700,7 @@ void SilaAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     if (auto proj = snapshot())
         state.setProperty ("projectJson",
                            juce::JSON::toString (sila::engine::projectToVar (*proj), true), nullptr);
+    state.setProperty ("internalBpm", internalBpm.load (std::memory_order_relaxed), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, dest);
@@ -699,6 +717,10 @@ void SilaAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
         return;
 
     apvts.replaceState (state);   // restore params (swing/songMode/master/...)
+
+    if (state.hasProperty ("internalBpm"))
+        internalBpm.store (juce::jlimit (20.0, 300.0, (double) state.getProperty ("internalBpm")),
+                           std::memory_order_relaxed);
 
     // Restore the structural Project, if this preset carries one (older presets
     // without it just keep the current project).
