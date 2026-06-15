@@ -222,6 +222,11 @@
     }
     .sample-slot:hover { border-color: var(--accent); color: var(--text); }
     .sample-slot.loaded { color: var(--accent); border-color: #2a5650; background: rgba(52,227,196,.05); }
+    /* per-track "load a pattern part" button (next to the sample slot) */
+    .parts-btn { flex-shrink: 0; width: 26px; height: 26px; border: 1px solid var(--border); background: var(--surface-2);
+      color: var(--text-dim); border-radius: var(--radius); cursor: pointer; font-size: 13px; line-height: 1;
+      transition: border-color .12s, color .12s, background .12s; }
+    .parts-btn:hover { border-color: var(--accent-2); color: var(--accent-2); background: rgba(139,108,240,.06); }
 
     /* library browser modal */
     .modal-backdrop {
@@ -241,7 +246,8 @@
       border-radius: 4px; padding: 6px 9px; font: inherit; font-size: 12px;
     }
     .modal-head .close { background: none; border: none; color: var(--text-dim); font-size: 20px; line-height: 1; cursor: pointer; }
-    #lib-target { padding: 0 14px 8px; color: var(--text-dim); font-size: 11px; }
+    #lib-target, #parts-target { padding: 0 14px 8px; color: var(--text-dim); font-size: 11px; }
+    #parts-target b { color: var(--accent); }
     .lib-tree { flex: 1; overflow: auto; padding: 6px; }
     .lib-pack > summary { cursor: pointer; padding: 5px 8px; color: var(--text); font-weight: 700; letter-spacing: .5px; }
     .lib-cat > summary { cursor: pointer; padding: 4px 8px 4px 22px; color: var(--text-dim); }
@@ -474,6 +480,18 @@
     <div class="song-foot">
       <button id="song-add-row">+ Insert Row</button>
       <span class="song-hint">Rows play top → bottom · ↺ repeats · +I row length in steps · BPM overrides tempo (Standalone) · MUTE silences a track for the row</span>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="parts-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>PATTERN PARTS</h2>
+        <input id="parts-search" type="text" placeholder="search parts…" autocomplete="off" spellcheck="false">
+        <button class="close" id="parts-close" title="close">×</button>
+      </div>
+      <div id="parts-target"></div>
+      <div class="lib-tree" id="parts-tree"></div>
     </div>
   </div>
 

@@ -79,6 +79,11 @@ const libTreeEl  = document.getElementById("lib-tree");
 const libSearch  = document.getElementById("lib-search");
 const libCloseEl = document.getElementById("lib-close");
 const libTargetEl = document.getElementById("lib-target");
+const partsModal  = document.getElementById("parts-modal");
+const partsTree   = document.getElementById("parts-tree");
+const partsSearch = document.getElementById("parts-search");
+const partsCloseEl = document.getElementById("parts-close");
+const partsTargetEl = document.getElementById("parts-target");
 const trimmerEl  = document.getElementById("trimmer");
 const trimWrap   = document.getElementById("trim-wrap");
 const trimCanvas = document.getElementById("trim-canvas");
@@ -318,10 +323,17 @@ function renderTracks() {
       grid.appendChild(cell);
     }
 
+    const partsBtn = document.createElement("button");
+    partsBtn.className = "parts-btn";
+    partsBtn.textContent = "≣";
+    partsBtn.title = "load a pattern part onto this track";
+    partsBtn.onclick = (e) => { e.stopPropagation(); openParts(track.id, track.name); };
+
     row.appendChild(ms);
     row.appendChild(dot);
     row.appendChild(name);
     row.appendChild(slot);
+    row.appendChild(partsBtn);
     row.appendChild(mix);
     row.appendChild(grid);
     tracksEl.appendChild(row);
@@ -1219,6 +1231,120 @@ function highlightSongRow() {
   songRowsEl.querySelectorAll("tr").forEach((tr, i) => tr.classList.toggle("playing", i === songPlayRow));
 }
 
+// ── Factory pattern parts (per-track presets, sound-agnostic step data) ──────
+// Drum parts use a 16-char string: X=accent(120) x=hit(100) o=ghost(60) .=off.
+// Melodic parts use notes [{i:step, p:semitones, v:velocity}]. Loading tiles the
+// part across the pattern's master length (a 16-step part fills a 32-step pattern).
+const FACTORY_PARTS = [
+  { cat: "Kick", parts: [
+    { name: "Four on the Floor", str: "x...x...x...x..." },
+    { name: "Boom Bap",          str: "x.....x...x....." },
+    { name: "Trap",              str: "x......x..x....." },
+    { name: "Electro",           str: "x...x..xx...x..." },
+    { name: "Offbeat",           str: "..x...x...x...x." },
+    { name: "Half-time",         str: "x.......x......." },
+  ]},
+  { cat: "Snare", parts: [
+    { name: "Backbeat",          str: "....x.......x..." },
+    { name: "Boom Bap Ghosts",   str: "....X..o..o.X..." },
+    { name: "Roll End",          str: "............xxxx" },
+    { name: "Half-time",         str: "........x......." },
+    { name: "Double Hit",        str: "....x.......x..x" },
+  ]},
+  { cat: "Hi-Hat", parts: [
+    { name: "8ths",              str: "x.x.x.x.x.x.x.x." },
+    { name: "16ths",             str: "xxxxxxxxxxxxxxxx" },
+    { name: "Offbeat",           str: "..x...x...x...x." },
+    { name: "Accented",          str: "x.X.x.X.x.X.x.X." },
+    { name: "Trap Roll",         str: "x.x.x.xxx.x.x.xx" },
+    { name: "Swung",             str: "x..xx..xx..xx..x" },
+  ]},
+  { cat: "Perc", parts: [
+    { name: "Clave",             str: "x..x..x...x.x..." },
+    { name: "Tambourine",        str: "..x...x...x...x." },
+    { name: "Shaker",            str: "X.x.X.x.X.x.X.x." },
+    { name: "Conga",             str: "..x.x..x..x.x..x" },
+  ]},
+  { cat: "Bass", parts: [
+    { name: "Octave Pulse",      notes: [{i:0,p:0},{i:4,p:12},{i:8,p:0},{i:12,p:12}] },
+    { name: "Root 8ths",         notes: [{i:0,p:0},{i:2,p:0},{i:4,p:0},{i:6,p:0},{i:8,p:0},{i:10,p:0},{i:12,p:0},{i:14,p:0}] },
+    { name: "Syncopated",        notes: [{i:0,p:0},{i:3,p:0},{i:6,p:0},{i:8,p:0},{i:11,p:0},{i:14,p:0}] },
+    { name: "Walking",           notes: [{i:0,p:0},{i:4,p:3},{i:8,p:5},{i:12,p:7}] },
+    { name: "Sub Drop",          notes: [{i:0,p:0},{i:8,p:-5}] },
+    { name: "Acid",              notes: [{i:0,p:0},{i:2,p:12},{i:4,p:0},{i:6,p:3},{i:8,p:0},{i:10,p:12},{i:12,p:7},{i:14,p:0}] },
+  ]},
+  { cat: "Lead / Arp", parts: [
+    { name: "Arp Up",            notes: [{i:0,p:0},{i:2,p:4},{i:4,p:7},{i:6,p:12},{i:8,p:0},{i:10,p:4},{i:12,p:7},{i:14,p:12}] },
+    { name: "Arp Down",          notes: [{i:0,p:12},{i:2,p:7},{i:4,p:4},{i:6,p:0},{i:8,p:12},{i:10,p:7},{i:12,p:4},{i:14,p:0}] },
+    { name: "Up-Down",           notes: [{i:0,p:0},{i:2,p:4},{i:4,p:7},{i:6,p:12},{i:8,p:7},{i:10,p:4},{i:12,p:0},{i:14,p:4}] },
+    { name: "Octave Jump",       notes: [{i:0,p:0},{i:4,p:12},{i:8,p:0},{i:12,p:12}] },
+    { name: "Stabs",             notes: [{i:0,p:0},{i:6,p:7},{i:8,p:0},{i:14,p:7}] },
+    { name: "Pentatonic",        notes: [{i:0,p:0},{i:2,p:3},{i:4,p:5},{i:6,p:7},{i:8,p:10},{i:10,p:7},{i:12,p:5},{i:14,p:3}] },
+  ]},
+];
+
+// Expand a preset into a full step array (sound-agnostic — active/velocity/pitch).
+function partToSteps(preset) {
+  if (preset.str) {
+    return [...preset.str].map(c =>
+      c === "X" ? { active: true, velocity: 120 } :
+      c === "x" ? { active: true, velocity: 100 } :
+      c === "o" ? { active: true, velocity: 60 } :
+                  { active: false });
+  }
+  const len = preset.len || 16;
+  const out = Array.from({ length: len }, () => ({ active: false }));
+  for (const n of (preset.notes || []))
+    if (n.i >= 0 && n.i < len) out[n.i] = { active: true, velocity: n.v || 100, pitch_offset: n.p || 0 };
+  return out;
+}
+
+let partsTrackId = null;
+function openParts(trackId, trackName) {
+  partsTrackId = trackId;
+  partsTargetEl.innerHTML = `load onto <b>${trackName}</b> · pattern ${patName(project.current_pattern || 0)}`;
+  partsSearch.value = "";
+  partsModal.classList.add("open");
+  renderParts("");
+  partsSearch.focus();
+}
+function closeParts() { partsModal.classList.remove("open"); partsTrackId = null; }
+
+function renderParts(filter) {
+  const q = filter.trim().toLowerCase();
+  partsTree.innerHTML = "";
+  for (const group of FACTORY_PARTS) {
+    const matching = group.parts.filter(p => !q || p.name.toLowerCase().includes(q) || group.cat.toLowerCase().includes(q));
+    if (!matching.length) continue;
+    const d = document.createElement("details");
+    d.className = "lib-cat";
+    d.open = !!q;
+    const s = document.createElement("summary");
+    s.innerHTML = `${group.cat}<span class="count">${matching.length}</span>`;
+    d.appendChild(s);
+    for (const p of matching) {
+      const row = document.createElement("div");
+      row.className = "lib-sample";
+      row.textContent = p.name;
+      row.onclick = () => loadPart(p);
+      d.appendChild(row);
+    }
+    partsTree.appendChild(d);
+  }
+  if (!partsTree.children.length) partsTree.innerHTML = '<div class="lib-empty">no matches</div>';
+}
+
+// Load a part onto the target track's column in the current pattern, then refresh.
+async function loadPart(preset) {
+  if (!partsTrackId) return;
+  try { await PUT(`/tracks/${partsTrackId}/steps`, { steps: partToSteps(preset) }); }
+  catch { setStatus("part load failed", false); return; }
+  closeParts();
+  try { project = await GET("/project"); } catch { return; }
+  renderTracks();
+  setStatus(`loaded "${preset.name}"`, true);
+}
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
@@ -1280,6 +1406,12 @@ async function boot() {
   libCloseEl.addEventListener("click", closeLibrary);
   libModal.addEventListener("click", (e) => { if (e.target === libModal) closeLibrary(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLibrary(); });
+
+  // Pattern-parts browser controls.
+  partsSearch.addEventListener("input", () => renderParts(partsSearch.value));
+  partsCloseEl.addEventListener("click", closeParts);
+  partsModal.addEventListener("click", (e) => { if (e.target === partsModal) closeParts(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeParts(); });
 
   // Trimmer drag handles.
   trimStartH.addEventListener("mousedown", (e) => startTrimDrag(e, "start"));

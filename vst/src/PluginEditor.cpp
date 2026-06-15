@@ -428,6 +428,35 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
+    // PUT /tracks/{id}/steps  body { steps: [step...] } — bulk-set this track's
+    // column in the CURRENT pattern (used to load a pattern-part preset). The
+    // incoming steps are tiled/truncated to the pattern's master length, so a
+    // 16-step part fills a 32-step pattern by repeating. 3 segs (no step index).
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "steps")
+    {
+        const juce::String id = seg[1];
+        const juce::var stepsVar = body.getProperty ("steps", juce::var());
+        processor.editProject ([&] (Project& proj)
+        {
+            int ti = -1;
+            for (int i = 0; i < (int) proj.tracks.size(); ++i)
+                if (proj.tracks[(size_t) i].id == id) { ti = i; break; }
+            if (ti < 0) return;
+
+            std::vector<Step> src;
+            if (auto* arr = stepsVar.getArray())
+                for (const auto& sv : *arr) { Step s; applyStepVar (s, sv); src.push_back (s); }
+            if (src.empty()) return;
+
+            const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, proj.currentPattern);
+            ensurePatternColumns (proj, cp);
+            auto& col = proj.patternBank.slots[(size_t) cp][(size_t) ti];
+            for (size_t i = 0; i < col.size(); ++i)
+                col[i] = src[i % src.size()];   // tile the part across the master length
+        });
+        return emptyObject();
+    }
+
     // PUT /pattern/select { index } — choose which pattern slot the grid edits and
     // pattern mode plays. Structural edit; the UI re-fetches GET /project.
     if (method == "PUT" && path == "/pattern/select")
