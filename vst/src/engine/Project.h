@@ -138,6 +138,13 @@ struct Project
     // Digitakt Song Mode (Phase 6). The active song plays when songMode is on.
     std::vector<Song> songs;        // up to kMaxSongs
     int               activeSong = 0;   // which song plays (structural, read lock-free)
+
+    // Global musical key — UI metadata only (the engine never reads it; per-step
+    // pitch_offset is already absolute semitones). Drives the note keyboard's
+    // highlighting + how melodic presets map their scale degrees. Persisted.
+    int          keyRoot  = 0;          // 0=C .. 11=B
+    juce::String keyScale = "minor";    // scale name the UI interprets (musical default;
+                                        // "chromatic" is selectable for free note entry)
 };
 
 // Materialize a pattern slot to exactly tracks.size() columns of equal length,

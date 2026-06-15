@@ -469,6 +469,15 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
+    // PUT /key { root, scale } — global musical key (UI metadata; persisted).
+    if (method == "PUT" && path == "/key")
+    {
+        const int root = juce::jlimit (0, 11, (int) body.getProperty ("root", 0));
+        const juce::String scale = body.getProperty ("scale", "chromatic").toString();
+        processor.editProject ([&] (Project& proj) { proj.keyRoot = root; proj.keyScale = scale; });
+        return emptyObject();
+    }
+
     // PUT /pattern/length { length } — set the current pattern's master length
     // (1..128, resizes every track column). The UI re-fetches GET /project.
     if (method == "PUT" && path == "/pattern/length")

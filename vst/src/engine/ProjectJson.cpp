@@ -330,6 +330,8 @@ juce::var projectToVar (const Project& p)
 
     o->setProperty ("pattern_bank", patternBankToVar (p.patternBank));
     o->setProperty ("current_pattern", p.currentPattern);
+    o->setProperty ("key_root",  p.keyRoot);
+    o->setProperty ("key_scale", p.keyScale);
 
     juce::Array<juce::var> songs;
     for (const auto& s : p.songs) songs.add (songToVar (s));
@@ -348,6 +350,8 @@ Project projectFromVar (const juce::var& v)
 
     patternBankFromVar (p.patternBank, v.getProperty ("pattern_bank", juce::var()));
     p.currentPattern = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) v.getProperty ("current_pattern", 0));
+    p.keyRoot  = juce::jlimit (0, 11, (int) v.getProperty ("key_root", 0));
+    p.keyScale = v.getProperty ("key_scale", "chromatic").toString();
 
     // Back-compat: pre-unification projects stored steps on each track. If slot 0
     // is empty, migrate those per-track `steps` arrays into it (as its columns).

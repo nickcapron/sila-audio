@@ -120,6 +120,36 @@ const STEPS_PER_PAGE = 16;
 // (duplicates allowed when chosen manually). The engine just stores the string.
 const THEME_PALETTE = ["#34e3c4", "#8b6cf0", "#ffae57", "#ff5a5a", "#5fd0e0", "#6ee7a0", "#f08bd0", "#e3d534"];
 
+// Global musical key (UI-only; the engine reads absolute pitch_offset semitones).
+// Convention: pitch_offset 0 = the key root. A step's chromatic note = root +
+// pitch_offset; in-scale = (note-root) mod 12 is in the scale's intervals.
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SCALES = {
+  chromatic:          [0,1,2,3,4,5,6,7,8,9,10,11],
+  major:              [0,2,4,5,7,9,11],
+  minor:              [0,2,3,5,7,8,10],
+  dorian:             [0,2,3,5,7,9,10],
+  phrygian:           [0,1,3,5,7,8,10],
+  mixolydian:         [0,2,4,5,7,9,10],
+  lydian:             [0,2,4,6,7,9,11],
+  "pentatonic major": [0,2,4,7,9],
+  "pentatonic minor": [0,3,5,7,10],
+  "harmonic minor":   [0,2,3,5,7,8,11],
+  blues:              [0,3,5,6,7,10],
+};
+const DISP_OCT_BASE = 2;   // pitch_offset 0 (root) reads as octave 2
+const currentRoot      = () => (project && project.key_root) || 0;
+const currentScaleName = () => (project && project.key_scale) || "chromatic";
+const currentScale     = () => SCALES[currentScaleName()] || SCALES.chromatic;
+// Scale degree (+ octave offset) -> semitones from the root (for melodic presets).
+function degreeNote(d, o, scale) {
+  const len = scale.length;
+  const idx = ((d % len) + len) % len;
+  return (o + Math.floor(d / len)) * 12 + scale[idx];
+}
+const noteLabel = (absSemi) => NOTE_NAMES[((absSemi % 12) + 12) % 12] + (Math.floor(absSemi / 12) + DISP_OCT_BASE);
+const inScaleAbs = (absSemi) => currentScale().includes((((absSemi - currentRoot()) % 12) + 12) % 12);
+
 // Suppress WebView2's native right-click menu so our oncontextmenu handlers
 // (inspect-without-toggle) are what the user gets.
 document.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -209,7 +239,8 @@ function makeKnob({ min, max, value, label, def, color, format, onInput, onChang
 function stepIsLocked(s) {
   const pl = s.p_locks || {};
   return s.probability < 100 || (s.trig_condition && s.trig_condition !== "always") ||
-         (s.micro_timing || 0) !== 0 || pl.start !== undefined || pl.end !== undefined ||
+         (s.micro_timing || 0) !== 0 || (s.pitch_offset || 0) !== 0 ||
+         pl.start !== undefined || pl.end !== undefined ||
          pl.cutoff !== undefined || pl.resonance !== undefined ||
          pl.lfo_depth !== undefined || pl.lfo_rate !== undefined || pl.filter_mode !== undefined ||
          (s.velocity !== undefined && s.velocity !== 100);
@@ -604,9 +635,7 @@ const INSP_KNOBS = [
   { id:"micro", label:"Micro",   min:-23, max:23,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
     tip:"<b>Micro-timing</b> — nudge this hit earlier / later than the grid.",
     read:s=>s.micro_timing ?? 0,                              write:(s,v)=>{ s.micro_timing = Math.round(v); } },
-  { id:"pitch", label:"Pitch",   min:-24, max:24,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
-    tip:"<b>Pitch</b> — transpose this step in semitones.",
-    read:s=>s.pitch_offset ?? 0,                              write:(s,v)=>{ s.pitch_offset = Math.round(v); } },
+  // Pitch is set via the note keyboard (below the knob grid), not a knob.
   { id:"cut",   label:"Cut",     min:0, max:1, def:1, color:"v2", fmt:v=>Math.round(v*100)+"%",
     tip:"<b>Cutoff</b> — filter for this step (overrides the track). Lower = darker.",
     read:(s,t)=> (s.p_locks?.cutoff ?? t.cutoff ?? 1),        write:(s,v)=>{ (s.p_locks=s.p_locks||{}).cutoff = v; } },
@@ -674,14 +703,83 @@ function selectStep(trackId, idx) {
   $("i-fmode").value  = pl.filter_mode ?? track.filter_mode ?? "lowpass";
   $("i-length").value = String(step.length ?? 0);   // 0 = ∞ one-shot (default)
 
+  // Note keyboard: jump to the selected note's octave + reflect the project key.
+  kbOct = Math.floor((currentRoot() + (step.pitch_offset ?? 0)) / 12);
+  syncKeySelectors();
+  renderKeyboard();
+
   showTrimmer(trackId);   // trimmer follows the selected track's sample
   showLfo(trackId);       // LFO panel follows the selected track
 }
 
 const fmtSigned = (v) => (Number(v) > 0 ? "+" + v : String(v));
 
+// ── Note keyboard (per-step pitch, key-aware) ────────────────────────────────
+const KB_WHITE = [0, 2, 4, 5, 7, 9, 11];                                 // C D E F G A B
+const KB_BLACK = [{ s:1, after:0 }, { s:3, after:1 }, { s:6, after:3 }, { s:8, after:4 }, { s:10, after:5 }];
+let kbOct = 0;   // chromatic octave shown on the keyboard (X = kbOct*12 + pos)
+
+const octRange = () => [Math.floor((currentRoot() - 24) / 12), Math.floor((currentRoot() + 24) / 12)];
+
+function setStepNote(absX) {
+  const s = curStep(); if (!s) return;
+  s.pitch_offset = Math.max(-24, Math.min(24, absX - currentRoot()));
+  saveSelectedStep();   // persists the step + repaints the cell (pitch lights the dot)
+  renderKeyboard();
+}
+function shiftOctave(d) {
+  const [lo, hi] = octRange();
+  kbOct = Math.max(lo, Math.min(hi, kbOct + d));
+  renderKeyboard();
+}
+function renderKeyboard() {
+  const kb = $("keyboard"); if (!kb) return;
+  kb.innerHTML = "";
+  const s = curStep();
+  const absSel = s ? currentRoot() + (s.pitch_offset ?? 0) : null;
+  const key = (pos, cls, after) => {
+    const abs = kbOct * 12 + pos;
+    const k = document.createElement("div");
+    k.className = cls + (inScaleAbs(abs) ? " scale" : "") + (abs === absSel ? " sel" : "");
+    if (after !== undefined) k.style.left = ((after + 1) / 7 * 100) + "%";
+    k.title = noteLabel(abs);
+    k.onclick = (e) => { e.stopPropagation(); setStepNote(abs); };
+    kb.appendChild(k);
+  };
+  KB_WHITE.forEach(pos => key(pos, "wkey"));
+  KB_BLACK.forEach(b => key(b.s, "bkey", b.after));
+  $("note-readout").textContent = s ? noteLabel(absSel) : "—";
+  $("oct-val").textContent = kbOct + DISP_OCT_BASE;
+}
+function buildKeySelectors() {
+  const r = $("key-root"); r.innerHTML = "";
+  NOTE_NAMES.forEach((n, i) => { const o = document.createElement("option"); o.value = i; o.textContent = n; r.appendChild(o); });
+  const sc = $("key-scale"); sc.innerHTML = "";
+  Object.keys(SCALES).forEach(name => {
+    const o = document.createElement("option"); o.value = name;
+    o.textContent = name.replace(/\b\w/g, c => c.toUpperCase());
+    sc.appendChild(o);
+  });
+}
+function syncKeySelectors() {
+  if ($("key-root")) $("key-root").value = currentRoot();
+  if ($("key-scale")) $("key-scale").value = currentScaleName();
+}
+function setKey() {
+  const root = parseInt($("key-root").value);
+  const scale = $("key-scale").value;
+  if (project) { project.key_root = root; project.key_scale = scale; }
+  renderKeyboard();   // scale highlighting updates live
+  PUT("/key", { root, scale });
+}
+
 function wireInspector() {
   buildInspectorKnobs();   // the per-step knobs (commit on release via onChange)
+  buildKeySelectors();
+  $("key-root").addEventListener("change", setKey);
+  $("key-scale").addEventListener("change", setKey);
+  $("oct-down").addEventListener("click", () => shiftOctave(-1));
+  $("oct-up").addEventListener("click", () => shiftOctave(1));
   $("i-trig").addEventListener("change", () => { const s = curStep(); if (s) { s.trig_condition = $("i-trig").value; saveSelectedStep(); } });
   $("i-fmode").addEventListener("change", () => { const s = curStep(); if (s) { (s.p_locks = s.p_locks || {}).filter_mode = $("i-fmode").value; saveSelectedStep(); } });
   $("i-length").addEventListener("change", () => { const s = curStep(); if (s) { s.length = parseFloat($("i-length").value); saveSelectedStep(); } });
@@ -1265,21 +1363,23 @@ const FACTORY_PARTS = [
     { name: "Shaker",            str: "X.x.X.x.X.x.X.x." },
     { name: "Conga",             str: "..x.x..x..x.x..x" },
   ]},
+  // Melodic parts use scale DEGREES (d) + octave offset (o) so they land in the
+  // current key/scale: d=0 root, d=2 the 3rd, d=4 the 5th, etc.
   { cat: "Bass", parts: [
-    { name: "Octave Pulse",      notes: [{i:0,p:0},{i:4,p:12},{i:8,p:0},{i:12,p:12}] },
-    { name: "Root 8ths",         notes: [{i:0,p:0},{i:2,p:0},{i:4,p:0},{i:6,p:0},{i:8,p:0},{i:10,p:0},{i:12,p:0},{i:14,p:0}] },
-    { name: "Syncopated",        notes: [{i:0,p:0},{i:3,p:0},{i:6,p:0},{i:8,p:0},{i:11,p:0},{i:14,p:0}] },
-    { name: "Walking",           notes: [{i:0,p:0},{i:4,p:3},{i:8,p:5},{i:12,p:7}] },
-    { name: "Sub Drop",          notes: [{i:0,p:0},{i:8,p:-5}] },
-    { name: "Acid",              notes: [{i:0,p:0},{i:2,p:12},{i:4,p:0},{i:6,p:3},{i:8,p:0},{i:10,p:12},{i:12,p:7},{i:14,p:0}] },
+    { name: "Octave Pulse",      notes: [{i:0,d:0},{i:4,d:0,o:1},{i:8,d:0},{i:12,d:0,o:1}] },
+    { name: "Root 8ths",         notes: [{i:0,d:0},{i:2,d:0},{i:4,d:0},{i:6,d:0},{i:8,d:0},{i:10,d:0},{i:12,d:0},{i:14,d:0}] },
+    { name: "Syncopated",        notes: [{i:0,d:0},{i:3,d:0},{i:6,d:0},{i:8,d:0},{i:11,d:0},{i:14,d:0}] },
+    { name: "Walking",           notes: [{i:0,d:0},{i:4,d:2},{i:8,d:3},{i:12,d:4}] },
+    { name: "Root & Fifth",      notes: [{i:0,d:0},{i:4,d:4},{i:8,d:0},{i:12,d:4}] },
+    { name: "Arp Bass",          notes: [{i:0,d:0},{i:4,d:2},{i:8,d:4},{i:12,d:2}] },
   ]},
   { cat: "Lead / Arp", parts: [
-    { name: "Arp Up",            notes: [{i:0,p:0},{i:2,p:4},{i:4,p:7},{i:6,p:12},{i:8,p:0},{i:10,p:4},{i:12,p:7},{i:14,p:12}] },
-    { name: "Arp Down",          notes: [{i:0,p:12},{i:2,p:7},{i:4,p:4},{i:6,p:0},{i:8,p:12},{i:10,p:7},{i:12,p:4},{i:14,p:0}] },
-    { name: "Up-Down",           notes: [{i:0,p:0},{i:2,p:4},{i:4,p:7},{i:6,p:12},{i:8,p:7},{i:10,p:4},{i:12,p:0},{i:14,p:4}] },
-    { name: "Octave Jump",       notes: [{i:0,p:0},{i:4,p:12},{i:8,p:0},{i:12,p:12}] },
-    { name: "Stabs",             notes: [{i:0,p:0},{i:6,p:7},{i:8,p:0},{i:14,p:7}] },
-    { name: "Pentatonic",        notes: [{i:0,p:0},{i:2,p:3},{i:4,p:5},{i:6,p:7},{i:8,p:10},{i:10,p:7},{i:12,p:5},{i:14,p:3}] },
+    { name: "Arp Up",            notes: [{i:0,d:0},{i:2,d:2},{i:4,d:4},{i:6,d:0,o:1},{i:8,d:0},{i:10,d:2},{i:12,d:4},{i:14,d:0,o:1}] },
+    { name: "Arp Down",          notes: [{i:0,d:0,o:1},{i:2,d:4},{i:4,d:2},{i:6,d:0},{i:8,d:0,o:1},{i:10,d:4},{i:12,d:2},{i:14,d:0}] },
+    { name: "Up-Down",           notes: [{i:0,d:0},{i:2,d:2},{i:4,d:4},{i:6,d:0,o:1},{i:8,d:4},{i:10,d:2},{i:12,d:0},{i:14,d:2}] },
+    { name: "Octave Run",        notes: [{i:0,d:0},{i:2,d:0,o:1},{i:4,d:0},{i:6,d:0,o:1},{i:8,d:0},{i:10,d:0,o:1},{i:12,d:0},{i:14,d:0,o:1}] },
+    { name: "Stabs",             notes: [{i:0,d:0},{i:6,d:4},{i:8,d:0,o:1},{i:14,d:4}] },
+    { name: "Scale Run",         notes: [{i:0,d:0},{i:2,d:1},{i:4,d:2},{i:6,d:3},{i:8,d:4},{i:10,d:5},{i:12,d:6},{i:14,d:0,o:1}] },
   ]},
 ];
 
@@ -1293,9 +1393,11 @@ function partToSteps(preset) {
                   { active: false });
   }
   const len = preset.len || 16;
+  const scale = currentScale();
   const out = Array.from({ length: len }, () => ({ active: false }));
   for (const n of (preset.notes || []))
-    if (n.i >= 0 && n.i < len) out[n.i] = { active: true, velocity: n.v || 100, pitch_offset: n.p || 0 };
+    if (n.i >= 0 && n.i < len)   // d = scale degree, o = octave offset -> in-key semitones
+      out[n.i] = { active: true, velocity: n.v || 100, pitch_offset: degreeNote(n.d || 0, n.o || 0, scale) };
   return out;
 }
 
@@ -1361,6 +1463,7 @@ async function boot() {
   renderPatternSelect();
   renderPatternMeta();
   wireInspector();
+  syncKeySelectors();   // reflect the project key (selectors live in the inspector)
   patternSelectEl.addEventListener("change", () => selectPattern(parseInt(patternSelectEl.value)));
   patternLenEl.addEventListener("change", () => setPatternLength(patternLenEl.value));
 
