@@ -126,11 +126,11 @@ const findTrack = (id) => project.tracks.find(t => t.id === id);
 // { el, set(v) } — set() updates the visual without firing onInput, and is a
 // no-op while the user is dragging this knob (so host-automation pushes don't
 // fight a drag). The cap shows the label, swapping to the live value while dragging.
-function makeKnob({ min, max, value, label, def, color, format, onInput, onChange, valueInCap, tip }) {
+function makeKnob({ min, max, value, label, def, color, format, onInput, onChange, valueInCap, tip, useTrackColor }) {
   const wrap = document.createElement("div");
   wrap.className = "knob-wrap";
   const knob = document.createElement("div");
-  knob.className = "knob" + (color === "v2" ? " v2" : "");
+  knob.className = "knob" + (color === "v2" ? " v2" : "") + (useTrackColor ? " track-clr" : "");
   const ring = document.createElement("div"); ring.className = "knob-ring";
   const face = document.createElement("div"); face.className = "knob-face";
   const ind = document.createElement("div"); ind.className = "knob-ind"; ind.innerHTML = "<i></i>";
@@ -143,12 +143,15 @@ function makeKnob({ min, max, value, label, def, color, format, onInput, onChang
   wrap.appendChild(cap);
 
   const arc = color === "v2" ? "#8b6cf0" : "#34e3c4";
+  // useTrackColor: read the row's live --track-color so recolouring updates the
+  // dial instantly (the var re-resolves with no rebuild). Falls back to teal.
+  const arcExpr = useTrackColor ? "var(--track-color, #34e3c4)" : arc;
   const fmt = format || (v => Math.round(v));
   let val = value, dragging = false;
   function paint() {
     const norm = (val - min) / (max - min);
     const deg = norm * 270;
-    ring.style.background = `conic-gradient(from 225deg, ${arc} 0deg ${deg}deg, #1c2836 ${deg}deg 270deg, transparent 270deg 360deg)`;
+    ring.style.background = `conic-gradient(from 225deg, ${arcExpr} 0deg ${deg}deg, #1c2836 ${deg}deg 270deg, transparent 270deg 360deg)`;
     ind.style.transform = `rotate(${-135 + norm * 270}deg)`;
     cap.textContent = valueInCap ? fmt(val) : label;
   }
@@ -269,16 +272,16 @@ function renderTracks() {
     const knobRow = document.createElement("div");
     knobRow.className = "knob-row";
     const pct = v => Math.round(v * 100);
-    const kVol = makeKnob({ min: 0, max: 1, value: track.volume ?? 1, label: "Vol", def: 1, format: pct,
+    const kVol = makeKnob({ min: 0, max: 1, value: track.volume ?? 1, label: "Vol", def: 1, format: pct, useTrackColor: true,
       tip: "<b>Volume</b> — output level of this track.",
       onInput: v => { track.volume = v; PUT(`/tracks/${track.id}/volume`, { volume: v }); } });
-    const kCut = makeKnob({ min: 0, max: 1, value: track.cutoff ?? 1, label: "Cut", def: 1, format: pct,
+    const kCut = makeKnob({ min: 0, max: 1, value: track.cutoff ?? 1, label: "Cut", def: 1, format: pct, useTrackColor: true,
       tip: "<b>Cutoff</b> — filter frequency. Lower = darker/muffled.",
       onInput: v => { track.cutoff = v; PUT(`/tracks/${track.id}/cutoff`, { cutoff: v }); } });
-    const kPan = makeKnob({ min: -1, max: 1, value: track.pan ?? 0, label: "Pan", def: 0, color: "v2", format: pct,
+    const kPan = makeKnob({ min: -1, max: 1, value: track.pan ?? 0, label: "Pan", def: 0, format: pct, useTrackColor: true,
       tip: "<b>Pan</b> — left / right position in the stereo field.",
       onInput: v => { track.pan = v; PUT(`/tracks/${track.id}/pan`, { pan: v }); } });
-    const kRes = makeKnob({ min: 0, max: 1, value: track.resonance ?? 0, label: "Res", def: 0, color: "v2", format: pct,
+    const kRes = makeKnob({ min: 0, max: 1, value: track.resonance ?? 0, label: "Res", def: 0, format: pct, useTrackColor: true,
       tip: "<b>Resonance</b> — emphasis at the cutoff; high adds a whistle/peak.",
       onInput: v => { track.resonance = v; PUT(`/tracks/${track.id}/resonance`, { resonance: v }); } });
     knobRow.append(kVol.el, kCut.el, kPan.el, kRes.el);
@@ -615,7 +618,7 @@ function buildInspectorKnobs() {
   for (const p of INSP_KNOBS) {
     const k = makeKnob({
       min: p.min, max: p.max, value: p.def, label: p.label, def: p.def, color: p.color,
-      format: p.fmt, valueInCap: true, tip: p.tip,
+      format: p.fmt, valueInCap: true, tip: p.tip, useTrackColor: true,
       onInput: v => { const s = curStep(); if (s) p.write(s, v); },
       onChange: () => { if (curStep()) saveSelectedStep(); }
     });
@@ -648,6 +651,7 @@ function selectStep(trackId, idx) {
   $("insp-sub").textContent = `Track: ${track.name}`;
   $("insp-empty").style.display = "none";
   $("insp-fields").style.display = "block";   // explicit: "" would revert to the CSS display:none
+  $("insp-knobs").style.setProperty("--track-color", track.color || "#34e3c4");   // tint the step dials
 
   for (const p of INSP_KNOBS) inspKnobs[p.id].set(p.read(step, track));
   $("i-trig").value   = step.trig_condition || "always";
