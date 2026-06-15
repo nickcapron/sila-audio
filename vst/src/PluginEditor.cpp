@@ -326,8 +326,14 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                     }
             if (auto* vo = v.getDynamicObject())
             {
+                // Master pattern length = a non-empty column's size, else default.
+                int patternLength = kDefaultPatternLength;
+                for (const auto& col : curSlot)
+                    if (! col.empty()) { patternLength = (int) col.size(); break; }
                 vo->setProperty ("current_pattern", cp);
                 vo->setProperty ("pattern_count", PatternBank::kNumSlots);
+                vo->setProperty ("pattern_length", patternLength);
+                vo->setProperty ("max_pattern_length", kMaxPatternLength);
             }
             return v;
         }
@@ -417,6 +423,18 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         processor.editProject ([&] (Project& proj)
         {
             proj.currentPattern = juce::jlimit (0, PatternBank::kNumSlots - 1, idx);
+        });
+        return emptyObject();
+    }
+
+    // PUT /pattern/length { length } — set the current pattern's master length
+    // (1..128, resizes every track column). The UI re-fetches GET /project.
+    if (method == "PUT" && path == "/pattern/length")
+    {
+        const int len = (int) body.getProperty ("length", kDefaultPatternLength);
+        processor.editProject ([&] (Project& proj)
+        {
+            setPatternLength (proj, proj.currentPattern, len);
         });
         return emptyObject();
     }

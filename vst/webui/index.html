@@ -50,6 +50,22 @@
     /* pattern selector (which slot the grid edits / plays) */
     #pattern-select { background: var(--bg); color: var(--accent-2); border: 1px solid var(--border);
       border-radius: 4px; font: inherit; font-size: 12px; font-weight: 700; padding: 3px 6px; cursor: pointer; }
+    /* pattern length input */
+    #pattern-len { width: 50px; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; font: inherit; font-size: 12px; padding: 3px 5px; }
+    /* page navigation chips (shown above the grid when length > 16) */
+    #page-bar { display: none; gap: 5px; align-items: center; margin-bottom: 12px; }
+    #page-bar.visible { display: flex; }
+    #page-bar .page-lbl { color: var(--text-dim); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-right: 4px; }
+    #page-bar .page-chip {
+      min-width: 30px; height: 24px; padding: 0 7px; border: 1px solid var(--border); background: var(--surface);
+      color: var(--text-dim); border-radius: 4px; cursor: pointer; font: inherit; font-size: 11px; font-variant-numeric: tabular-nums;
+      transition: background .1s, color .1s, border-color .1s;
+    }
+    #page-bar .page-chip:hover { border-color: var(--text-dim); color: var(--text); }
+    #page-bar .page-chip.active { background: var(--accent-2); border-color: var(--accent-2); color: #04110d; font-weight: 700; }
+    /* a page chip glows when the transport is playing a step on that page */
+    #page-bar .page-chip.playing:not(.active) { border-color: var(--accent-2); color: var(--accent-2); }
     /* header action buttons (pinned to the right) */
     #projects-btn, #export-btn, #song-btn {
       background: rgba(52,227,196,.06); color: var(--accent);
@@ -311,6 +327,7 @@
     <span class="meta">PPQ <span id="ppq" class="val">—</span></span>
     <span class="meta">Bar·Beat <span id="barbeat" class="val">—</span></span>
     <span class="meta">PTN <select id="pattern-select" title="pattern being edited / played"></select></span>
+    <span class="meta">LEN <input type="number" id="pattern-len" min="1" max="128" title="pattern length in steps (1–128). Shrinking discards steps past the new end."></span>
     <span class="meta">Swing <input type="range" id="swing" min="0" max="100" value="0"><span id="swing-pct" class="val" style="min-width:34px">0%</span></span>
     <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>
@@ -321,6 +338,7 @@
 
   <div class="body">
     <main>
+      <div id="page-bar"></div>
       <div id="tracks"></div>
       <button id="add-track" title="Add a track (max 8)">+ Track</button>
 

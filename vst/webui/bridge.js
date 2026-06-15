@@ -67,6 +67,8 @@ const swingEl    = document.getElementById("swing");
 const swingPct   = document.getElementById("swing-pct");
 const songEl     = document.getElementById("songMode");
 const patternSelectEl = document.getElementById("pattern-select");
+const patternLenEl = document.getElementById("pattern-len");
+const pageBarEl    = document.getElementById("page-bar");
 const statusEl   = document.getElementById("status");
 const transportEl = document.getElementById("transport");
 const playStateEl = document.getElementById("play-state");
@@ -102,6 +104,8 @@ const projListEl = document.getElementById("proj-list");
 
 let project = null;
 let sel = { trackId: null, idx: null };   // selected step
+let currentPage = 0;                        // active 16-step page (front-end view state)
+const STEPS_PER_PAGE = 16;
 
 // Suppress WebView2's native right-click menu so our oncontextmenu handlers
 // (inspect-without-toggle) are what the user gets.
@@ -283,14 +287,19 @@ function renderTracks() {
 
     const grid = document.createElement("div");
     grid.className = "step-grid";
-    track.steps.forEach((step, idx) => {
+    // Render only the active page's window; cells keep their GLOBAL step index so
+    // edits / PUT / playhead all address the real step regardless of the page.
+    const start = currentPage * STEPS_PER_PAGE;
+    const end = Math.min(track.steps.length, start + STEPS_PER_PAGE);
+    for (let idx = start; idx < end; idx++) {
+      const step = track.steps[idx];
       const cell = document.createElement("div");
       cell.dataset.stepIdx = idx;
       paintCell(cell, track.id, idx, step);
       cell.onclick = () => { toggleStep(track.id, idx); selectStep(track.id, idx); };
       cell.oncontextmenu = (e) => { e.preventDefault(); resetStep(track.id, idx); };
       grid.appendChild(cell);
-    });
+    }
 
     row.appendChild(ms);
     row.appendChild(name);
@@ -301,6 +310,7 @@ function renderTracks() {
   }
   const addBtn = document.getElementById("add-track");
   if (addBtn) addBtn.disabled = project.tracks.length >= 8;
+  _lastCol = {};   // force the playhead to re-light after a rebuild (page/length change)
 }
 
 // ── Pattern selector (which PatternBank slot the grid edits / plays) ─────────
@@ -319,6 +329,58 @@ function renderPatternSelect() {
   patternSelectEl.value = cur;
 }
 
+// ── Pattern length + pages (master length; pages of 16, view state only) ─────
+const pageCount = () => Math.max(1, Math.ceil(((project && project.pattern_length) || 16) / STEPS_PER_PAGE));
+
+// Reflect the current pattern's length in the LEN box and (re)build the page
+// chips. Hidden entirely when the pattern fits in one page (<= 16 steps).
+function renderPatternMeta() {
+  if (!project) return;
+  patternLenEl.value = project.pattern_length || 16;
+
+  const pages = pageCount();
+  if (currentPage >= pages) currentPage = pages - 1;
+
+  pageBarEl.innerHTML = "";
+  if (pages <= 1) { pageBarEl.classList.remove("visible"); return; }
+  pageBarEl.classList.add("visible");
+
+  const lbl = document.createElement("span");
+  lbl.className = "page-lbl"; lbl.textContent = "Page";
+  pageBarEl.appendChild(lbl);
+  for (let i = 0; i < pages; i++) {
+    const chip = document.createElement("button");
+    chip.className = "page-chip" + (i === currentPage ? " active" : "");
+    chip.textContent = (i + 1) + ":" + pages;   // e.g. 1:4, 2:4
+    chip.title = `steps ${i * STEPS_PER_PAGE + 1}–${Math.min((project.pattern_length || 16), (i + 1) * STEPS_PER_PAGE)}`;
+    chip.onclick = () => setPage(i);
+    pageBarEl.appendChild(chip);
+  }
+}
+
+// Flip the visible 16-step window — pure front-end, no backend call.
+function setPage(p) {
+  currentPage = Math.max(0, Math.min(pageCount() - 1, p));
+  renderTracks();
+  renderPatternMeta();
+}
+
+// LEN change: resize the pattern (message-thread), re-fetch the grid, clamp page.
+async function setPatternLength(len) {
+  let v = parseInt(len);
+  if (isNaN(v)) v = 16;
+  v = Math.max(1, Math.min(128, v));
+  try {
+    await PUT("/pattern/length", { length: v });
+    project = await GET("/project");
+  } catch { setStatus("length change failed", false); return; }
+  if (currentPage >= pageCount()) currentPage = pageCount() - 1;
+  renderTracks();
+  renderPatternMeta();
+  const pages = pageCount();
+  setStatus(`pattern length ${v} (${pages} page${pages > 1 ? "s" : ""})`, true);
+}
+
 // Switch the edited/played pattern: persist, re-fetch the grid (steps come from
 // the new slot), and reset the inspector since the selected step is now stale.
 async function selectPattern(i) {
@@ -327,8 +389,10 @@ async function selectPattern(i) {
     project = await GET("/project");
   } catch { setStatus("pattern switch failed", false); return; }
   sel = { trackId: null, idx: null };
+  currentPage = 0;
   renderTracks();
   renderPatternSelect();
+  renderPatternMeta();
   hideTrimmer();
   lfoPanel.classList.remove("visible");
   $("insp-empty").style.display = "block";
@@ -552,9 +616,16 @@ function onPlayhead(ppq) {
     const col = ((globalStep % n) + n) % n;
     if (_lastCol[track.id] === col) continue;
     _lastCol[track.id] = col;
-    const cells = document.querySelectorAll(`[data-track-id="${track.id}"] .step`);
-    cells.forEach((c, i) => c.classList.toggle("playing", i === col));
+    // Only the current page's cells exist in the DOM; match by GLOBAL step index
+    // so paging just works (an off-page cell simply isn't present to light).
+    document.querySelectorAll(`[data-track-id="${track.id}"] .step`).forEach(c =>
+      c.classList.toggle("playing", parseInt(c.dataset.stepIdx) === col));
   }
+  // Glow the page chip holding the playhead (master length => same for all tracks).
+  const N = project.pattern_length || 16;
+  const playPage = Math.floor((((globalStep % N) + N) % N) / STEPS_PER_PAGE);
+  pageBarEl.querySelectorAll(".page-chip").forEach((chip, i) =>
+    chip.classList.toggle("playing", i === playPage));
 }
 
 // ── Transport status (C++ -> UI) ────────────────────────────────────────────
@@ -809,8 +880,10 @@ function onParams(changed) {
 async function onProjectReload() {
   try { project = await GET("/project"); } catch { return; }
   sel = { trackId: null, idx: null };
+  currentPage = 0;
   renderTracks();
   renderPatternSelect();
+  renderPatternMeta();
   hideTrimmer();
   lfoPanel.classList.remove("visible");
   lfoTrackId = null;
@@ -1078,8 +1151,10 @@ async function boot() {
   project = await GET("/project");
   renderTracks();
   renderPatternSelect();
+  renderPatternMeta();
   wireInspector();
   patternSelectEl.addEventListener("change", () => selectPattern(parseInt(patternSelectEl.value)));
+  patternLenEl.addEventListener("change", () => setPatternLength(patternLenEl.value));
 
   // Initial transport status (live updates after this arrive via the event).
   try { onStatus(await GET("/sequencer/status")); } catch { /* ignore */ }

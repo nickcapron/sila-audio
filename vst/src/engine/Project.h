@@ -159,4 +159,21 @@ inline void ensurePatternColumns (Project& p, int slot)
         if ((int) c.size() != len)
             c.assign ((size_t) len, Step{});
 }
+
+// Maximum pattern length (Digitakt caps a pattern at 128 steps = 8 pages of 16).
+constexpr int kMaxPatternLength = 128;
+
+// Set a pattern's MASTER length: resize every track column in the slot to
+// `length` (grow with blank steps, shrink truncates — destructive past the new
+// end). Materializes the slot first so an unauthored pattern becomes editable.
+// Message thread only (mutates the Project copy inside editProject).
+inline void setPatternLength (Project& p, int slot, int length)
+{
+    if (slot < 0 || slot >= PatternBank::kNumSlots)
+        return;
+    length = juce::jlimit (1, kMaxPatternLength, length);
+    ensurePatternColumns (p, slot);
+    for (auto& c : p.patternBank.slots[(size_t) slot])
+        c.resize ((size_t) length);
+}
 } // namespace sila::engine
