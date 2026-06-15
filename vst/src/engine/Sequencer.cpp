@@ -83,10 +83,16 @@ SongPosition Sequencer::resolveSong (const Project& project, long songSixteenth)
     if (song.rows.empty())
         return out;
 
-    // Total span of the whole song, in 16ths.
+    // Per-row span (length * repeat) in 16ths. Floor length/repeat at 1 so a
+    // degenerate row from malformed state can never zero the span (and so the
+    // pos/length below can never divide by zero) — routes already clamp to valid
+    // ranges, this just keeps the audio thread safe against bad data.
+    auto rowLen    = [] (const SongRow& r) { return (long) juce::jmax (1, r.length); };
+    auto rowSpan   = [&] (const SongRow& r) { return rowLen (r) * (long) juce::jmax (1, r.repeat); };
+
     long total = 0;
     for (const auto& r : song.rows)
-        total += (long) r.length * (long) r.repeat;
+        total += rowSpan (r);
     if (total <= 0)
         return out;
 
@@ -106,13 +112,13 @@ SongPosition Sequencer::resolveSong (const Project& project, long songSixteenth)
     for (int r = 0; r < (int) song.rows.size(); ++r)
     {
         const SongRow& row = song.rows[(size_t) r];
-        const long span = (long) row.length * (long) row.repeat;
+        const long span = rowSpan (row);
         if (pos < span)
         {
             out.valid       = true;
             out.row         = r;
-            out.repeat      = pos / row.length;
-            out.rowStep     = pos % row.length;
+            out.repeat      = pos / rowLen (row);
+            out.rowStep     = pos % rowLen (row);
             out.patternSlot = row.patternSlot;
             out.mutes       = row.mutes;
             out.tempo       = row.tempo;

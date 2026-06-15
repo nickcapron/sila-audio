@@ -380,7 +380,6 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
     };
 
     proj->currentPattern = 0;            // grid + pattern mode show/play the base groove
-    proj->songChain = { 0, 1, 0, 2 };    // legacy Phase 3b chain (unused by the engine)
 
     // Song Mode (Phase 6) demo arrangement so row-by-row playback is audible
     // without a UI. Rows reference the slots authored above; ↺ = repeat, +I = row
@@ -673,20 +672,17 @@ void SilaAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     // Message thread. Grab the immutable snapshot with one lock-free acquire-load
     // (same read the audio thread does — just bumps the shared_ptr refcount, never
     // blocks it), then serialise it as a property alongside the APVTS params.
+    //
+    // ALWAYS persist the full project: programmed sequence data (patterns + songs)
+    // must survive a host save even when no sample is assigned — losing an
+    // arrangement over a missing .wav is unacceptable. Tradeoff: a project whose
+    // only sound is the in-code demo synth kit (no source paths) reloads SILENT,
+    // since those buffers can't be reconstructed from JSON. Reconstructing the demo
+    // kit on load is deferred polish; real (sampled) projects round-trip fully.
     auto state = apvts.copyState();
     if (auto proj = snapshot())
-    {
-        // Only persist the project if it has loadable audio (≥1 assigned sample).
-        // The in-code demo kit is synth buffers with no source paths, so it would
-        // restore as silence — skip it so a fresh launch keeps the audible demo.
-        bool hasSamples = false;
-        for (const auto& t : proj->tracks)
-            if (! t.samples.empty()) { hasSamples = true; break; }
-
-        if (hasSamples)
-            state.setProperty ("projectJson",
-                               juce::JSON::toString (sila::engine::projectToVar (*proj), true), nullptr);
-    }
+        state.setProperty ("projectJson",
+                           juce::JSON::toString (sila::engine::projectToVar (*proj), true), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, dest);

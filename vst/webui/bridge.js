@@ -322,8 +322,10 @@ function renderPatternSelect() {
 // Switch the edited/played pattern: persist, re-fetch the grid (steps come from
 // the new slot), and reset the inspector since the selected step is now stale.
 async function selectPattern(i) {
-  await PUT("/pattern/select", { index: i });
-  project = await GET("/project");
+  try {
+    await PUT("/pattern/select", { index: i });
+    project = await GET("/project");
+  } catch { setStatus("pattern switch failed", false); return; }
   sel = { trackId: null, idx: null };
   renderTracks();
   renderPatternSelect();

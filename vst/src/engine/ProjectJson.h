@@ -9,12 +9,14 @@
 // format persisted in the host session can never drift apart.
 //
 // `projectToVar`/`projectFromVar` cover the FULL structural Project (tracks +
-// steps + sample layers + song chain + pattern bank) — a superset of what the
-// grid reads. Performance scalars (swing/songMode/bpm) are APVTS params, not
-// part of this; the editor layers them onto the GET /project payload itself.
+// sample layers + pattern_bank + songs) — a superset of what the grid reads. Step
+// data lives in the pattern_bank (unified, v3). Performance scalars (swing/
+// songMode/bpm) are APVTS params, not part of this; the editor layers them onto
+// the GET /project payload itself.
 namespace sila::engine
 {
-constexpr int kProjectSchemaVersion = 2;   // v2 adds `songs` (Digitakt Song Mode)
+constexpr int kProjectSchemaVersion = 3;   // v2 added `songs`; v3 moved step data
+                                           // into the unified pattern_bank
 
 // Step / trig.
 juce::var      stepToVar (const Step&);

@@ -327,10 +327,6 @@ juce::var projectToVar (const Project& p)
     for (const auto& t : p.tracks) tracks.add (trackToVar (t));
     o->setProperty ("tracks", tracks);
 
-    juce::Array<juce::var> chain;
-    for (int slot : p.songChain) chain.add (slot);
-    o->setProperty ("song_chain", chain);
-
     o->setProperty ("pattern_bank", patternBankToVar (p.patternBank));
     o->setProperty ("current_pattern", p.currentPattern);
 
@@ -348,10 +344,6 @@ Project projectFromVar (const juce::var& v)
     if (tracks != nullptr)
         for (const auto& tv : *tracks)
             p.tracks.push_back (trackFromVar (tv));
-
-    if (auto* chain = v.getProperty ("song_chain", juce::var()).getArray())
-        for (const auto& sv : *chain)
-            p.songChain.push_back ((int) sv);
 
     patternBankFromVar (p.patternBank, v.getProperty ("pattern_bank", juce::var()));
     p.currentPattern = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) v.getProperty ("current_pattern", 0));
@@ -385,7 +377,10 @@ Project projectFromVar (const juce::var& v)
             if ((int) p.songs.size() >= Project::kMaxSongs) break;
             p.songs.push_back (songFromVar (sv));
         }
-    p.activeSong = (int) v.getProperty ("active_song", 0);
+    // Clamp the active-song index to the songs actually loaded (a malformed or
+    // older file could carry a stale value; the engine clamps at read time too).
+    const int songCount = (int) p.songs.size();
+    p.activeSong = songCount > 0 ? juce::jlimit (0, songCount - 1, (int) v.getProperty ("active_song", 0)) : 0;
     return p;
 }
 } // namespace sila::engine

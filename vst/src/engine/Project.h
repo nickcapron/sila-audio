@@ -118,7 +118,7 @@ struct Song
 // Port of project.py::ProjectModel (structural subset).
 //
 // Phase 4: this is the immutable RCU snapshot the audio thread reads. It holds
-// only STRUCTURE (tracks/steps/chain/bank/songs). The performance scalars
+// only STRUCTURE (tracks / pattern bank / songs). The performance scalars
 // (swing/songMode/fillActive) are live APVTS params/atomics on the processor —
 // kept out of here so the published snapshot is truly read-only on the audio
 // thread.
@@ -127,11 +127,6 @@ struct Project
     static constexpr int kMaxSongs = 16;    // Elektron caps a project at 16 songs
 
     std::vector<Track> tracks;
-
-    // Legacy Phase 3b "song chain" (one slot per bar). Kept for back-compat
-    // deserialization only; superseded by the `songs` arrangement for real Song
-    // Mode. The engine no longer reads it.
-    std::vector<int> songChain;     // ordered slot indices into patternBank
 
     // Unified pattern bank (Phase 6): the single source of truth for step data.
     // currentPattern is the slot the grid edits and pattern mode plays. Both read

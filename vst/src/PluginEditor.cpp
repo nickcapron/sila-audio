@@ -317,9 +317,9 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                         to->setProperty ("filter_mode", fmodeName (juce::roundToInt (slotValue (i, "fmode"))));
 
                         juce::Array<juce::var> steps;
-                        if (i < (int) curSlot.size())
+                        if (i < (int) curSlot.size() && ! curSlot[(size_t) i].empty())
                             for (const auto& s : curSlot[(size_t) i]) steps.add (stepToVar (s));
-                        else
+                        else   // unauthored / empty column => a blank default-length grid
                             for (int k = 0; k < kDefaultPatternLength; ++k) steps.add (stepToVar (Step{}));
                         to->setProperty ("steps", steps);
                         to->setProperty ("step_count", steps.size());
