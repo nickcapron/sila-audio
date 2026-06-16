@@ -28,7 +28,7 @@ struct Step
 {
     bool          active      = false;
     int           velocity    = 100;                  // 0..127
-    int           pitchOffset = 0;                    // semitones; carried, applied in Phase 5 (needs resampling)
+    int           pitchOffset = 0;                    // semitones; applied via per-voice varispeed (key/keyboard sets it)
     int           probability = 100;                  // 0..100
     TrigCondition trig        = TrigCondition::Always;
     float         length      = 0.0f;                 // gate in 16ths; <= 0 = one-shot (no gate)

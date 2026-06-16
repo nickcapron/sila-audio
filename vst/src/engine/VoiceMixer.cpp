@@ -176,7 +176,14 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<
         }
 
         if (v.pos >= (double) v.endPos || (gated && v.elapsed >= v.gateSamples + envRelease))
-            voices.erase (voices.begin() + (long) i);   // sample ran out, or gate released
+        {
+            // Voice finished (sample ran out / gate released). Swap-and-pop is O(1)
+            // — voices are order-independent. Don't advance i: reprocess the voice
+            // swapped into this slot. (Self-move guarded when i is already last.)
+            if (i != voices.size() - 1)
+                voices[i] = std::move (voices.back());
+            voices.pop_back();
+        }
         else
             ++i;
     }

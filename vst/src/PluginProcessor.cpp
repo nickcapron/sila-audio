@@ -152,6 +152,11 @@ void SilaAudioProcessor::prepareToPlay (double sr, int /*samplesPerBlock*/)
     }
 
     mixer.prepare (sr);
+
+    // Pre-reserve the per-track scratch vectors to the max so processBlock's
+    // resize() on a track-count change never allocates on the audio thread.
+    trackMix.reserve (kMaxTracks);
+    trackLfoPhase.reserve (kMaxTracks);
 }
 
 void SilaAudioProcessor::reapRetired()
@@ -491,7 +496,10 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         // Advance per-track free-run LFO phase for this block; free-mode voices
         // sample it at trigger (in scheduleTriggers).
         const size_t nt = proj->tracks.size();
-        if (trackLfoPhase.size() != nt) trackLfoPhase.assign (nt, 0.0);
+        // resize (not assign) so existing tracks keep their running phase — only a
+        // newly added track starts at 0. Capacity is reserved to kMaxTracks in
+        // prepareToPlay, so this never allocates on the audio thread.
+        if (trackLfoPhase.size() != nt) trackLfoPhase.resize (nt, 0.0);
         const double twoPi = 2.0 * juce::MathConstants<double>::pi;
         for (size_t i = 0; i < nt; ++i)
         {

@@ -25,7 +25,7 @@ struct TrigEvent
     int   trackIndex        = 0;     // index into Project::tracks (selects the sampler)
     int   stepIndex         = 0;
     int   velocity          = 100;
-    int   pitchOffset       = 0;     // carried, not applied until Phase 5
+    int   pitchOffset       = 0;     // semitones; applied via per-voice varispeed
     float length            = 1.0f;
     int   microTiming       = 0;     // ±23 micro-steps
     int   retrig            = 1;     // re-trigger count within the step (1 = off)

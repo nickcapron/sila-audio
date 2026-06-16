@@ -1,7 +1,7 @@
 #pragma once
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <vector>
-#include <map>
+#include <array>
 
 // Port of ../../sila/engine/sampler.py.
 // Per-track: velocity layers + round-robin selection, start/end slicing.
@@ -30,7 +30,7 @@ public:
     Sampler() { formats.registerBasicFormats(); }
 
     void prepare (double sr) { sampleRate = sr; }
-    void clear() { layers.clear(); rrCounters.clear(); }
+    void clear() { layers.clear(); rrCounters.fill (0); }
 
     // Decode a WAV/AIFF file to a mono layer. (Phase 2: no sample-rate
     // conversion yet — files not at the host rate play at the wrong pitch.)
@@ -53,9 +53,15 @@ public:
     std::vector<float> computePeaks (int points) const;
 
 private:
+    // Round-robin counters per rr-group, indexed by (group mod kMaxRrGroups). A
+    // fixed array (not std::map) so get() — called on the AUDIO THREAD — never
+    // allocates a tree node. kMaxRrGroups is generous; groups are author-set and
+    // usually 0.
+    static constexpr int kMaxRrGroups = 16;
+
     juce::AudioFormatManager formats;
     std::vector<SampleLayer> layers;
-    std::map<int, int> rrCounters;     // rrGroup -> counter
+    std::array<int, kMaxRrGroups> rrCounters {};   // value-init to 0
     double sampleRate { 48000.0 };
 };
 } // namespace sila::engine

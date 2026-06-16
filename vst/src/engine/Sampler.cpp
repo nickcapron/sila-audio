@@ -54,21 +54,38 @@ void Sampler::addBuffer (juce::AudioBuffer<float> mono, int velMin, int velMax, 
 
 SampleSlice Sampler::get (int velocity, float startOverride, float endOverride)
 {
-    // Candidates whose velocity range contains the trig velocity.
-    std::vector<int> candidates;
-    for (int i = 0; i < (int) layers.size(); ++i)
-        if (velocity >= layers[i].velMin && velocity <= layers[i].velMax)
-            candidates.push_back (i);
+    // AUDIO THREAD — must not allocate. Two passes over the layers (count, then
+    // pick) instead of building a candidates vector; the rr counter is a fixed
+    // array, not a map. Selects the round-robin layer among those whose velocity
+    // range contains the trig velocity. Mirrors sampler.py.
+    auto matches = [&] (const SampleLayer& l) { return velocity >= l.velMin && velocity <= l.velMax; };
 
-    if (candidates.empty())
+    int count = 0, firstMatch = -1;
+    for (int i = 0; i < (int) layers.size(); ++i)
+        if (matches (layers[(size_t) i]))
+        {
+            if (firstMatch < 0) firstMatch = i;
+            ++count;
+        }
+    if (count == 0)
         return {};
 
-    // Round-robin within the first candidate's group (matches sampler.py).
-    const int group = layers[candidates.front()].rrGroup;
-    const int idx   = rrCounters[group] % (int) candidates.size();
-    rrCounters[group] = idx + 1;
+    // Round-robin within the first match's group (same advance as before; the
+    // stored counter stays bounded by `count`, so no overflow).
+    const int group = ((layers[(size_t) firstMatch].rrGroup % kMaxRrGroups) + kMaxRrGroups) % kMaxRrGroups;
+    const int pick  = rrCounters[(size_t) group] % count;
+    rrCounters[(size_t) group] = pick + 1;
 
-    const SampleLayer& layer = layers[candidates[idx]];
+    // Second pass: the pick-th matching layer.
+    int chosen = firstMatch, seen = 0;
+    for (int i = firstMatch; i < (int) layers.size(); ++i)
+        if (matches (layers[(size_t) i]))
+        {
+            if (seen == pick) { chosen = i; break; }
+            ++seen;
+        }
+
+    const SampleLayer& layer = layers[(size_t) chosen];
     const int n = layer.audio.getNumSamples();
 
     const float sFrac = (startOverride >= 0.0f) ? startOverride : layer.start;
