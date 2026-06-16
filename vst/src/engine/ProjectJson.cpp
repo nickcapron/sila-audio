@@ -92,6 +92,8 @@ juce::var stepToVar (const Step& s)
     o->setProperty ("trig_condition", juce::String (trigToString (s.trig)));
     o->setProperty ("length",         (double) s.length);
     o->setProperty ("micro_timing",   s.microTiming);
+    o->setProperty ("retrig",         s.retrig);
+    o->setProperty ("retrig_fade",    (double) s.retrigFade);
 
     auto* pl = new juce::DynamicObject();
     if (s.pStart.has_value())     pl->setProperty ("start",     (double) *s.pStart);
@@ -115,6 +117,8 @@ void applyStepVar (Step& s, const juce::var& v)
     if (v.hasProperty ("probability"))    s.probability = (int)  v["probability"];
     if (v.hasProperty ("length"))         s.length      = (float) (double) v["length"];
     if (v.hasProperty ("micro_timing"))   s.microTiming = (int)  v["micro_timing"];
+    if (v.hasProperty ("retrig"))         s.retrig      = juce::jlimit (1, 8, (int) v["retrig"]);
+    if (v.hasProperty ("retrig_fade"))    s.retrigFade  = (float) (double) v["retrig_fade"];
     if (v.hasProperty ("trig_condition")) s.trig        = trigFromString (v["trig_condition"].toString());
     if (v.hasProperty ("p_locks"))
     {

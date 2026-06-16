@@ -239,7 +239,7 @@ function makeKnob({ min, max, value, label, def, color, format, onInput, onChang
 function stepIsLocked(s) {
   const pl = s.p_locks || {};
   return s.probability < 100 || (s.trig_condition && s.trig_condition !== "always") ||
-         (s.micro_timing || 0) !== 0 || (s.pitch_offset || 0) !== 0 ||
+         (s.micro_timing || 0) !== 0 || (s.pitch_offset || 0) !== 0 || (s.retrig ?? 1) > 1 ||
          pl.start !== undefined || pl.end !== undefined ||
          pl.cutoff !== undefined || pl.resonance !== undefined ||
          pl.lfo_depth !== undefined || pl.lfo_rate !== undefined || pl.filter_mode !== undefined ||
@@ -610,6 +610,8 @@ async function resetStep(trackId, idx) {
   step.trig_condition = "always";
   step.length = 0;          // ∞ one-shot (default)
   step.micro_timing = 0;
+  step.retrig = 1;
+  step.retrig_fade = 0;
   step.p_locks = {};        // clears start/end/cutoff/resonance/lfo/filter_mode
   repaintCell(trackId, idx);
   selectStep(trackId, idx); // select + refresh the inspector to the reset values
@@ -635,6 +637,12 @@ const INSP_KNOBS = [
   { id:"micro", label:"Micro",   min:-23, max:23,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
     tip:"<b>Micro-timing</b> — nudge this hit earlier / later than the grid.",
     read:s=>s.micro_timing ?? 0,                              write:(s,v)=>{ s.micro_timing = Math.round(v); } },
+  { id:"retrig", label:"Retrig", min:1, max:8, def:1, fmt:v=>Math.round(v)+"×",
+    tip:"<b>Retrig</b> — re-fire the sample this many times within the step (ratchet / roll).",
+    read:s=>s.retrig ?? 1,                                    write:(s,v)=>{ s.retrig = Math.round(v); } },
+  { id:"rfade", label:"R.Fade", min:-1, max:1, def:0, color:"v2", fmt:v=>Math.round(v*100)+"%",
+    tip:"<b>Retrig Fade</b> — velocity ramp across the retrigs (+ swells up, − fades out).",
+    read:s=>s.retrig_fade ?? 0,                               write:(s,v)=>{ s.retrig_fade = v; } },
   // Pitch is set via the note keyboard (below the knob grid), not a knob.
   { id:"cut",   label:"Cut",     min:0, max:1, def:1, color:"v2", fmt:v=>Math.round(v*100)+"%",
     tip:"<b>Cutoff</b> — filter for this step (overrides the track). Lower = darker.",

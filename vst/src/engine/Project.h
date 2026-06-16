@@ -33,6 +33,8 @@ struct Step
     TrigCondition trig        = TrigCondition::Always;
     float         length      = 0.0f;                 // gate in 16ths; <= 0 = one-shot (no gate)
     int           microTiming = 0;                    // ±23 micro-steps (1/96-note); + = late
+    int           retrig      = 1;                    // re-trigger count within the step (1 = off, 2..8)
+    float         retrigFade  = 0.0f;                 // retrig velocity ramp: -1 fade out .. +1 swell up
     std::optional<float> pStart, pEnd;                // p_locks["start"/"end"], 0..1 fractions
     std::optional<float> pCutoff, pResonance;         // p_locks["cutoff"/"resonance"], override track base
     std::optional<float> pLfoDepth, pLfoRate;         // p_locks["lfo_depth"/"lfo_rate"]

@@ -54,6 +54,8 @@ void Sequencer::fillTrigEvent (TrigEvent& ev, const Track& track, int trackIndex
     ev.pitchOffset = step.pitchOffset;
     ev.length      = step.length;
     ev.microTiming = step.microTiming;
+    ev.retrig      = step.retrig;
+    ev.retrigFade  = step.retrigFade;
     ev.pStart      = step.pStart;
     ev.pEnd        = step.pEnd;
     // Filter p-locks pass through; the processor resolves vs the APVTS base.

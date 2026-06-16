@@ -28,6 +28,8 @@ struct TrigEvent
     int   pitchOffset       = 0;     // carried, not applied until Phase 5
     float length            = 1.0f;
     int   microTiming       = 0;     // ±23 micro-steps
+    int   retrig            = 1;     // re-trigger count within the step (1 = off)
+    float retrigFade        = 0.0f;  // retrig velocity ramp (-1 fade out .. +1 swell)
     std::optional<float> pStart, pEnd;   // p_lock start/end overrides
     // Raw filter p-locks (passed through); the processor resolves them against the
     // APVTS slot params (the track base) at trigger — the engine stays structural.

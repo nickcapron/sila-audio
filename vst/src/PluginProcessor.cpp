@@ -650,7 +650,32 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 v.keepAlive   = smp;   // pin this sampler alive until the voice ends
                                        // (an RCU bank swap must not free a buffer a
                                        // ringing voice still points into)
-                mixer.addVoice (v);
+
+                const int rt = juce::jlimit (1, 8, ev.retrig);
+                if (rt <= 1)
+                {
+                    mixer.addVoice (v);
+                }
+                else
+                {
+                    // Retrig (ratchet): re-fire the sample rt times evenly across the
+                    // step, each a fresh copy restarting at the slice start, with an
+                    // optional velocity ramp (+ swells up, - fades out). Copies inherit
+                    // the fully-built voice (filter/LFO/gate + the keepAlive pin).
+                    const double spacing = samplesPer16 / (double) rt;
+                    const float  fade    = juce::jlimit (-1.0f, 1.0f, ev.retrigFade);
+                    for (int k = 0; k < rt; ++k)
+                    {
+                        sila::engine::Voice rv = v;
+                        rv.startOffset = startOffset + (int) std::lround (k * spacing);
+                        const float t    = (float) k / (float) (rt - 1);
+                        const float mult = fade >= 0.0f ? (1.0f - fade * (1.0f - t))
+                                                        : (1.0f + fade * t);
+                        rv.volume   = juce::jlimit (0.0f, 1.0f, v.volume * mult);
+                        rv.baseGain = rv.volume;
+                        mixer.addVoice (rv);
+                    }
+                }
             };
 
     long idx = (long) std::ceil (sixteenthStart - 1e-9);
