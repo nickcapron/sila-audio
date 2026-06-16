@@ -53,26 +53,34 @@ struct SampleRef
     int   rrGroup = 0;
 };
 
-// Port of project.py::TrackModel. The track no longer owns its step data —
-// steps live in the PatternBank (unified Phase 6), so the same track plays a
-// different pattern per slot. The track keeps only its identity, gating, LFO
-// config and sample layers.
+// Port of project.py::TrackModel. A Track is now just a LANE identity (Phase 7):
+// it no longer owns step data (those live in the PatternBank) NOR its sound. The
+// per-pattern sound — sample layers + LFO — lives in the pattern's kit (LaneSound,
+// below), so the same lane can play different samples in different patterns.
+// volume/pan/cutoff/resonance/filterMode are the APVTS slot bank (Phase 6, host-
+// automatable, GLOBAL per lane). The track keeps only identity + live gating.
 struct Track
 {
-    juce::String           id;
-    juce::String           name;
-    juce::String           color;     // UI accent (hex, e.g. "#34e3c4"); engine never reads it
-    bool                   muted = false;
-    bool                   solo  = false;
-    // volume/pan/cutoff/resonance/filterMode moved to the APVTS slot bank
-    // (Phase 6, host-automatable). Per-step p-locks (below, on Step) still override.
-    // LFO (per-voice). depth 0 = off (zero cost). sync = retrigger phase per note.
+    juce::String id;
+    juce::String name;
+    juce::String color;     // UI accent (hex, e.g. "#34e3c4"); engine never reads it
+    bool         muted = false;
+    bool         solo  = false;
+};
+
+// Per-pattern, per-lane SOUND (Phase 7 — "kit per pattern"). A pattern's kit is
+// one LaneSound per track lane: the sample layers + LFO config that lane uses IN
+// THAT PATTERN. Switching patterns swaps the sounds; clearing a lane's sound in
+// one pattern never touches another. Parallel to Project::tracks by index, same
+// as the step columns. Empty samples => that lane is silent for the pattern.
+struct LaneSound
+{
+    std::vector<SampleRef> samples;             // velocity layers; empty = silent
     LfoShape               lfoShape = LfoShape::Sine;
     LfoDest                lfoDest  = LfoDest::Cutoff;
-    float                  lfoRate  = 1.0f;   // Hz (Speed)
-    float                  lfoDepth = 0.0f;   // 0..1
-    bool                   lfoSync  = true;   // true = trig-sync, false = free-run
-    std::vector<SampleRef> samples;     // velocity layers; empty = synthesized/unset
+    float                  lfoRate  = 1.0f;     // Hz (Speed)
+    float                  lfoDepth = 0.0f;     // 0..1 (0 = off, zero cost)
+    bool                   lfoSync  = true;     // true = trig-sync, false = free-run
 };
 
 // Default steps in a freshly-materialized pattern (one 4/4 bar of 16ths).
@@ -87,7 +95,11 @@ constexpr int kDefaultPatternLength = 16;
 struct PatternBank
 {
     static constexpr int kNumSlots = 16;
-    std::array<std::vector<std::vector<Step>>, kNumSlots> slots;
+    std::array<std::vector<std::vector<Step>>, kNumSlots> slots;   // slots[slot][lane][step]
+    // Per-pattern kit (Phase 7): the sound (samples + LFO) each lane uses in each
+    // slot. Parallel to `slots` and to Project::tracks by index. Sparse: an empty
+    // kit vector means the slot is unauthored (all lanes silent) until materialized.
+    std::array<std::vector<LaneSound>, kNumSlots>          kits;    // kits[slot][lane]
 };
 
 // Digitakt-style Song Mode (Phase 6). A Song is an arrangement of pattern rows
@@ -168,6 +180,19 @@ inline void ensurePatternColumns (Project& p, int slot)
     for (auto& c : cols)
         if ((int) c.size() != len)
             c.assign ((size_t) len, Step{});
+}
+
+// Materialize a slot's KIT to exactly tracks.size() lanes (Phase 7), filling new
+// lanes with a default (silent) LaneSound. Parallel to ensurePatternColumns; kept
+// separate because the kit can need sizing independent of step authoring (e.g. a
+// track was added). Message thread only.
+inline void ensureKitLanes (Project& p, int slot)
+{
+    if (slot < 0 || slot >= PatternBank::kNumSlots)
+        return;
+    auto& kit = p.patternBank.kits[(size_t) slot];
+    if (kit.size() != p.tracks.size())
+        kit.resize (p.tracks.size());
 }
 
 // Maximum pattern length (Digitakt caps a pattern at 128 steps = 8 pages of 16).

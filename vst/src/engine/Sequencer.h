@@ -104,7 +104,7 @@ public:
                 continue;
 
             TrigEvent ev;
-            fillTrigEvent (ev, track, ti, idx, step);
+            fillTrigEvent (ev, track, ti, idx, step, laneSound (project, activeSlot, ti));
             fn (ev);
         }
     }
@@ -155,7 +155,7 @@ public:
                 continue;
 
             TrigEvent ev;
-            fillTrigEvent (ev, track, ti, idx, step);
+            fillTrigEvent (ev, track, ti, idx, step, laneSound (project, song.patternSlot, ti));
             fn (ev);
         }
     }
@@ -171,8 +171,13 @@ private:
     bool        probabilityPasses (int probability);
 
     // Build a TrigEvent from a fired step (p-locks + LFO resolution). Shared by
-    // both pattern mode and song mode so the two paths can never drift.
-    static void fillTrigEvent (TrigEvent&, const Track&, int trackIndex, long stepIndex, const Step&);
+    // both pattern mode and song mode so the two paths can never drift. `sound` is
+    // the active pattern's kit lane (per-pattern LFO config); null => LFO off.
+    static void fillTrigEvent (TrigEvent&, const Track&, int trackIndex, long stepIndex,
+                               const Step&, const LaneSound* sound);
+
+    // The per-pattern kit sound for (slot, lane); nullptr if unauthored/out of range.
+    static const LaneSound* laneSound (const Project&, int slot, int lane);
 
     // The Step vector for (trackIndex, slot) in the unified PatternBank — a const
     // reference, no copy. Empty (a static empty vector) when the slot is

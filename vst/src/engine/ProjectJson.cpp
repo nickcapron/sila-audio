@@ -181,25 +181,15 @@ static juce::var sampleLayersToVar (const std::vector<SampleRef>& layers)
 juce::var trackToVar (const Track& t)
 {
     auto* o = new juce::DynamicObject();
-    o->setProperty ("id",         t.id);
-    o->setProperty ("name",       t.name);
-    o->setProperty ("color",      t.color);
-    o->setProperty ("muted",      t.muted);
-    o->setProperty ("solo",       t.solo);
-    // cutoff/resonance/filter_mode are APVTS slot params now (Phase 6).
-
-    auto* lfo = new juce::DynamicObject();
-    lfo->setProperty ("shape",       juce::String (lfoShapeToString (t.lfoShape)));
-    lfo->setProperty ("rate",        (double) t.lfoRate);
-    lfo->setProperty ("depth",       (double) t.lfoDepth);
-    lfo->setProperty ("destination", juce::String (lfoDestToString (t.lfoDest)));
-    lfo->setProperty ("sync",        t.lfoSync);
-    o->setProperty ("lfo", juce::var (lfo));
-
-    // Step data lives in the unified PatternBank now, not on the track. The editor
-    // injects the current pattern's steps into the GET /project payload for the
-    // grid; persistence carries them via pattern_bank below.
-    o->setProperty ("samples", sampleLayersToVar (t.samples));
+    o->setProperty ("id",    t.id);
+    o->setProperty ("name",  t.name);
+    o->setProperty ("color", t.color);
+    o->setProperty ("muted", t.muted);
+    o->setProperty ("solo",  t.solo);
+    // Phase 7: the track is just a lane identity now. The SOUND (samples + LFO)
+    // lives in the per-pattern kit (pattern_kits); cutoff/resonance/filter_mode are
+    // APVTS slot params (Phase 6, global per lane). The editor injects the current
+    // pattern's samples/lfo into the GET /project payload for the channel strip.
     return juce::var (o);
 }
 
@@ -209,22 +199,43 @@ Track trackFromVar (const juce::var& v)
     t.id    = v.getProperty ("id", juce::String()).toString();
     t.name  = v.getProperty ("name", juce::String()).toString();
     t.color = v.getProperty ("color", juce::String()).toString();
-    t.muted  = (bool) v.getProperty ("muted", false);
-    t.solo   = (bool) v.getProperty ("solo", false);
+    t.muted = (bool) v.getProperty ("muted", false);
+    t.solo  = (bool) v.getProperty ("solo", false);
+    // Steps + sound no longer live on the track. Legacy `steps`/`samples`/`lfo` are
+    // migrated into the pattern bank + kits by projectFromVar (back-compat).
+    return t;
+}
+
+// ── Per-pattern kit (Phase 7) — LaneSound = samples + LFO config for one lane ──
+juce::var laneSoundToVar (const LaneSound& ls)
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("samples", sampleLayersToVar (ls.samples));
+    auto* lfo = new juce::DynamicObject();
+    lfo->setProperty ("shape",       juce::String (lfoShapeToString (ls.lfoShape)));
+    lfo->setProperty ("rate",        (double) ls.lfoRate);
+    lfo->setProperty ("depth",       (double) ls.lfoDepth);
+    lfo->setProperty ("destination", juce::String (lfoDestToString (ls.lfoDest)));
+    lfo->setProperty ("sync",        ls.lfoSync);
+    o->setProperty ("lfo", juce::var (lfo));
+    return juce::var (o);
+}
+
+static LaneSound laneSoundFromVar (const juce::var& v)
+{
+    LaneSound ls;
+    if (! v.isObject()) return ls;
+    ls.samples = parseSampleLayers (v.getProperty ("samples", juce::var()));
     const juce::var lv = v.getProperty ("lfo", juce::var());
     if (lv.isObject())
     {
-        t.lfoShape = lfoShapeFromString (lv.getProperty ("shape", "sine").toString());
-        t.lfoRate  = (float) (double) lv.getProperty ("rate", 1.0);
-        t.lfoDepth = (float) (double) lv.getProperty ("depth", 0.0);
-        t.lfoDest  = lfoDestFromString (lv.getProperty ("destination", "cutoff").toString());
-        t.lfoSync  = (bool) lv.getProperty ("sync", true);
+        ls.lfoShape = lfoShapeFromString (lv.getProperty ("shape", "sine").toString());
+        ls.lfoRate  = (float) (double) lv.getProperty ("rate", 1.0);
+        ls.lfoDepth = (float) (double) lv.getProperty ("depth", 0.0);
+        ls.lfoDest  = lfoDestFromString (lv.getProperty ("destination", "cutoff").toString());
+        ls.lfoSync  = (bool) lv.getProperty ("sync", true);
     }
-
-    // Steps no longer live on the track (unified PatternBank). Any legacy `steps`
-    // array is migrated into pattern slot 0 by projectFromVar (back-compat).
-    t.samples = parseSampleLayers (v.getProperty ("samples", juce::var()));
-    return t;
+    return ls;
 }
 
 // Pattern bank: array of slots; each slot is an array (parallel to tracks) of
@@ -268,6 +279,34 @@ static void patternBankFromVar (PatternBank& bank, const juce::var& v)
                     }
                 dstSlot.push_back (std::move (steps));
             }
+    }
+}
+
+// Per-pattern kits (Phase 7): array of slots; each slot is an array (parallel to
+// tracks) of LaneSound. Empty slot => unauthored (silent). Mirrors pattern_bank.
+static juce::var patternKitsToVar (const PatternBank& bank)
+{
+    juce::Array<juce::var> slots;
+    for (const auto& kit : bank.kits)
+    {
+        juce::Array<juce::var> lanes;
+        for (const auto& lane : kit) lanes.add (laneSoundToVar (lane));
+        slots.add (lanes);
+    }
+    return slots;
+}
+
+static void patternKitsFromVar (PatternBank& bank, const juce::var& v)
+{
+    auto* slots = v.getArray();
+    if (slots == nullptr) return;
+    for (int i = 0; i < juce::jmin ((int) slots->size(), PatternBank::kNumSlots); ++i)
+    {
+        auto& dstKit = bank.kits[(size_t) i];
+        dstKit.clear();
+        if (auto* lanes = (*slots)[i].getArray())
+            for (const auto& lv : *lanes)
+                dstKit.push_back (laneSoundFromVar (lv));
     }
 }
 
@@ -333,6 +372,7 @@ juce::var projectToVar (const Project& p)
     o->setProperty ("tracks", tracks);
 
     o->setProperty ("pattern_bank", patternBankToVar (p.patternBank));
+    o->setProperty ("pattern_kits", patternKitsToVar (p.patternBank));   // Phase 7: per-pattern sound
     o->setProperty ("current_pattern", p.currentPattern);
     o->setProperty ("key_root",  p.keyRoot);
     o->setProperty ("key_scale", p.keyScale);
@@ -353,6 +393,7 @@ Project projectFromVar (const juce::var& v)
             p.tracks.push_back (trackFromVar (tv));
 
     patternBankFromVar (p.patternBank, v.getProperty ("pattern_bank", juce::var()));
+    patternKitsFromVar (p.patternBank, v.getProperty ("pattern_kits", juce::var()));   // Phase 7
     p.currentPattern = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) v.getProperty ("current_pattern", 0));
     p.keyRoot  = juce::jlimit (0, 11, (int) v.getProperty ("key_root", 0));
     p.keyScale = v.getProperty ("key_scale", "chromatic").toString();
@@ -378,6 +419,29 @@ Project projectFromVar (const juce::var& v)
         }
         if (any)
             p.patternBank.slots[0] = std::move (col0);
+    }
+
+    // Phase 7 migration: pre-kit projects (v3 and earlier) stored the SOUND
+    // (samples + LFO) on the track, shared by every pattern. Rebuild that legacy
+    // kit from the track vars and drop it into every AUTHORED slot whose kit is
+    // empty, so old projects keep their sound across all patterns they used.
+    bool anyKit = false;
+    for (const auto& kit : p.patternBank.kits)
+        if (! kit.empty()) { anyKit = true; break; }
+    if (! anyKit && tracks != nullptr)
+    {
+        std::vector<LaneSound> legacyKit;
+        bool anySound = false;
+        for (const auto& tv : *tracks)
+        {
+            LaneSound ls = laneSoundFromVar (tv);   // reads the legacy `samples` + `lfo`
+            if (! ls.samples.empty()) anySound = true;
+            legacyKit.push_back (std::move (ls));
+        }
+        if (anySound)
+            for (int s = 0; s < PatternBank::kNumSlots; ++s)
+                if (! p.patternBank.slots[(size_t) s].empty() && p.patternBank.kits[(size_t) s].empty())
+                    p.patternBank.kits[(size_t) s] = legacyKit;
     }
 
     if (auto* songs = v.getProperty ("songs", juce::var()).getArray())

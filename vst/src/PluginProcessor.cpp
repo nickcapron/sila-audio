@@ -168,10 +168,10 @@ void SilaAudioProcessor::reapRetired()
                         [] (const ProjectPtr& p) { return p.use_count() <= 1; }),
         retiredProjects.end());
 
-    // Same reclamation for superseded sampler banks (audio thread done with them).
+    // Same reclamation for superseded sampler sets (audio thread done with them).
     retiredSamplers.erase (
         std::remove_if (retiredSamplers.begin(), retiredSamplers.end(),
-                        [] (const SamplerBankPtr& b) { return b.use_count() <= 1; }),
+                        [] (const SamplerSetPtr& b) { return b.use_count() <= 1; }),
         retiredSamplers.end());
 }
 
@@ -191,8 +191,8 @@ void SilaAudioProcessor::loadProject (ProjectPtr proj)
 {
     if (proj == nullptr)
         return;
-    auto bank = std::make_shared<const SamplerBank> (buildBankForProject (*proj, sampleRate));
-    setProject (std::move (proj), std::move (bank));
+    auto set = std::make_shared<const SamplerSet> (buildBankForProject (*proj, sampleRate));
+    setProject (std::move (proj), std::move (set));
 }
 
 void SilaAudioProcessor::addTrack (const juce::String& name)
@@ -209,17 +209,27 @@ void SilaAudioProcessor::addTrack (const juce::String& name)
     next->tracks.push_back (std::move (t));
 
     // Keep every MATERIALIZED pattern slot rectangular by appending a blank column
-    // for the new track. Unauthored (empty) slots stay empty.
+    // + a default (silent) kit lane for the new track. Unauthored slots stay empty.
     for (auto& cols : next->patternBank.slots)
         if (! cols.empty())
             cols.push_back (std::vector<sila::engine::Step> (cols.front().size()));
+    for (auto& kit : next->patternBank.kits)
+        if (! kit.empty())
+            kit.push_back (sila::engine::LaneSound {});
 
-    auto bank = std::make_shared<SamplerBank> (curBank != nullptr ? *curBank : SamplerBank {});
-    auto smp  = std::make_shared<sila::engine::Sampler>();
-    smp->prepare (sampleRate);          // empty (silent) until a sample is assigned
-    bank->push_back (std::move (smp));
+    // Append a silent sampler lane to every authored (non-null) slot bank.
+    auto set = std::make_shared<SamplerSet> (curBank != nullptr ? *curBank : SamplerSet {});
+    for (auto& slotBank : *set)
+        if (slotBank != nullptr)
+        {
+            auto nb  = std::make_shared<SamplerBank> (*slotBank);
+            auto smp = std::make_shared<sila::engine::Sampler>();
+            smp->prepare (sampleRate);      // empty (silent) until a sample is assigned
+            nb->push_back (std::move (smp));
+            slotBank = std::move (nb);
+        }
 
-    setProject (std::move (next), std::make_shared<const SamplerBank> (std::move (*bank)));
+    setProject (std::move (next), std::make_shared<const SamplerSet> (std::move (*set)));
 }
 
 void SilaAudioProcessor::removeTrack (int index)
@@ -231,16 +241,25 @@ void SilaAudioProcessor::removeTrack (int index)
 
     auto next = std::make_shared<sila::engine::Project> (*cur);
     next->tracks.erase (next->tracks.begin() + index);
-    // Pattern-bank columns are parallel to tracks by index — drop this one too.
+    // Pattern-bank columns + kit lanes are parallel to tracks by index — drop them.
     for (auto& slot : next->patternBank.slots)
         if (index < (int) slot.size())
             slot.erase (slot.begin() + index);
+    for (auto& kit : next->patternBank.kits)
+        if (index < (int) kit.size())
+            kit.erase (kit.begin() + index);
 
-    auto bank = std::make_shared<SamplerBank> (curBank != nullptr ? *curBank : SamplerBank {});
-    if (index < (int) bank->size())
-        bank->erase (bank->begin() + index);
+    // Drop the lane from every authored (non-null) slot bank.
+    auto set = std::make_shared<SamplerSet> (curBank != nullptr ? *curBank : SamplerSet {});
+    for (auto& slotBank : *set)
+        if (slotBank != nullptr && index < (int) slotBank->size())
+        {
+            auto nb = std::make_shared<SamplerBank> (*slotBank);
+            nb->erase (nb->begin() + index);
+            slotBank = std::move (nb);
+        }
 
-    setProject (std::move (next), std::make_shared<const SamplerBank> (std::move (*bank)));
+    setProject (std::move (next), std::make_shared<const SamplerSet> (std::move (*set)));
 }
 
 std::shared_ptr<sila::engine::Sampler>
@@ -259,18 +278,25 @@ SilaAudioProcessor::buildSamplerFromLayers (const std::vector<sila::engine::Samp
     return smp;
 }
 
-void SilaAudioProcessor::assignTrackSamples (int trackIndex,
+void SilaAudioProcessor::assignTrackSamples (int slot, int lane,
                                              const std::vector<sila::engine::SampleRef>& layers)
 {
     auto cur = liveSamplers.load (std::memory_order_acquire);
-    if (cur == nullptr || trackIndex < 0 || trackIndex >= (int) cur->size())
+    if (cur == nullptr || slot < 0 || slot >= sila::engine::PatternBank::kNumSlots || lane < 0)
         return;
 
-    // Build the replacement sampler (resamples files to the device rate), then
-    // copy the bank (other tracks keep their sampler + RR state), swap this one.
-    auto next = std::make_shared<SamplerBank> (*cur);
-    (*next)[(size_t) trackIndex] = buildSamplerFromLayers (layers, sampleRate);
-    auto old = liveSamplers.exchange (std::make_shared<const SamplerBank> (std::move (*next)),
+    // Copy the set (16 shared_ptrs, cheap), then rebuild just this (slot, lane)'s
+    // sampler — other lanes keep their sampler + RR state, other slots untouched.
+    auto next     = std::make_shared<SamplerSet> (*cur);
+    auto slotBank = (*next)[(size_t) slot] != nullptr
+                        ? std::make_shared<SamplerBank> (*(*next)[(size_t) slot])
+                        : std::make_shared<SamplerBank>();
+    if (lane >= (int) slotBank->size())
+        slotBank->resize ((size_t) lane + 1);
+    (*slotBank)[(size_t) lane] = buildSamplerFromLayers (layers, sampleRate);
+    (*next)[(size_t) slot] = std::move (slotBank);
+
+    auto old = liveSamplers.exchange (std::make_shared<const SamplerSet> (std::move (*next)),
                                       std::memory_order_acq_rel);
     if (old) retiredSamplers.push_back (std::move (old));
 }
@@ -282,34 +308,49 @@ void SilaAudioProcessor::rebuildSamplerBankForRate (double sr)
     if (proj == nullptr)
         return;
 
-    auto next = std::make_shared<SamplerBank>();
-    next->resize (proj->tracks.size());
-    for (size_t i = 0; i < proj->tracks.size(); ++i)
+    auto set = std::make_shared<SamplerSet>();
+    for (int s = 0; s < sila::engine::PatternBank::kNumSlots; ++s)
     {
-        const auto& layers = proj->tracks[i].samples;
-        if (! layers.empty())
-            (*next)[i] = buildSamplerFromLayers (layers, sr);     // re-resample at the new rate
-        else if (cur != nullptr && i < cur->size())
-            (*next)[i] = (*cur)[i];   // transitional synth kit: keep (built at the old rate)
+        const auto& kit = proj->patternBank.kits[(size_t) s];
+        if (kit.empty())
+            continue;   // unauthored slot => null bank
+        auto bank = std::make_shared<SamplerBank>();
+        bank->resize (kit.size());
+        for (size_t i = 0; i < kit.size(); ++i)
+        {
+            if (! kit[i].samples.empty())
+                (*bank)[i] = buildSamplerFromLayers (kit[i].samples, sr);   // re-resample at the new rate
+            else if (cur != nullptr && (*cur)[(size_t) s] != nullptr && i < (*cur)[(size_t) s]->size())
+                (*bank)[i] = (*(*cur)[(size_t) s])[i];   // transitional synth kit: keep (built at the old rate)
+        }
+        (*set)[(size_t) s] = std::move (bank);
     }
 
-    // prepareToPlay is not concurrent with processBlock, so the superseded bank
+    // prepareToPlay is not concurrent with processBlock, so the superseded set
     // has no audio-thread reader — store lets it free here, no retire list needed.
-    liveSamplers.store (std::make_shared<const SamplerBank> (std::move (*next)),
+    liveSamplers.store (std::make_shared<const SamplerSet> (std::move (*set)),
                         std::memory_order_release);
 }
 
-SilaAudioProcessor::SamplerBank
+SilaAudioProcessor::SamplerSet
 SilaAudioProcessor::buildBankForProject (const sila::engine::Project& proj, double sr)
 {
-    SamplerBank bank;
-    bank.reserve (proj.tracks.size());
-    for (const auto& t : proj.tracks)
-        bank.push_back (buildSamplerFromLayers (t.samples, sr));   // empty layers => silent sampler
-    return bank;
+    SamplerSet set;   // all-null by default => unauthored slots are silent
+    for (int s = 0; s < sila::engine::PatternBank::kNumSlots; ++s)
+    {
+        const auto& kit = proj.patternBank.kits[(size_t) s];
+        if (kit.empty())
+            continue;
+        auto bank = std::make_shared<SamplerBank>();
+        bank->reserve (kit.size());
+        for (const auto& lane : kit)
+            bank->push_back (buildSamplerFromLayers (lane.samples, sr));   // empty layers => silent sampler
+        set[(size_t) s] = std::move (bank);
+    }
+    return set;
 }
 
-void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerBankPtr bank)
+void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerSetPtr bank)
 {
     // The audio thread may be reading the current snapshot+bank, so publish
     // atomically and retire the old ones (freed later by reapRetired). Publish
@@ -393,6 +434,13 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         steps16 ({ 2, 6, 10, 14 }, 80),                      // offbeat hats
     };
 
+    // Phase 7: materialize the kit for each authored slot to 3 lanes (Kick/Snare/
+    // Hat). The demo sounds are SYNTHESIZED (no SampleRef path), so the kit samples
+    // stay empty — the synth samplers live directly in the per-slot bank below, and
+    // rebuildSamplerBankForRate preserves them (empty-samples => keep old sampler).
+    for (int s : { 0, 1, 2 })
+        bank.kits[(size_t) s] = std::vector<LaneSound> (3);
+
     proj->currentPattern = 0;            // grid + pattern mode show/play the base groove
 
     // Song Mode (Phase 6) demo arrangement so row-by-row playback is audible
@@ -412,8 +460,15 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         proj->activeSong = 0;
     }
 
-    // Publish the matching sampler bank (parallel to proj->tracks by index).
-    liveSamplers.store (std::make_shared<const SamplerBank> (std::move (*samplerBank)),
+    // Publish the matching sampler SET (Phase 7). The 3 authored demo slots all
+    // play the SAME synth kit, so they share one immutable bank (cheap; shared RR
+    // state across the demo patterns is benign). Other slots stay null (silent).
+    auto demoBank = std::shared_ptr<const SamplerBank> (std::move (samplerBank));
+    auto set = std::make_shared<SamplerSet>();
+    (*set)[0] = demoBank;
+    (*set)[1] = demoBank;
+    (*set)[2] = demoBank;
+    liveSamplers.store (std::make_shared<const SamplerSet> (std::move (*set)),
                         std::memory_order_release);
     return proj;
 }
@@ -501,9 +556,16 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         // prepareToPlay, so this never allocates on the audio thread.
         if (trackLfoPhase.size() != nt) trackLfoPhase.resize (nt, 0.0);
         const double twoPi = 2.0 * juce::MathConstants<double>::pi;
+        // The free-run LFO rate is per-pattern now (Phase 7): read it from the
+        // active slot's kit (the song's row slot in song mode, else currentPattern).
+        const int lfoSlot = juce::jlimit (0, sila::engine::PatternBank::kNumSlots - 1,
+                                          (songMode && blockSong.valid) ? blockSong.patternSlot
+                                                                        : proj->currentPattern);
+        const auto& lfoKit = proj->patternBank.kits[(size_t) lfoSlot];
         for (size_t i = 0; i < nt; ++i)
         {
-            trackLfoPhase[i] += numSamples * twoPi * (double) proj->tracks[i].lfoRate / sampleRate;
+            const double rate = i < lfoKit.size() ? (double) lfoKit[i].lfoRate : 1.0;
+            trackLfoPhase[i] += numSamples * twoPi * rate / sampleRate;
             while (trackLfoPhase[i] >= twoPi) trackLfoPhase[i] -= twoPi;
         }
 
@@ -555,19 +617,27 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
     // Swing (port of clock.py): odd-indexed 16ths shift by swing * interval / 2.
     const double swingOffset = (double) swing * samplesPer16 * 0.5;
 
-    // One atomic load of the sampler bank for the whole block (RCU read).
-    const SamplerBankPtr bank = samplerSnapshot();
-    if (bank == nullptr)
+    // One atomic load of the sampler SET for the whole block (RCU read). Phase 7:
+    // the bank for the ACTIVE slot is selected per boundary (activeSlot below).
+    const SamplerSetPtr bankSet = samplerSnapshot();
+    if (bankSet == nullptr)
         return;
 
     // Loop-varying boundary state, read by spawn() below. The voice-spawn body is
     // defined ONCE here so the song-mode and pattern-mode branches share it (no
-    // duplication, identical DSP resolution in both).
-    double offset = 0.0;
-    long   absIdx = 0;
+    // duplication, identical DSP resolution in both). activeSlot selects which
+    // pattern's kit/bank plays this boundary (currentPattern, or the song's slot).
+    double offset    = 0.0;
+    long   absIdx    = 0;
+    int    activeSlot = 0;
 
     auto spawn = [&] (const sila::engine::TrigEvent& ev)
             {
+                if (activeSlot < 0 || activeSlot >= (int) bankSet->size())
+                    return;
+                const auto& bank = (*bankSet)[(size_t) activeSlot];
+                if (bank == nullptr)
+                    return;                       // unauthored slot => silent
                 if (ev.trackIndex < 0 || ev.trackIndex >= (int) bank->size())
                     return;
                 const auto& smp = (*bank)[(size_t) ev.trackIndex];
@@ -704,12 +774,19 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
             {
                 const auto sp = sila::engine::Sequencer::resolveSong (proj, absIdx);
                 if (sp.valid)
+                {
+                    activeSlot = sp.patternSlot;     // song row's pattern -> its kit/bank
                     sequencer.forEachTrigSong (proj, sp, fill, spawn);
+                }
                 else
+                {
+                    activeSlot = proj.currentPattern;
                     sequencer.forEachTrig (proj, absIdx, fill, spawn);
+                }
             }
             else
             {
+                activeSlot = proj.currentPattern;    // pattern mode -> the edited pattern's kit
                 sequencer.forEachTrig (proj, absIdx, fill, spawn);
             }
         }
@@ -766,8 +843,8 @@ void SilaAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
     // current device rate). If this runs before prepareToPlay, sampleRate is the
     // default; prepareToPlay's rebuildSamplerBankForRate then re-resamples from
     // the same SampleRef paths to the real rate — self-healing.
-    auto bank = std::make_shared<const SamplerBank> (buildBankForProject (*proj, sampleRate));
-    setProject (std::move (proj), std::move (bank));
+    auto set = std::make_shared<const SamplerSet> (buildBankForProject (*proj, sampleRate));
+    setProject (std::move (proj), std::move (set));
 }
 
 juce::AudioProcessorEditor* SilaAudioProcessor::createEditor()

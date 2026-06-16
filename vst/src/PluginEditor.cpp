@@ -306,6 +306,7 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
             // slot's steps as each track's `steps` (blank 16 cells if unauthored).
             const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, snap->currentPattern);
             const auto& curSlot = snap->patternBank.slots[(size_t) cp];
+            const auto& curKit  = snap->patternBank.kits[(size_t) cp];   // Phase 7: per-pattern sound
             if (auto* tracks = v.getProperty ("tracks", juce::var()).getArray())
                 for (int i = 0; i < tracks->size() && i < SilaAudioProcessor::kMaxTracks; ++i)
                     if (auto* to = (*tracks)[i].getDynamicObject())
@@ -315,6 +316,14 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                         to->setProperty ("cutoff",     (double) slotValue (i, "cutoff"));
                         to->setProperty ("resonance",  (double) slotValue (i, "res"));
                         to->setProperty ("filter_mode", fmodeName (juce::roundToInt (slotValue (i, "fmode"))));
+
+                        // Inject the current pattern's kit sound (samples + lfo) for
+                        // this lane — the channel strip + trimmer read these.
+                        const sila::engine::LaneSound dfltSound;
+                        const juce::var laneVar = sila::engine::laneSoundToVar (
+                            i < (int) curKit.size() ? curKit[(size_t) i] : dfltSound);
+                        to->setProperty ("samples", laneVar.getProperty ("samples", juce::var()));
+                        to->setProperty ("lfo",     laneVar.getProperty ("lfo", juce::var()));
 
                         juce::Array<juce::var> steps;
                         if (i < (int) curSlot.size() && ! curSlot[(size_t) i].empty())
@@ -523,34 +532,38 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
     }
 
     // PUT /tracks/{id}/lfo { shape?, rate?, depth?, destination?, sync? } — only
-    // the present fields are updated (track-level LFO base config).
+    // the present fields are updated. Phase 7: the LFO is part of the per-pattern
+    // kit, so this writes the CURRENT pattern's lane sound (not a global track).
     if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "lfo")
     {
         const juce::String id = seg[1];
         processor.editProject ([&] (Project& proj)
         {
-            for (auto& t : proj.tracks)
-                if (t.id == id)
-                {
-                    if (body.hasProperty ("shape"))
-                    {
-                        const juce::String sh = body["shape"].toString();
-                        t.lfoShape = sh == "triangle" ? LfoShape::Triangle
-                                   : sh == "square"   ? LfoShape::Square
-                                   : sh == "sawtooth" ? LfoShape::Sawtooth
-                                   : sh == "random"   ? LfoShape::Random : LfoShape::Sine;
-                    }
-                    if (body.hasProperty ("destination"))
-                    {
-                        const juce::String d = body["destination"].toString();
-                        t.lfoDest = d == "volume" ? LfoDest::Volume
-                                  : d == "pitch"  ? LfoDest::Pitch : LfoDest::Cutoff;
-                    }
-                    if (body.hasProperty ("rate"))  t.lfoRate  = (float) juce::jlimit (0.01, 40.0, (double) body["rate"]);
-                    if (body.hasProperty ("depth")) t.lfoDepth = (float) juce::jlimit (0.0, 1.0, (double) body["depth"]);
-                    if (body.hasProperty ("sync"))  t.lfoSync  = (bool) body["sync"];
-                    break;
-                }
+            const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, proj.currentPattern);
+            int lane = -1;
+            for (int i = 0; i < (int) proj.tracks.size(); ++i)
+                if (proj.tracks[(size_t) i].id == id) { lane = i; break; }
+            if (lane < 0) return;
+            ensureKitLanes (proj, cp);
+            if (lane >= (int) proj.patternBank.kits[(size_t) cp].size()) return;
+            auto& ls = proj.patternBank.kits[(size_t) cp][(size_t) lane];
+            if (body.hasProperty ("shape"))
+            {
+                const juce::String sh = body["shape"].toString();
+                ls.lfoShape = sh == "triangle" ? LfoShape::Triangle
+                            : sh == "square"   ? LfoShape::Square
+                            : sh == "sawtooth" ? LfoShape::Sawtooth
+                            : sh == "random"   ? LfoShape::Random : LfoShape::Sine;
+            }
+            if (body.hasProperty ("destination"))
+            {
+                const juce::String d = body["destination"].toString();
+                ls.lfoDest = d == "volume" ? LfoDest::Volume
+                           : d == "pitch"  ? LfoDest::Pitch : LfoDest::Cutoff;
+            }
+            if (body.hasProperty ("rate"))  ls.lfoRate  = (float) juce::jlimit (0.01, 40.0, (double) body["rate"]);
+            if (body.hasProperty ("depth")) ls.lfoDepth = (float) juce::jlimit (0.0, 1.0, (double) body["depth"]);
+            if (body.hasProperty ("sync"))  ls.lfoSync  = (bool) body["sync"];
         });
         return emptyObject();
     }
@@ -633,19 +646,22 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
     {
         const juce::String id     = seg[1];
         const auto         layers = parseSampleLayers (body.getProperty ("samples", juce::var()));
-        int trackIndex = -1;
+        int slot = -1, lane = -1;
         processor.editProject ([&] (Project& proj)
         {
+            const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, proj.currentPattern);
             for (int i = 0; i < (int) proj.tracks.size(); ++i)
-                if (proj.tracks[(size_t) i].id == id)
-                {
-                    proj.tracks[(size_t) i].samples = layers;
-                    trackIndex = i;
-                    break;
-                }
+                if (proj.tracks[(size_t) i].id == id) { lane = i; break; }
+            if (lane < 0) return;
+            ensureKitLanes (proj, cp);   // Phase 7: assign into the CURRENT pattern's kit
+            if (lane < (int) proj.patternBank.kits[(size_t) cp].size())
+            {
+                proj.patternBank.kits[(size_t) cp][(size_t) lane].samples = layers;
+                slot = cp;
+            }
         });
-        if (trackIndex >= 0)
-            processor.assignTrackSamples (trackIndex, layers);
+        if (slot >= 0 && lane >= 0)
+            processor.assignTrackSamples (slot, lane, layers);
         return emptyObject();
     }
 
@@ -671,21 +687,24 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
 
         auto snap = processor.snapshot();
         if (snap != nullptr)
+        {
+            const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, snap->currentPattern);
+            int lane = -1;
             for (int i = 0; i < (int) snap->tracks.size(); ++i)
-                if (snap->tracks[(size_t) i].id == id)
-                {
-                    const auto& layers = snap->tracks[(size_t) i].samples;
-                    if (! layers.empty())   // trimmer only for assigned sample files
-                    {
-                        start = layers.front().start;
-                        end   = layers.front().end;
-                        if (auto bank = processor.samplerSnapshot())
-                            if (i < (int) bank->size() && (*bank)[(size_t) i] != nullptr)
-                                for (float p : (*bank)[(size_t) i]->computePeaks (points))
-                                    wf.add ((double) p);
-                    }
-                    break;
-                }
+                if (snap->tracks[(size_t) i].id == id) { lane = i; break; }
+            // Phase 7: the trimmed sample is the CURRENT pattern's kit lane.
+            const auto& kit = snap->patternBank.kits[(size_t) cp];
+            if (lane >= 0 && lane < (int) kit.size() && ! kit[(size_t) lane].samples.empty())
+            {
+                start = kit[(size_t) lane].samples.front().start;
+                end   = kit[(size_t) lane].samples.front().end;
+                if (auto set = processor.samplerSnapshot())
+                    if (auto bank = (*set)[(size_t) cp])
+                        if (lane < (int) bank->size() && (*bank)[(size_t) lane] != nullptr)
+                            for (float p : (*bank)[(size_t) lane]->computePeaks (points))
+                                wf.add ((double) p);
+            }
+        }
 
         o->setProperty ("waveform", wf);
         o->setProperty ("length", wf.size());

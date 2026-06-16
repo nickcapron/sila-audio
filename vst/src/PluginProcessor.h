@@ -113,15 +113,21 @@ public:
     // immutable vector of shared samplers, swapped atomically and retired on the
     // message thread. Sampler::get() mutates round-robin state, but only the
     // audio thread ever calls it, so a shared (non-const) Sampler is safe.
-    using SamplerBank    = std::vector<std::shared_ptr<sila::engine::Sampler>>;
+    using SamplerBank    = std::vector<std::shared_ptr<sila::engine::Sampler>>;   // one slot's lanes
     using SamplerBankPtr = std::shared_ptr<const SamplerBank>;
+    // Phase 7 (kit per pattern): a resident SET of banks, one per pattern slot
+    // (null = unauthored/silent). The audio thread indexes by the active slot
+    // (currentPattern, or the song's resolved slot); published/retired as one
+    // immutable unit via RCU, exactly like the Project snapshot.
+    using SamplerSet     = std::array<SamplerBankPtr, sila::engine::PatternBank::kNumSlots>;
+    using SamplerSetPtr  = std::shared_ptr<const SamplerSet>;
 
-    SamplerBankPtr samplerSnapshot() const { return liveSamplers.load (std::memory_order_acquire); }
+    SamplerSetPtr samplerSnapshot() const { return liveSamplers.load (std::memory_order_acquire); }
 
-    // Message thread: build a fresh sampler for one track from its sample layers
-    // and publish a new bank (other tracks reuse their existing sampler + RR
-    // state). No-op if the index is out of range or the bank is unset.
-    void assignTrackSamples (int trackIndex, const std::vector<sila::engine::SampleRef>& layers);
+    // Message thread: rebuild one (slot, lane)'s sampler from its layers and publish
+    // a new set (other lanes/slots reuse their existing sampler + RR state). No-op
+    // if the slot is out of range or the set is unset.
+    void assignTrackSamples (int slot, int lane, const std::vector<sila::engine::SampleRef>& layers);
 
     // ~/SILA/library — root for resolving relative sample paths from the browser.
     static juce::File libraryRoot();
@@ -164,14 +170,14 @@ private:
     // from prepareToPlay only (no concurrent processBlock).
     void rebuildSamplerBankForRate (double sr);
 
-    // Build a full sampler bank for a project (every track via its layers; empty
-    // layers => a silent sampler). Used when loading DAW state.
-    static SamplerBank buildBankForProject (const sila::engine::Project& proj, double sr);
+    // Build the full sampler SET for a project: one bank per authored pattern slot
+    // (from that slot's kit; empty kit => null/silent slot). Used when loading state.
+    static SamplerSet buildBankForProject (const sila::engine::Project& proj, double sr);
 
-    // Wholesale RCU swap of both Project and sampler bank (DAW state load). Audio
+    // Wholesale RCU swap of both Project and the sampler set (DAW state load). Audio
     // thread may be running, so old snapshots go on the retire lists; bumps
     // projectEpoch so the editor refreshes. Message thread only.
-    void setProject (ProjectPtr proj, SamplerBankPtr bank);
+    void setProject (ProjectPtr proj, SamplerSetPtr bank);
 
     static juce::AudioBuffer<float> makeKick  (double sampleRate);
     static juce::AudioBuffer<float> makeSnare (double sampleRate);
@@ -197,8 +203,8 @@ private:
 
     // Live sampler bank (RCU). Audio thread loads it once per block; the message
     // thread swaps a track's sampler on assignment. Parallel to snapshot tracks.
-    std::atomic<SamplerBankPtr> liveSamplers;
-    std::vector<SamplerBankPtr> retiredSamplers;   // awaiting reclamation (msg thread)
+    std::atomic<SamplerSetPtr> liveSamplers;
+    std::vector<SamplerSetPtr> retiredSamplers;   // awaiting reclamation (msg thread)
     sila::engine::VoiceMixer mixer;     // ../sila/engine/audio.py
 
     // Per-track gain/pan, rebuilt each block from the snapshot and passed to the

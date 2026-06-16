@@ -12,15 +12,17 @@ constexpr int    kBitDepth      = 16;
 constexpr double kMaxDurationS  = 33.0;
 constexpr juce::int64 kMaxSizeB = (juce::int64) 170 * 1024 * 1024;
 
-// Deduplicated sample paths across all tracks (order preserved).
+// Deduplicated sample paths across every pattern's kit (Phase 7: sounds are per-
+// pattern now, so export gathers from all slots' kit lanes). Order preserved.
 std::vector<juce::String> collectSamplePaths (const Project& project)
 {
     std::set<juce::String> seen;
     std::vector<juce::String> paths;
-    for (const auto& track : project.tracks)
-        for (const auto& layer : track.samples)
-            if (layer.path.isNotEmpty() && seen.insert (layer.path).second)
-                paths.push_back (layer.path);
+    for (const auto& kit : project.patternBank.kits)
+        for (const auto& lane : kit)
+            for (const auto& layer : lane.samples)
+                if (layer.path.isNotEmpty() && seen.insert (layer.path).second)
+                    paths.push_back (layer.path);
     return paths;
 }
 

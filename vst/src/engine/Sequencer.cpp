@@ -42,10 +42,25 @@ const std::vector<Step>& Sequencer::resolveSteps (const Project& project, int tr
     return kEmpty;
 }
 
+// The kit LaneSound for (slot, lane) — the per-pattern sound (Phase 7). Returns a
+// pointer into the immutable snapshot, or nullptr when the slot is unauthored or
+// the lane is out of range (=> LFO off / defaults, lane is silent).
+const LaneSound* Sequencer::laneSound (const Project& project, int slot, int lane)
+{
+    if (slot >= 0 && slot < PatternBank::kNumSlots)
+    {
+        const auto& kit = project.patternBank.kits[(size_t) slot];
+        if (lane >= 0 && lane < (int) kit.size())
+            return &kit[(size_t) lane];
+    }
+    return nullptr;
+}
+
 // Shared TrigEvent builder (pattern mode + song mode). Copies the raw step fields
 // + p-lock optionals through; the processor resolves them against the APVTS base.
+// `sound` is the active pattern's kit lane (per-pattern LFO config); may be null.
 void Sequencer::fillTrigEvent (TrigEvent& ev, const Track& track, int trackIndex,
-                               long stepIndex, const Step& step)
+                               long stepIndex, const Step& step, const LaneSound* sound)
 {
     ev.track       = &track;
     ev.trackIndex  = trackIndex;
@@ -62,12 +77,13 @@ void Sequencer::fillTrigEvent (TrigEvent& ev, const Track& track, int trackIndex
     ev.pCutoff     = step.pCutoff;
     ev.pResonance  = step.pResonance;
     ev.pFilterMode = step.pFilterMode;
-    // Resolve LFO: depth/rate are p-lockable; shape/dest/sync track-level.
-    ev.lfoShape    = track.lfoShape;
-    ev.lfoDest     = track.lfoDest;
-    ev.lfoRate     = step.pLfoRate.value_or (track.lfoRate);
-    ev.lfoDepth    = step.pLfoDepth.value_or (track.lfoDepth);
-    ev.lfoSync     = track.lfoSync;
+    // Resolve LFO from the per-pattern kit (Phase 7): depth/rate are p-lockable;
+    // shape/dest/sync come from the lane's kit sound. Null sound => LFO off.
+    ev.lfoShape    = sound ? sound->lfoShape : LfoShape::Sine;
+    ev.lfoDest     = sound ? sound->lfoDest  : LfoDest::Cutoff;
+    ev.lfoRate     = step.pLfoRate.value_or  (sound ? sound->lfoRate  : 1.0f);
+    ev.lfoDepth    = step.pLfoDepth.value_or (sound ? sound->lfoDepth : 0.0f);
+    ev.lfoSync     = sound ? sound->lfoSync : true;
 }
 
 // Walk the active song's rows, summing each row's span (length * repeat) in 16ths,
