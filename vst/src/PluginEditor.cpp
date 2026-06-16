@@ -334,6 +334,8 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                 vo->setProperty ("pattern_count", PatternBank::kNumSlots);
                 vo->setProperty ("pattern_length", patternLength);
                 vo->setProperty ("max_pattern_length", kMaxPatternLength);
+                if (auto* mv = processor.apvts.getRawParameterValue ("masterVol"))
+                    vo->setProperty ("master_vol", (double) mv->load());
             }
             return v;
         }
@@ -607,6 +609,16 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         const double s = body.getProperty ("swing", 0.0);
         if (auto* param = processor.apvts.getParameter ("swing"))
             param->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, (float) s));
+        return emptyObject();
+    }
+
+    // PUT /master/volume { volume }  → drive the masterVol APVTS param (0..2,
+    // 1 = unity). The body value is in real units; normalise for the host.
+    if (method == "PUT" && path == "/master/volume")
+    {
+        const double mv = body.getProperty ("volume", 1.0);
+        if (auto* param = processor.apvts.getParameter ("masterVol"))
+            param->setValueNotifyingHost (param->convertTo0to1 (juce::jlimit (0.0f, 2.0f, (float) mv)));
         return emptyObject();
     }
 

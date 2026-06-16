@@ -47,6 +47,11 @@
     #play-btn.playing:hover { background: var(--accent-2); color: #04110d; border-color: var(--accent-2); }
     /* BPM readout is scroll-adjustable */
     #bpm { cursor: ns-resize; }
+    /* header swing knob: standard dial, compact label */
+    #swing-host .knob-wrap { width: 38px; }
+    #swing-host .knob-name { letter-spacing: .5px; }
+    /* master-volume fader (header) */
+    #master-vol { width: 88px; }
     /* transport play indicator: dim when stopped, glowing accent when playing */
     #transport .dot {
       width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim);
@@ -367,18 +372,19 @@
 <body>
   <header>
     <span class="logo">SILA</span>
-    <button id="play-btn" title="play / stop">▶</button>
+    <button id="play-btn">▶</button>
     <span class="meta" id="transport"><span class="dot"></span><span id="play-state">—</span></span>
-    <span class="meta">BPM <span id="bpm" class="val" style="min-width:46px" title="scroll to change tempo">—</span></span>
+    <span class="meta">BPM <span id="bpm" class="val" style="min-width:46px">—</span></span>
     <span class="meta">Bar·Beat <span id="barbeat" class="val">—</span></span>
-    <span class="meta">PTN <select id="pattern-select" title="pattern being edited / played"></select></span>
-    <span class="meta">LEN <input type="number" id="pattern-len" min="1" max="128" title="pattern length in steps (1–128). Shrinking discards steps past the new end."></span>
-    <span class="meta">Swing <input type="range" id="swing" min="0" max="100" value="0"><span id="swing-pct" class="val" style="min-width:34px">0%</span></span>
+    <span class="meta">PTN <select id="pattern-select"></select></span>
+    <span class="meta">LEN <input type="number" id="pattern-len" min="1" max="128"></span>
+    <span class="meta" id="swing-host"></span>
+    <span class="meta">MASTER <input type="range" id="master-vol" min="0" max="200" value="100"><span id="master-pct" class="val" style="min-width:38px">100%</span></span>
     <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>
-    <button id="song-btn" title="Open the Song arrangement editor (Digitakt-style row chain)">SONG</button>
-    <button id="projects-btn" title="Save / load projects in ~/SILA/projects">PROJECTS</button>
-    <button id="export-btn" title="Transcode all project samples to 48k/16-bit mono WAVs for the Elektron Digitakt">EXPORT</button>
+    <button id="song-btn">SONG</button>
+    <button id="projects-btn">PROJECTS</button>
+    <button id="export-btn">EXPORT</button>
   </header>
 
   <div class="body">

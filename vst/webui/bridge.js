@@ -62,8 +62,10 @@ function attachTip(el, html) {
 
 const tracksEl   = document.getElementById("tracks");
 const barBeatEl  = document.getElementById("barbeat");
-const swingEl    = document.getElementById("swing");
-const swingPct   = document.getElementById("swing-pct");
+const swingHostEl = document.getElementById("swing-host");
+let   swingKnob   = null;   // header swing dial (built in boot)
+const masterVolEl = document.getElementById("master-vol");
+const masterPctEl = document.getElementById("master-pct");
 const songEl     = document.getElementById("songMode");
 const patternSelectEl = document.getElementById("pattern-select");
 const patternLenEl = document.getElementById("pattern-len");
@@ -1086,8 +1088,9 @@ async function onProjectReload() {
   hideTrimmer();
   lfoPanel.classList.remove("visible");
   lfoTrackId = null;
-  const sw = Math.round((project.swing || 0) * 100);
-  swingEl.value = sw; swingPct.textContent = sw + "%";   // header reflects restored swing
+  if (swingKnob) swingKnob.set(project.swing || 0);       // header reflects restored swing
+  const mv = Math.round((project.master_vol ?? 1) * 100); // …and restored master volume
+  masterVolEl.value = mv; masterPctEl.textContent = mv + "%";
   setStatus(`project loaded — ${project.tracks.length} tracks`, true);
 }
 
@@ -1537,11 +1540,22 @@ async function boot() {
     _bpmPutTimer = setTimeout(() => PUT("/transport/bpm", { bpm: uiBpm }), 80);
   }, { passive: false });
 
-  const swing0 = Math.round((project.swing || 0) * 100);
-  swingEl.value = swing0;
-  swingPct.textContent = swing0 + "%";
-  swingEl.addEventListener("input", () => { swingPct.textContent = swingEl.value + "%"; });
-  swingEl.addEventListener("change", () => PUT("/project/swing", { swing: parseInt(swingEl.value) / 100 }));
+  // Swing is now a rotary dial (matches the channel-strip aesthetic); the % shows
+  // in the cap, live while dragging. onChange PUTs the swing param.
+  swingKnob = makeKnob({
+    min: 0, max: 1, value: project.swing || 0, label: "Swing", def: 0, valueInCap: true,
+    format: v => Math.round(v * 100) + "%",
+    tip: "<b>Swing</b> — shuffle feel; delays the off-beat 16ths.",
+    onChange: v => PUT("/project/swing", { swing: v }),
+  });
+  swingHostEl.appendChild(swingKnob.el);
+
+  // Master volume fader (0–200% of unity; param range 0..2, 1 = unity).
+  const mv0 = Math.round((project.master_vol ?? 1) * 100);
+  masterVolEl.value = mv0;
+  masterPctEl.textContent = mv0 + "%";
+  masterVolEl.addEventListener("input", () => { masterPctEl.textContent = masterVolEl.value + "%"; });
+  masterVolEl.addEventListener("change", () => PUT("/master/volume", { volume: parseInt(masterVolEl.value) / 100 }));
 
   const songMode = getToggleState("songModeToggle");
   const reflect = () => { songEl.checked = songMode.getValue(); songBtn.classList.toggle("engaged", songMode.getValue()); };
@@ -1605,8 +1619,16 @@ async function boot() {
   attachTip(lfoDestEl, "<b>LFO Destination</b> — what the LFO modulates (cutoff / volume / pitch).");
   attachTip(lfoSyncEl, "<b>Sync</b> — restart the LFO each note; off = free-running.");
 
-  // Tooltips on the header swing + the inspector's discrete selects.
-  attachTip(swingEl, "<b>Swing</b> — shuffle feel; delays the off-beat 16ths.");
+  // Tooltips on the header transport / actions (themed, replacing native titles).
+  attachTip(playBtn, "<b>Play / Stop</b> — start or stop the internal transport (a playing host overrides this).");
+  attachTip(bpmEl, "<b>Tempo</b> — scroll to change BPM (the host tempo wins while it plays).");
+  attachTip(masterVolEl, "<b>Master Volume</b> — overall output level (100% = unity gain).");
+  attachTip(patternSelectEl, "<b>Pattern</b> — which pattern slot the grid edits and plays.");
+  attachTip(patternLenEl, "<b>Length</b> — pattern length in steps (1–128). Shrinking discards steps past the new end.");
+  attachTip(songBtn, "<b>Song</b> — open the arrangement editor (Digitakt-style row chain).");
+  attachTip(projectsBtn, "<b>Projects</b> — save / load projects in ~/SILA/projects.");
+  attachTip(exportBtn, "<b>Export</b> — transcode all project samples to 48k/16-bit mono WAVs for the Elektron Digitakt.");
+  // Inspector's discrete selects.
   attachTip($("i-trig"), "<b>Trig condition</b> — when this step is allowed to fire.");
   attachTip($("i-fmode"), "<b>Filter mode</b> — low-pass / high-pass / band-pass.");
   attachTip($("i-length"), "<b>Length</b> — note length / gate (∞ = one-shot).");
