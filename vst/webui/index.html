@@ -127,7 +127,9 @@
     .ms button.mute.on { background: #ffae57; border-color: #ffae57; }
     .ms button.solo.on { background: var(--accent); border-color: var(--accent); }
     .ms button.del:hover { background: #ff5a5a; border-color: #ff5a5a; color: #04110d; }
-    .ms button.del.armed { background: #ff5a5a; border-color: #ff5a5a; color: #04110d; font-weight: 700; }
+    /* armed (1st click): orange = hide in this pattern; red = remove from every pattern (shift) */
+    .ms button.del.armed { background: #ffae57; border-color: #ffae57; color: #04110d; font-weight: 700; }
+    .ms button.del.armed-global { background: #ff5a5a; border-color: #ff5a5a; color: #04110d; font-weight: 700; }
     /* per-track colour dot (click to recolour) + the swatch popover */
     .track-color-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; cursor: pointer;
       background: var(--track-color, var(--text-dim)); box-shadow: 0 0 0 1px rgba(0,0,0,.45); transition: transform .1s; }

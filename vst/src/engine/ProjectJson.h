@@ -15,10 +15,12 @@
 // the GET /project payload itself.
 namespace sila::engine
 {
-constexpr int kProjectSchemaVersion = 4;   // v2 added `songs`; v3 moved step data
+constexpr int kProjectSchemaVersion = 5;   // v2 added `songs`; v3 moved step data
                                            // into the unified pattern_bank; v4 moved
                                            // the SOUND (samples + LFO) off the track
-                                           // into a per-pattern kit (pattern_kits)
+                                           // into a per-pattern kit (pattern_kits);
+                                           // v5 added per-pattern lane visibility
+                                           // (LaneSound.active — absent reads true)
 
 // Step / trig.
 juce::var      stepToVar (const Step&);

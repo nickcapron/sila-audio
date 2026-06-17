@@ -252,6 +252,7 @@ function stepIsLocked(s) {
 function renderTracks() {
   tracksEl.innerHTML = "";
   for (const track of project.tracks) {
+    if (track.active === false) continue;   // soft-deleted in this pattern (shown as a re-add chip)
     const row = document.createElement("div");
     row.className = "track-row";
     row.dataset.trackId = track.id;
@@ -272,18 +273,23 @@ function renderTracks() {
     const del = document.createElement("button");
     del.className = "del";
     del.textContent = "×";
-    del.title = "delete track";
+    const delDefaultTitle = "hide in this pattern · shift-click: remove from every pattern";
+    del.title = delDefaultTitle;
     let delTimer = null;
-    del.onclick = () => {
-      if (del.classList.contains("armed")) {           // confirmed
+    const disarm = () => { del.classList.remove("armed", "armed-global"); del.title = delDefaultTitle; };
+    del.onclick = (e) => {
+      if (del.classList.contains("armed")) {            // confirmed
         clearTimeout(delTimer);
-        deleteTrack(track.id);
+        if (del._global) deleteTrack(track.id);         // shift: remove the lane everywhere
+        else             hideTrack(track.id);           // default: soft-delete this pattern only
         return;
       }
-      del.classList.add("armed");                       // arm — second click confirms
-      del.title = "click again to delete";
+      del._global = e.shiftKey;                          // arm — second click confirms
+      del.classList.add("armed");
+      del.classList.toggle("armed-global", del._global);
+      del.title = del._global ? "click again to remove from ALL patterns" : "click again to hide here";
       clearTimeout(delTimer);
-      delTimer = setTimeout(() => { del.classList.remove("armed"); del.title = "delete track"; }, 3000);
+      delTimer = setTimeout(disarm, 3000);
     };
     ms.appendChild(mute);
     ms.appendChild(solo);
@@ -371,8 +377,13 @@ function renderTracks() {
     row.appendChild(grid);
     tracksEl.appendChild(row);
   }
+
+  // Hidden (soft-deleted) lanes are NOT shown; "+ Track" restores the next one
+  // (see addTrack). The button stays enabled while any lane is hidden, even at the
+  // 8-lane pool cap — restoring doesn't grow the pool.
   const addBtn = document.getElementById("add-track");
-  if (addBtn) addBtn.disabled = project.tracks.length >= 8;
+  if (addBtn) addBtn.disabled = project.tracks.length >= 8
+                                && ! project.tracks.some(t => t.active === false);
   _lastCol = {};   // force the playhead to re-light after a rebuild (page/length change)
 }
 
@@ -523,12 +534,29 @@ function openColorPop(anchorEl, trackId) {
 // add/remove publish a new Project+bank via setProject -> projectEpoch bump, so
 // the UI rebuilds through the "project" event. Rename is a snapshot edit only.
 async function addTrack() {
+  // If this pattern has hidden lanes, "+ Track" restores the next one (lowest
+  // index) instead of growing the global pool — e.g. A02 showing 2 of 4 lanes
+  // brings back lane 3. Only when nothing is hidden does it add a brand-new lane.
+  const hidden = project.tracks.find(t => t.active === false);
+  if (hidden) { await restoreTrack(hidden.id); return; }
   const res = await POST("/tracks", {});
   if (res && res.error) setStatus(res.error, false);
 }
 
 async function deleteTrack(id) {
   await DEL(`/tracks/${id}`);
+}
+
+// Per-pattern soft-delete / restore (Phase 7b). These only touch the CURRENT
+// pattern, and the route uses editProject (no epoch bump), so we re-fetch + re-render.
+async function hideTrack(id) {
+  await PUT(`/tracks/${id}/pattern-active`, { active: false });
+  await onProjectReload();
+}
+
+async function restoreTrack(id) {
+  await PUT(`/tracks/${id}/pattern-active`, { active: true });
+  await onProjectReload();
 }
 
 function startRename(id, nameEl) {

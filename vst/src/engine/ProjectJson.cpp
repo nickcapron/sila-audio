@@ -218,6 +218,7 @@ juce::var laneSoundToVar (const LaneSound& ls)
     lfo->setProperty ("destination", juce::String (lfoDestToString (ls.lfoDest)));
     lfo->setProperty ("sync",        ls.lfoSync);
     o->setProperty ("lfo", juce::var (lfo));
+    o->setProperty ("active", ls.active);   // Phase 7b: per-pattern lane visibility
     return juce::var (o);
 }
 
@@ -235,6 +236,7 @@ static LaneSound laneSoundFromVar (const juce::var& v)
         ls.lfoDest  = lfoDestFromString (lv.getProperty ("destination", "cutoff").toString());
         ls.lfoSync  = (bool) lv.getProperty ("sync", true);
     }
+    ls.active = (bool) v.getProperty ("active", true);   // absent (v4) => active
     return ls;
 }
 

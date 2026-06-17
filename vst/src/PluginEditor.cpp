@@ -324,6 +324,8 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                             i < (int) curKit.size() ? curKit[(size_t) i] : dfltSound);
                         to->setProperty ("samples", laneVar.getProperty ("samples", juce::var()));
                         to->setProperty ("lfo",     laneVar.getProperty ("lfo", juce::var()));
+                        // Phase 7b: per-pattern lane visibility (UI hides inactive rows).
+                        to->setProperty ("active", laneVar.getProperty ("active", true));
 
                         juce::Array<juce::var> steps;
                         if (i < (int) curSlot.size() && ! curSlot[(size_t) i].empty())
@@ -662,6 +664,48 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         });
         if (slot >= 0 && lane >= 0)
             processor.assignTrackSamples (slot, lane, layers);
+        return emptyObject();
+    }
+
+    // PUT /tracks/{id}/pattern-active { active } — per-pattern soft-delete / restore
+    // (Phase 7b, the Digitakt-style "illusion of deletion"). active=false hides AND
+    // clears this lane in the CURRENT pattern only (zeroes its steps + resets its
+    // kit sound), leaving the global lane pool, APVTS params, song-mutes and every
+    // other pattern untouched. active=true restores the lane (reappears empty).
+    if (method == "PUT" && seg.size() == 3 && seg[0] == "tracks" && seg[2] == "pattern-active")
+    {
+        const juce::String id     = seg[1];
+        const bool         active = (bool) body.getProperty ("active", true);
+        int clearedSlot = -1, lane = -1;
+        processor.editProject ([&] (Project& proj)
+        {
+            const int cp = juce::jlimit (0, PatternBank::kNumSlots - 1, proj.currentPattern);
+            for (int i = 0; i < (int) proj.tracks.size(); ++i)
+                if (proj.tracks[(size_t) i].id == id) { lane = i; break; }
+            if (lane < 0) return;
+            ensureKitLanes (proj, cp);
+            if (lane >= (int) proj.patternBank.kits[(size_t) cp].size()) return;
+            auto& ls = proj.patternBank.kits[(size_t) cp][(size_t) lane];
+            if (! active)
+            {
+                // Soft-delete: zero this lane's step column + reset its sound.
+                ensurePatternColumns (proj, cp);
+                if (lane < (int) proj.patternBank.slots[(size_t) cp].size())
+                {
+                    auto& col = proj.patternBank.slots[(size_t) cp][(size_t) lane];
+                    col.assign (col.size(), Step {});
+                }
+                ls = LaneSound {};       // reset samples + LFO to defaults...
+                ls.active = false;       // ...and mark hidden in this pattern
+                clearedSlot = cp;        // signal the bank-lane silence below
+            }
+            else
+            {
+                ls.active = true;        // restore — lane reappears (empty)
+            }
+        });
+        if (clearedSlot >= 0 && lane >= 0)
+            processor.assignTrackSamples (clearedSlot, lane, {});   // silence the bank lane
         return emptyObject();
     }
 

@@ -81,6 +81,12 @@ struct LaneSound
     float                  lfoRate  = 1.0f;     // Hz (Speed)
     float                  lfoDepth = 0.0f;     // 0..1 (0 = off, zero cost)
     bool                   lfoSync  = true;     // true = trig-sync, false = free-run
+    // Per-pattern lane visibility (Phase 7b — "illusion of deletion"). false = this
+    // lane is soft-deleted in THIS pattern: hidden in the UI + skipped on the audio
+    // thread, while staying in the fixed lane pool (APVTS/song-mute layout unchanged)
+    // and untouched in other patterns. Default true. A null/unmaterialized kit lane
+    // reads as active (a fresh pattern shows every track).
+    bool                   active   = true;
 };
 
 // Default steps in a freshly-materialized pattern (one 4/4 bar of 16ths).

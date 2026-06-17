@@ -87,6 +87,11 @@ public:
             if (anySolo && ! track.solo)
                 continue;                        // silenced by another track's solo
 
+            // Per-pattern soft-delete (Phase 7b): skip a lane hidden in this slot.
+            const LaneSound* snd = laneSound (project, activeSlot, ti);
+            if (snd != nullptr && ! snd->active)
+                continue;
+
             const std::vector<Step>& steps = resolveSteps (project, ti, activeSlot);
             const int stepCount = (int) steps.size();
             if (stepCount <= 0)
@@ -104,7 +109,7 @@ public:
                 continue;
 
             TrigEvent ev;
-            fillTrigEvent (ev, track, ti, idx, step, laneSound (project, activeSlot, ti));
+            fillTrigEvent (ev, track, ti, idx, step, snd);
             fn (ev);
         }
     }
@@ -136,6 +141,11 @@ public:
             if (anySolo && ! track.solo)
                 continue;
 
+            // Per-pattern soft-delete (Phase 7b): skip a lane hidden in this slot.
+            const LaneSound* snd = laneSound (project, song.patternSlot, ti);
+            if (snd != nullptr && ! snd->active)
+                continue;
+
             // The row's pattern slot for this track; empty/unauthored => silent.
             const std::vector<Step>& steps = resolveSteps (project, ti, song.patternSlot);
             const int stepCount = (int) steps.size();
@@ -155,7 +165,7 @@ public:
                 continue;
 
             TrigEvent ev;
-            fillTrigEvent (ev, track, ti, idx, step, laneSound (project, song.patternSlot, ti));
+            fillTrigEvent (ev, track, ti, idx, step, snd);
             fn (ev);
         }
     }
