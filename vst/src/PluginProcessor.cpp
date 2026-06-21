@@ -195,6 +195,51 @@ void SilaAudioProcessor::loadProject (ProjectPtr proj)
     setProject (std::move (proj), std::move (set));
 }
 
+void SilaAudioProcessor::captureLaneParams (sila::engine::Project& proj, int slot)
+{
+    if (slot < 0 || slot >= sila::engine::PatternBank::kNumSlots)
+        return;
+    sila::engine::ensureKitLanes (proj, slot);
+    auto& kit = proj.patternBank.kits[(size_t) slot];
+    for (int lane = 0; lane < (int) kit.size() && lane < kMaxTracks; ++lane)
+    {
+        auto& ls = kit[(size_t) lane];
+        ls.volume     = pVol[lane]    != nullptr ? pVol[lane]->load()    : 1.0f;
+        ls.pan        = pPan[lane]    != nullptr ? pPan[lane]->load()    : 0.0f;
+        ls.cutoff     = pCutoff[lane] != nullptr ? pCutoff[lane]->load() : 1.0f;
+        ls.resonance  = pRes[lane]    != nullptr ? pRes[lane]->load()    : 0.0f;
+        ls.filterMode = (sila::engine::FilterMode) juce::jlimit (0, 2,
+                            juce::roundToInt (pFmode[lane] != nullptr ? pFmode[lane]->load() : 0.0f));
+    }
+}
+
+void SilaAudioProcessor::recallLaneParams (int slot)
+{
+    auto snap = snapshot();
+    if (snap == nullptr || slot < 0 || slot >= sila::engine::PatternBank::kNumSlots)
+        return;
+    const auto& kit = snap->patternBank.kits[(size_t) slot];
+    auto setP = [this] (int lane, const char* pid, float value)
+    {
+        if (auto* p = apvts.getParameter ("t" + juce::String (lane) + "_" + pid))
+            p->setValueNotifyingHost (p->convertTo0to1 (value));
+    };
+    // Recall every lane in the pool, not just the kit's: an unauthored slot has an
+    // empty kit, so a missing lane recalls the DEFAULT mix (a fresh pattern starts
+    // clean) rather than leaving the previous pattern's values lingering in APVTS.
+    const int lanes = juce::jmin ((int) snap->tracks.size(), kMaxTracks);
+    for (int lane = 0; lane < lanes; ++lane)
+    {
+        const sila::engine::LaneSound ls = lane < (int) kit.size() ? kit[(size_t) lane]
+                                                                   : sila::engine::LaneSound {};
+        setP (lane, "vol",    ls.volume);
+        setP (lane, "pan",    ls.pan);
+        setP (lane, "cutoff", ls.cutoff);
+        setP (lane, "res",    ls.resonance);
+        setP (lane, "fmode",  (float) (int) ls.filterMode);
+    }
+}
+
 void SilaAudioProcessor::addTrack (const juce::String& name)
 {
     auto cur     = liveProject.load (std::memory_order_acquire);
@@ -808,8 +853,16 @@ void SilaAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     // kit on load is deferred polish; real (sampled) projects round-trip fully.
     auto state = apvts.copyState();
     if (auto proj = snapshot())
+    {
+        // Phase 7c: flush the current pattern's live APVTS mix into its kit so the
+        // saved project carries the latest knob tweaks (other patterns captured on
+        // switch-away). Done on a LOCAL COPY — a save must not mutate/republish the
+        // live project (getStateInformation may run off the message thread).
+        sila::engine::Project toSave = *proj;
+        captureLaneParams (toSave, juce::jlimit (0, sila::engine::PatternBank::kNumSlots - 1, toSave.currentPattern));
         state.setProperty ("projectJson",
-                           juce::JSON::toString (sila::engine::projectToVar (*proj), true), nullptr);
+                           juce::JSON::toString (sila::engine::projectToVar (toSave), true), nullptr);
+    }
     state.setProperty ("internalBpm", internalBpm.load (std::memory_order_relaxed), nullptr);
 
     if (auto xml = state.createXml())
@@ -838,7 +891,17 @@ void SilaAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (! projVar.isObject())
         return;
 
-    auto proj = std::make_shared<const sila::engine::Project> (sila::engine::projectFromVar (projVar));
+    auto migrated = sila::engine::projectFromVar (projVar);
+    // Phase 7c migration: pre-v6 presets had no per-pattern mix (per-track params
+    // were global APVTS state, just restored above). Replicate that live mix into
+    // every authored slot's kit so switching patterns doesn't reset levels/filter.
+    // Done on the mutable project BEFORE publishing — one setProject, no extra swap.
+    if ((int) projVar.getProperty ("schema_version", 0) < 6)
+        for (int s = 0; s < sila::engine::PatternBank::kNumSlots; ++s)
+            if (! migrated.patternBank.kits[(size_t) s].empty())
+                captureLaneParams (migrated, s);
+
+    auto proj = std::make_shared<const sila::engine::Project> (std::move (migrated));
     // Build the sampler bank now (WindowedSinc resamples each source file to the
     // current device rate). If this runs before prepareToPlay, sampleRate is the
     // default; prepareToPlay's rebuildSamplerBankForRate then re-resamples from

@@ -145,6 +145,13 @@ public:
     void addTrack (const juce::String& name);   // appends; no-op at kMaxTracks
     void removeTrack (int index);                // erases the track + its sampler + pattern-bank column
 
+    // Per-pattern mix recall (Phase 7c). captureLaneParams reads the live APVTS slot
+    // params (vol/pan/cutoff/res/fmode) into proj.kits[slot] — call inside an
+    // editProject mutator. recallLaneParams pushes kit[slot] back into APVTS (via
+    // setValueNotifyingHost). Both message thread.
+    void captureLaneParams (sila::engine::Project& proj, int slot);
+    void recallLaneParams (int slot);
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameters();
 

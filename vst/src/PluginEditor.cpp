@@ -474,11 +474,15 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
     // pattern mode plays. Structural edit; the UI re-fetches GET /project.
     if (method == "PUT" && path == "/pattern/select")
     {
-        const int idx = (int) body.getProperty ("index", 0);
+        const int idx = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) body.getProperty ("index", 0));
+        // Phase 7c: capture the OUTGOING pattern's live mix into its kit, switch,
+        // then recall the INCOMING pattern's mix into the APVTS slot params.
         processor.editProject ([&] (Project& proj)
         {
-            proj.currentPattern = juce::jlimit (0, PatternBank::kNumSlots - 1, idx);
+            processor.captureLaneParams (proj, proj.currentPattern);
+            proj.currentPattern = idx;
         });
+        processor.recallLaneParams (idx);
         return emptyObject();
     }
 
@@ -799,10 +803,15 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         }
         if (auto snap = processor.snapshot())
         {
+            // Phase 7c: flush the current pattern's live APVTS mix into its kit on a
+            // LOCAL COPY (a save must not mutate/republish the live project), so the
+            // file carries the latest knob tweaks (others captured on switch-away).
+            Project toSave = *snap;
+            processor.captureLaneParams (toSave, toSave.currentPattern);
             // File format: { project: <structure>, params: { id: normalised } } so
             // the automatable slot params round-trip alongside ProjectJson.
             auto* root = new juce::DynamicObject();
-            root->setProperty ("project", sila::engine::projectToVar (*snap));
+            root->setProperty ("project", sila::engine::projectToVar (toSave));
             auto* params = new juce::DynamicObject();
             for (auto* p : processor.getParameters())
                 if (auto* wid = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
@@ -836,6 +845,16 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                 for (const auto& kv : params->getProperties())
                     if (auto* p = processor.apvts.getParameter (kv.name.toString()))
                         p->setValueNotifyingHost ((float) (double) kv.value);
+            // Phase 7c migration: pre-v6 saves had no per-pattern mix, so replicate
+            // the just-restored (global) APVTS mix into every authored slot's kit —
+            // otherwise switching patterns would reset levels/filter to defaults.
+            if ((int) actual.getProperty ("schema_version", 0) < 6)
+                processor.editProject ([&] (Project& proj)
+                {
+                    for (int s = 0; s < PatternBank::kNumSlots; ++s)
+                        if (! proj.patternBank.kits[(size_t) s].empty())
+                            processor.captureLaneParams (proj, s);
+                });
             o->setProperty ("loaded", name);
         }
         else

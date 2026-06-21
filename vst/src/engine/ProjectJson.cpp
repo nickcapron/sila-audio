@@ -219,6 +219,12 @@ juce::var laneSoundToVar (const LaneSound& ls)
     lfo->setProperty ("sync",        ls.lfoSync);
     o->setProperty ("lfo", juce::var (lfo));
     o->setProperty ("active", ls.active);   // Phase 7b: per-pattern lane visibility
+    // Phase 7c: per-pattern mix snapshot (mirrors the APVTS slot params).
+    o->setProperty ("volume",      (double) ls.volume);
+    o->setProperty ("pan",         (double) ls.pan);
+    o->setProperty ("cutoff",      (double) ls.cutoff);
+    o->setProperty ("resonance",   (double) ls.resonance);
+    o->setProperty ("filter_mode", juce::String (filterModeToString (ls.filterMode)));
     return juce::var (o);
 }
 
@@ -237,6 +243,13 @@ static LaneSound laneSoundFromVar (const juce::var& v)
         ls.lfoSync  = (bool) lv.getProperty ("sync", true);
     }
     ls.active = (bool) v.getProperty ("active", true);   // absent (v4) => active
+    // Phase 7c: per-pattern mix snapshot (absent => APVTS-default; old projects get
+    // their global mix replicated into kits at load — see setStateInformation).
+    ls.volume     = (float) (double) v.getProperty ("volume", 1.0);
+    ls.pan        = (float) (double) v.getProperty ("pan", 0.0);
+    ls.cutoff     = (float) (double) v.getProperty ("cutoff", 1.0);
+    ls.resonance  = (float) (double) v.getProperty ("resonance", 0.0);
+    ls.filterMode = filterModeFromString (v.getProperty ("filter_mode", "lowpass").toString());
     return ls;
 }
 

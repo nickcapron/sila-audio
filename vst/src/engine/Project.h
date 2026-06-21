@@ -87,6 +87,17 @@ struct LaneSound
     // and untouched in other patterns. Default true. A null/unmaterialized kit lane
     // reads as active (a fresh pattern shows every track).
     bool                   active   = true;
+    // Per-pattern mix snapshot (Phase 7c). These mirror the host-automatable APVTS
+    // slot params; on a pattern switch the OUTGOING values are captured here and the
+    // INCOMING ones recalled into APVTS, so each pattern keeps its own levels/filter.
+    // (Song mode does NOT recall per slot — it uses the live/automated APVTS values.)
+    // Defaults match the APVTS param defaults. The audio thread still reads APVTS,
+    // not these — they're the persisted per-pattern store, synced at switch/save.
+    float                  volume     = 1.0f;   // 0..1
+    float                  pan        = 0.0f;   // -1..1
+    float                  cutoff     = 1.0f;   // 0..1 (1 = fully open)
+    float                  resonance  = 0.0f;   // 0..1
+    FilterMode             filterMode = FilterMode::LowPass;
 };
 
 // Default steps in a freshly-materialized pattern (one 4/4 bar of 16ths).
