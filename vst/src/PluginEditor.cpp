@@ -141,11 +141,15 @@ juce::File resolveLibraryPath (const juce::String& rel, bool& ok)
 // server clock to fail, so healthy is always true and error/startup_warning are
 // null; current_song_slot is null (not -1) when song mode is off/stopped, to
 // match the Python contract the UI already speaks.
-juce::var statusVar (bool playing, double bpm, int songSlot, int songRow, int songRepeat)
+juce::var statusVar (bool playing, double bpm, int songSlot, int songRow, int songRepeat,
+                     bool standalone)
 {
     auto* o = new juce::DynamicObject();
     o->setProperty ("playing", playing);
     o->setProperty ("bpm", bpm);
+    // Standalone owns its clock (BPM is editable); hosted, the DAW drives tempo and
+    // the UI shows it read-only (a plugin can't set the host transport tempo).
+    o->setProperty ("standalone", standalone);
     o->setProperty ("healthy", true);
     o->setProperty ("error", juce::var());
     o->setProperty ("startup_warning", juce::var());
@@ -263,7 +267,8 @@ void SilaAudioProcessorEditor::timerCallback()
         lastSentBpm      = bpm;
         lastSentSongSlot = slot;
         lastSentSongRow  = row;
-        webView.emitEventIfBrowserIsVisible ("status", statusVar (playing, bpm, slot, row, repeat));
+        webView.emitEventIfBrowserIsVisible ("status", statusVar (playing, bpm, slot, row, repeat,
+            processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone));
     }
 
     // The processor bumps projectEpoch when DAW state load (setStateInformation)
@@ -639,18 +644,26 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return juce::var (o);
     }
 
-    // PUT /transport/playing { playing } — UI play/stop (internal transport).
+    // PUT /transport/playing { playing } — UI play/stop (internal transport). Ignored
+    // when hosted: the DAW owns the transport (a plugin can't start/stop the host),
+    // so SILA's play button only drives the internal clock in Standalone.
     if (method == "PUT" && path == "/transport/playing")
     {
-        processor.internalPlaying.store ((bool) body.getProperty ("playing", true), std::memory_order_relaxed);
+        if (processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+            processor.internalPlaying.store ((bool) body.getProperty ("playing", true), std::memory_order_relaxed);
         return emptyObject();
     }
 
-    // PUT /transport/bpm { bpm } — internal transport tempo (20..300).
+    // PUT /transport/bpm { bpm } — internal transport tempo (20..300). Ignored when
+    // hosted: the DAW owns the tempo there (a plugin can't drive the host transport),
+    // so SILA's internal clock only applies in Standalone.
     if (method == "PUT" && path == "/transport/bpm")
     {
-        const double b = (double) body.getProperty ("bpm", 120.0);
-        processor.internalBpm.store (juce::jlimit (20.0, 300.0, b), std::memory_order_relaxed);
+        if (processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+        {
+            const double b = (double) body.getProperty ("bpm", 120.0);
+            processor.internalBpm.store (juce::jlimit (20.0, 300.0, b), std::memory_order_relaxed);
+        }
         return emptyObject();
     }
 
@@ -1176,7 +1189,8 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                           processor.currentBpm.load (std::memory_order_relaxed),
                           processor.currentSongSlot.load (std::memory_order_relaxed),
                           processor.currentSongRow.load (std::memory_order_relaxed),
-                          processor.currentSongRepeat.load (std::memory_order_relaxed));
+                          processor.currentSongRepeat.load (std::memory_order_relaxed),
+                          processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone);
 
     // Unimplemented endpoints: benign empty object (full app.js cutover is Step 2b+).
     return emptyObject();

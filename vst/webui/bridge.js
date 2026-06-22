@@ -114,6 +114,9 @@ let sel = { trackId: null, idx: null };   // selected step
 // Transport (UI internal): mirror of the published play state + a local tempo
 // target so the BPM wheel feels instant and the status echo doesn't fight it.
 let _playing = false, uiBpm = 120, _bpmWheelAt = 0, _bpmPutTimer = null;
+// Standalone owns its clock (BPM editable); hosted, the DAW drives tempo (read-only).
+// Default true so the wheel works if the status fetch ever fails in Standalone.
+let _standalone = true;
 let currentPage = 0;                        // active 16-step page (front-end view state)
 const STEPS_PER_PAGE = 16;
 
@@ -859,11 +862,11 @@ function onPlayhead(ppq) {
 function onStatus(s) {
   const playing = !!s.playing;
   _playing = playing;
+  if (typeof s.standalone === "boolean") _standalone = s.standalone;
   transportEl.classList.toggle("playing", playing);
   playStateEl.textContent = playing ? "PLAYING" : "STOPPED";
   playBtn.textContent = playing ? "■" : "▶";
   playBtn.classList.toggle("playing", playing);
-  playBtn.title = playing ? "stop" : "play";
 
   // Reflect tempo, but don't clobber the display while the user is wheeling it.
   if (s.bpm != null) {
@@ -1855,17 +1858,29 @@ async function boot() {
   // Initial transport status (live updates after this arrive via the event).
   try { onStatus(await GET("/sequencer/status")); } catch { /* ignore */ }
 
-  // Transport: play/stop toggles the internal transport; the BPM readout is a
-  // scroll wheel (±1 BPM/notch, 20..300). Both no-op against a playing host.
-  playBtn.addEventListener("click", () => PUT("/transport/playing", { playing: !_playing }));
-  bpmEl.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    uiBpm = Math.max(20, Math.min(300, (uiBpm || 120) + (e.deltaY < 0 ? 1 : -1)));
-    bpmEl.textContent = uiBpm.toFixed(1);
-    _bpmWheelAt = Date.now();
-    clearTimeout(_bpmPutTimer);
-    _bpmPutTimer = setTimeout(() => PUT("/transport/bpm", { bpm: uiBpm }), 80);
-  }, { passive: false });
+  // Transport: play/stop drives the internal transport — Standalone only. Hosted,
+  // the DAW owns the transport (a plugin can't start/stop the host), so the button
+  // just reflects the host's play state (updated via the status event).
+  if (_standalone)
+    playBtn.addEventListener("click", () => PUT("/transport/playing", { playing: !_playing }));
+  else
+    playBtn.style.cursor = "default";
+
+  // BPM: a scroll wheel (±1 BPM/notch, 20..300) ONLY in Standalone, where SILA owns
+  // its clock. Hosted, the DAW drives tempo — a plugin can't set the host transport —
+  // so the readout is display-only (it shows the host tempo via the status event).
+  if (_standalone) {
+    bpmEl.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      uiBpm = Math.max(20, Math.min(300, (uiBpm || 120) + (e.deltaY < 0 ? 1 : -1)));
+      bpmEl.textContent = uiBpm.toFixed(1);
+      _bpmWheelAt = Date.now();
+      clearTimeout(_bpmPutTimer);
+      _bpmPutTimer = setTimeout(() => PUT("/transport/bpm", { bpm: uiBpm }), 80);
+    }, { passive: false });
+  } else {
+    bpmEl.style.cursor = "default";
+  }
 
   // Swing is now a rotary dial (matches the channel-strip aesthetic); the % shows
   // in the cap, live while dragging. onChange PUTs the swing param.
@@ -1959,8 +1974,12 @@ async function boot() {
   attachTip(lfoSyncEl, "<b>Sync</b> — restart the LFO each note; off = free-running.");
 
   // Tooltips on the header transport / actions (themed, replacing native titles).
-  attachTip(playBtn, "<b>Play / Stop</b> — start or stop the internal transport (a playing host overrides this).");
-  attachTip(bpmEl, "<b>Tempo</b> — scroll to change BPM (the host tempo wins while it plays).");
+  attachTip(playBtn, _standalone
+    ? "<b>Play / Stop</b> — start or stop the internal transport."
+    : "<b>Play / Stop</b> — follows the host transport; start playback in your DAW.");
+  attachTip(bpmEl, _standalone
+    ? "<b>Tempo</b> — scroll to change BPM."
+    : "<b>Tempo</b> — follows the host; set it in your DAW.");
   attachTip(masterVolEl, "<b>Master Volume</b> — overall output level (100% = unity gain).");
   attachTip(patternSelectEl, "<b>Pattern</b> — which pattern slot the grid edits and plays.");
   attachTip(patternLenEl, "<b>Length</b> — pattern length in steps (1–128). Shrinking discards steps past the new end.");
