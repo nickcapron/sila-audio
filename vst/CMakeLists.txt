@@ -49,6 +49,16 @@ juce_add_binary_data(SILAWebUI
         ${CMAKE_CURRENT_SOURCE_DIR}/webui/js/juce/check_native_interop.js
 )
 
+# Factory sample pack (Behringer RD-6 kit + CZ-1 mini synth voices), embedded so
+# brand-new users get it installed to ~/SILA/library on first run and open to the
+# showcase song with sound (see SilaAudioProcessor::installFactoryLibrary). A
+# distinct NAMESPACE/HEADER_NAME keeps it separate from the SILAWebUI BinaryData.
+file(GLOB SILA_FACTORY_WAVS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/factory/*.wav")
+juce_add_binary_data(SILAFactory
+    NAMESPACE   FactoryData
+    HEADER_NAME SILAFactoryData.h
+    SOURCES     ${SILA_FACTORY_WAVS})
+
 target_sources(SILA PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp         # Phase 4 (WebView editor)
@@ -76,6 +86,7 @@ target_link_libraries(SILA PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     SILAWebUI                                     # bundled web UI (BinaryData)
+    SILAFactory                                   # bundled factory sample pack (FactoryData)
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags

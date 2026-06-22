@@ -182,6 +182,11 @@ private:
     // parallel sampler array. Replaced by UI-authored state in later steps.
     ProjectPtr buildDemoProject (double sampleRate);
 
+    // Install the bundled factory sample pack (RD-6 + CZ-1 mini) into ~/SILA/library
+    // on first run, so new users open to the showcase song with sound. Idempotent:
+    // skips any file that already exists (never clobbers the user's library).
+    void installFactoryLibrary();
+
     // Build a sampler for one track from its sample layers, resampling each file
     // to `sr` (message-thread file I/O). Shared by assignment + rate-change rebuild.
     static std::shared_ptr<sila::engine::Sampler>

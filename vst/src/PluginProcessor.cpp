@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "engine/ProjectJson.h"
+#include "SILAFactoryData.h"   // bundled factory sample pack (FactoryData namespace)
 #include <cmath>
 #include <algorithm>
 
@@ -52,6 +53,11 @@ SilaAudioProcessor::SilaAudioProcessor()
     pSongMode     = apvts.getRawParameterValue ("songMode");
     pMasterVol    = apvts.getRawParameterValue ("masterVol");
     pSmallSpeaker = apvts.getRawParameterValue ("smallSpeaker");
+
+    // Install the bundled factory pack into ~/SILA/library on load (idempotent), so
+    // the demo project's samples resolve for brand-new users. Independent of the
+    // audio device (runs even before prepareToPlay).
+    installFactoryLibrary();
 }
 
 SilaAudioProcessor::~SilaAudioProcessor() = default;
@@ -151,6 +157,63 @@ juce::AudioBuffer<float> SilaAudioProcessor::makeHat (double sr)
     return b;
 }
 
+namespace
+{
+// Maps each bundled factory wav to its ~/SILA/library category folder (parallels
+// the in-code kit paths in buildDemoProject). Filenames must match factory/*.wav.
+struct FactoryMapEntry { const char* file; const char* category; };
+const FactoryMapEntry kFactoryMap[] = {
+    { "bass drum rd-6.wav",             "01. Kick" },
+    { "rd-6 bass.wav",                  "01. Kick" },
+    { "rd-6 bass distortion.wav",       "01. Kick" },
+    { "snare drum rd-6.wav",            "02. Snare" },
+    { "rd-6 snare.wav",                 "02. Snare" },
+    { "rd-6 snare distortion.wav",      "02. Snare" },
+    { "rd-6 clap.wav",                  "03. Clap" },
+    { "rd-6 clap distortion.wav",       "03. Clap" },
+    { "rd-6 closedhat.wav",             "04. Hi-Hat Closed" },
+    { "rd-6 closed hat distortion.wav", "04. Hi-Hat Closed" },
+    { "rd-6 openhat.wav",               "05. Hi-Hat Open" },
+    { "rd-6 cymbal.wav",                "06. Cymbal" },
+    { "rd-6 cymbal distortion.wav",     "06. Cymbal" },
+    { "rd-6 hightom.wav",               "09. Tom" },
+    { "rd-6 high tom distortion.wav",   "09. Tom" },
+    { "rd-6 low tom.wav",               "09. Tom" },
+    { "rd-6 low tom distortion.wav",    "09. Tom" },
+    { "cz-1 mini bass 01.wav",          "21. Bass - Sub" },
+    { "cz1 mini pluck bass.wav",        "27. Lead - Pluck" },
+    { "cz1 mini crystal keys.wav",      "33. Keys - Piano" },
+    { "cz1 choir vox pad.wav",          "32. Pad - Choir" },
+};
+}
+
+void SilaAudioProcessor::installFactoryLibrary()
+{
+    const auto packDir = libraryRoot().getChildFile ("SILA Factory");
+
+    for (int i = 0; i < FactoryData::namedResourceListSize; ++i)
+    {
+        const juce::String fn = FactoryData::originalFilenames[i];
+        juce::String category;
+        for (const auto& e : kFactoryMap)
+            if (fn == e.file) { category = e.category; break; }
+        if (category.isEmpty())
+            continue;   // a bundled file we don't have a category for — skip
+
+        const auto dest = packDir.getChildFile (category).getChildFile (fn);
+        if (dest.existsAsFile())
+            continue;   // already installed / user-present — never clobber
+
+        int size = 0;
+        const char* data = FactoryData::getNamedResource (FactoryData::namedResourceList[i], size);
+        if (data == nullptr || size <= 0)
+            continue;
+
+        dest.getParentDirectory().createDirectory();
+        dest.replaceWithData (data, (size_t) size);
+    }
+}
+
 void SilaAudioProcessor::prepareToPlay (double sr, int /*samplesPerBlock*/)
 {
     sampleRate = sr;
@@ -168,7 +231,9 @@ void SilaAudioProcessor::prepareToPlay (double sr, int /*samplesPerBlock*/)
 
     if (liveProject.load (std::memory_order_acquire) == nullptr)
     {
-        // First prepare: author the in-code demo project + its sampler bank.
+        // First prepare: author the in-code demo project + its sampler bank. The
+        // factory pack it references is installed in the constructor (above), so the
+        // sample files already resolve here.
         liveProject.store (buildDemoProject (sr), std::memory_order_release);
     }
     else
@@ -452,111 +517,187 @@ void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerSetPtr bank)
     reapRetired();   // message thread; keeps the retire lists from growing on reload
 }
 
-// Phase 3: until the UI bridge (Phase 4) authors patterns, build a small demo
-// project in code so the new Sequencer features are audible in the Standalone:
-//  - kick  : 4-on-the-floor
-//  - snare : beats 2 & 4, plus a ghost on step 14 with a 1:2 trig condition
-//  - hats  : offbeats, with a probability step and a micro-timed (late) step
-// Swing is driven live from the "swing" APVTS param (see processBlock).
+// The factory project new users open: an extended showcase song built from the
+// bundled RD-6 drum kit + CZ-1 mini synth voices (installed to ~/SILA/library on
+// first run, see installFactoryLibrary). 8 tracks, 6 patterns with per-pattern
+// kits (clean vs. RD-6 distortion in the DROP), an acid CZ bassline + pad/keys via
+// pitch, trig conditions / probability / micro-timing / retrig, and a 22-bar song
+// chain. currentPattern 0 is the main groove that auto-plays; the SONG (Song Mode)
+// is the full arrangement. Swing is live from the "swing" APVTS param.
 SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
 {
     using namespace sila::engine;
 
     auto proj = std::make_shared<Project>();
-    auto samplerBank = std::make_shared<SamplerBank>();
 
-    auto addTrack = [&] (const juce::String& name, juce::AudioBuffer<float> sample)
+    // ── 8 factory tracks (RD-6 drums + CZ-1 mini synth) ──────────────────────
+    const char* names[8]  = { "Kick", "Snare", "Clap", "CH", "OH", "Bass", "Keys", "Pad" };
+    const char* colors[8] = { "#ff5a5a", "#ffae57", "#ffd23f", "#34e3c4",
+                              "#5fd0e0", "#8b6cf0", "#c66cf0", "#6c8cf0" };
+    for (int i = 0; i < 8; ++i)
     {
-        Track t;
-        t.id   = name;
-        t.name = name;
+        Track t; t.id = names[i]; t.name = names[i]; t.color = colors[i];
         proj->tracks.push_back (std::move (t));
+    }
+    proj->keyRoot = 0; proj->keyScale = "minor";   // C minor — drives the keyboard UI
 
-        auto smp = std::make_shared<Sampler>();
-        smp->prepare (sr);
-        smp->addBuffer (std::move (sample));   // synthesized demo kit (no file path)
-        samplerBank->push_back (std::move (smp));
+    // One pattern's kit (8 lanes of library-relative samples). `dist` swaps the four
+    // drum lanes to the RD-6 distortion variants for the heavier DROP (kit-per-pattern).
+    auto makeKit = [] (bool dist)
+    {
+        std::vector<LaneSound> k (8);
+        k[0].samples = { SampleRef { dist ? "SILA Factory/01. Kick/rd-6 bass distortion.wav"
+                                          : "SILA Factory/01. Kick/bass drum rd-6.wav" } };
+        k[1].samples = { SampleRef { dist ? "SILA Factory/02. Snare/rd-6 snare distortion.wav"
+                                          : "SILA Factory/02. Snare/rd-6 snare.wav" } };
+        k[2].samples = { SampleRef { dist ? "SILA Factory/03. Clap/rd-6 clap distortion.wav"
+                                          : "SILA Factory/03. Clap/rd-6 clap.wav" } };
+        k[3].samples = { SampleRef { dist ? "SILA Factory/04. Hi-Hat Closed/rd-6 closed hat distortion.wav"
+                                          : "SILA Factory/04. Hi-Hat Closed/rd-6 closedhat.wav" } };
+        k[4].samples = { SampleRef { "SILA Factory/05. Hi-Hat Open/rd-6 openhat.wav" } };
+        k[5].samples = { SampleRef { "SILA Factory/21. Bass - Sub/cz-1 mini bass 01.wav" } };
+        k[6].samples = { SampleRef { "SILA Factory/33. Keys - Piano/cz1 mini crystal keys.wav" } };
+        k[7].samples = { SampleRef { "SILA Factory/32. Pad - Choir/cz1 choir vox pad.wav" } };
+
+        // Synth movement: a synced cutoff LFO gives the CZ bass an acid wobble; a
+        // slow free-run tremolo breathes the pad. (The engine reads kit LFO in both
+        // pattern and song mode.)
+        k[5].lfoShape = LfoShape::Triangle; k[5].lfoDest = LfoDest::Cutoff;
+        k[5].lfoRate = 6.0f; k[5].lfoDepth = 0.30f; k[5].lfoSync = true;
+        k[5].cutoff = 0.55f; k[5].resonance = 0.55f;
+        k[7].lfoShape = LfoShape::Sine; k[7].lfoDest = LfoDest::Volume;
+        k[7].lfoRate = 0.5f; k[7].lfoDepth = 0.22f; k[7].lfoSync = false;
+        k[7].cutoff = 0.7f;
+        return k;
     };
-    addTrack ("Kick",  makeKick (sr));     // track 0
-    addTrack ("Snare", makeSnare (sr));    // track 1
-    addTrack ("Hat",   makeHat (sr));      // track 2
 
-    // A 16-step column (one track's row in a pattern slot) with `on` steps active.
-    auto steps16 = [] (std::initializer_list<int> on, int velocity)
+    // Column helpers (16 steps): C = drum hits {step, vel}; Cn = pitched notes
+    // {step, vel, semitone}; sustain() sets a gate length on a column's active steps.
+    auto C = [] (std::initializer_list<std::pair<int,int>> hits)
     {
         std::vector<Step> v (16);
-        for (int i : on)
-        {
-            v[(size_t) i].active   = true;
-            v[(size_t) i].velocity = velocity;
-        }
+        for (auto h : hits) { auto& s = v[(size_t) h.first]; s.active = true; s.velocity = h.second; }
         return v;
     };
+    auto Cn = [] (std::initializer_list<std::array<int,3>> hits)
+    {
+        std::vector<Step> v (16);
+        for (auto h : hits) { auto& s = v[(size_t) h[0]]; s.active = true; s.velocity = h[1]; s.pitchOffset = h[2]; }
+        return v;
+    };
+    auto sustain = [] (std::vector<Step> v, float len)
+    {
+        for (auto& s : v) if (s.active) s.length = len;
+        return v;
+    };
+    auto empty = [] { return std::vector<Step> (16); };
 
-    // Unified pattern bank (Phase 6): step data lives here, parallel to tracks
-    // (Kick=0, Snare=1, Hat=2). The grid + pattern mode play currentPattern (=0).
+    // The driving 16th acid bass, reused by the GROOVE/BUILD patterns.
+    auto grooveBass = [&] { return Cn ({ {0,112,0},{2,78,0},{3,86,12},{4,96,0},{6,78,0},{7,86,10},
+                                         {8,112,0},{10,78,0},{11,86,12},{12,96,7},{14,80,5},{15,86,0} }); };
+
     auto& bank = proj->patternBank;
 
-    // Slot 0 (A01) — the base groove: kick 4-on-the-floor, snare backbeat + a 1:2
-    // ghost on step 14, offbeat hats with a 50% step and a micro-timed late hat.
+    // ── Slot 0 · GROOVE (the main loop; auto-plays in pattern mode) ───────────
     {
-        auto kick  = steps16 ({ 0, 4, 8, 12 }, 110);
-        auto snare = steps16 ({ 4, 12 }, 100);
-        snare[14].active = true; snare[14].velocity = 70; snare[14].trig = TrigCondition::OneIn2;
-        auto hats  = steps16 ({ 2, 6, 10, 14 }, 80);
-        hats[6].microTiming  = 12;   // pushed late (clock.py: micro * interval / 6)
-        hats[10].probability = 50;   // fires ~half the time
-        bank.slots[0] = { kick, snare, hats };
+        auto snare = C ({ {4,108},{12,108},{7,60},{14,70} });
+        snare[7].trig  = TrigCondition::OneIn2;     // ghost every other bar
+        snare[14].trig = TrigCondition::OneIn4;     // rarer pickup
+        auto ch = C ({ {0,50},{2,60},{4,50},{6,60},{8,50},{10,60},{12,50},{14,60},{15,40} });
+        ch[6].microTiming = 10;                     // a touch of shuffle on the "&"
+        ch[15].probability = 50;
+        bank.slots[0] = {
+            C ({ {0,115},{4,115},{8,115},{12,115} }),   // kick 4-on-the-floor
+            snare,
+            C ({ {4,60},{12,60} }),                     // clap reinforces the backbeat
+            ch,
+            C ({ {6,60},{14,68} }),                     // open-hat lift on the "&"s
+            grooveBass(),
+            sustain (Cn ({ {2,84,7},{10,84,3} }), 2.0f),// crystal-key stabs
+            sustain (Cn ({ {0,52,0} }), 16.0f),         // sustained choir pad
+        };
     }
-    // Slot 1 (A02) — variation: a kick pickup and straight-8th hats.
+    // ── Slot 1 · INTRO (sparse, pad-led) ─────────────────────────────────────
     bank.slots[1] = {
-        steps16 ({ 0, 4, 8, 12, 14 }, 110),                 // kick + pickup on the "a" of 4
-        steps16 ({ 4, 12 }, 100),                            // backbeat snare
-        steps16 ({ 0, 2, 4, 6, 8, 10, 12, 14 }, 75),         // driving 8th-note hats
+        C ({ {0,100},{8,100} }), empty(), empty(),
+        C ({ {2,48},{6,48},{10,48},{14,48} }), empty(),
+        Cn ({ {0,90,0},{8,90,0} }), empty(),
+        sustain (Cn ({ {0,55,0} }), 16.0f),
     };
-    // Slot 2 (A03) — fill: a snare roll into the turnaround.
-    bank.slots[2] = {
-        steps16 ({ 0, 8 }, 110),                             // sparse kick
-        steps16 ({ 8, 10, 12, 13, 14, 15 }, 95),             // snare roll
-        steps16 ({ 2, 6, 10, 14 }, 80),                      // offbeat hats
-    };
-
-    // Phase 7: materialize the kit for each authored slot to 3 lanes (Kick/Snare/
-    // Hat). The demo sounds are SYNTHESIZED (no SampleRef path), so the kit samples
-    // stay empty — the synth samplers live directly in the per-slot bank below, and
-    // rebuildSamplerBankForRate preserves them (empty-samples => keep old sampler).
-    for (int s : { 0, 1, 2 })
-        bank.kits[(size_t) s] = std::vector<LaneSound> (3);
-
-    proj->currentPattern = 0;            // grid + pattern mode show/play the base groove
-
-    // Song Mode (Phase 6) demo arrangement so row-by-row playback is audible
-    // without a UI. Rows reference the slots authored above; ↺ = repeat, +I = row
-    // length in steps, MUTE = per-slot bitmask (kick=0, snare=1, hat=2).
+    // ── Slot 2 · BUILD (rising tension into the drop) ────────────────────────
     {
-        using namespace sila::engine;
+        auto snare = C ({ {8,90},{10,95},{12,100},{13,105},{14,110},{15,118} });
+        snare[13].retrig = 2; snare[14].retrig = 3;
+        snare[15].retrig = 4; snare[15].retrigFade = 0.5f;   // accelerating roll
+        bank.slots[2] = {
+            C ({ {0,112},{4,112},{8,112},{12,112} }), snare,
+            C ({ {4,58},{12,58} }),
+            C ({ {0,52},{1,42},{2,54},{3,42},{4,52},{5,42},{6,54},{7,42},
+                 {8,52},{9,42},{10,54},{11,42},{12,52},{13,42},{14,54},{15,46} }),
+            C ({ {14,70} }),
+            grooveBass(),
+            sustain (Cn ({ {2,84,7},{6,84,10},{10,84,7},{14,84,12} }), 2.0f),
+            sustain (Cn ({ {0,55,7} }), 16.0f),
+        };
+    }
+    // ── Slot 3 · DROP (RD-6 distortion kit, heaviest) ────────────────────────
+    {
+        auto clap = C ({ {4,66},{12,66},{7,52} });
+        clap[7].trig = TrigCondition::OneIn2;
+        bank.slots[3] = {
+            C ({ {0,120},{4,120},{8,120},{12,120},{14,90} }),
+            C ({ {4,115},{12,115} }), clap,
+            C ({ {0,60},{2,60},{4,60},{6,60},{8,60},{10,60},{12,60},{14,60} }),
+            C ({ {2,70},{6,70},{10,70},{14,70} }),
+            Cn ({ {0,120,0},{2,100,0},{4,120,12},{6,100,0},{8,120,0},{10,100,0},{12,120,12},{14,100,7} }),
+            sustain (Cn ({ {0,95,12},{4,95,15},{8,95,12},{12,95,19} }), 2.0f),
+            sustain (Cn ({ {0,60,0} }), 16.0f),
+        };
+    }
+    // ── Slot 4 · BREAK (drums drop out; CZ melody over the pad) ───────────────
+    bank.slots[4] = {
+        empty(), empty(), empty(),
+        C ({ {2,44},{6,44},{10,44},{14,44} }), empty(),
+        Cn ({ {0,80,0},{6,80,3},{8,80,0},{12,80,5} }),
+        sustain (Cn ({ {0,90,0},{2,85,3},{4,90,7},{6,85,5},{8,90,3},{10,85,0},{12,90,7},{14,85,10} }), 2.0f),
+        sustain (Cn ({ {0,60,0} }), 16.0f),
+    };
+    // ── Slot 5 · OUTRO (wind down) ───────────────────────────────────────────
+    bank.slots[5] = {
+        C ({ {0,100},{8,90} }), empty(), empty(),
+        C ({ {4,40},{12,40} }), empty(),
+        Cn ({ {0,80,0},{8,75,0} }), empty(),
+        sustain (Cn ({ {0,55,0} }), 16.0f),
+    };
+
+    // Per-pattern kits: clean RD-6 everywhere except the DROP, which swaps in the
+    // distortion drums (the kit-per-pattern showcase).
+    for (int s : { 0, 1, 2, 4, 5 }) bank.kits[(size_t) s] = makeKit (false);
+    bank.kits[3] = makeKit (true);
+
+    proj->currentPattern = 0;            // pattern mode shows/plays the main groove
+
+    // ── Extended song (Song Mode): a 22-bar arrangement of the patterns above ─
+    {
         Song song;
-        song.name = "Demo Song";
+        song.name = "Factory Showcase";
         song.end  = SongEnd::Loop;
-        //                  LABEL     PTN ↺  +I  BPM   MUTE
-        song.rows.push_back ({ "INTRO",  0, 2, 16, 0.0f, (uint8_t) (1u << 1) }); // base groove, snare muted
-        song.rows.push_back ({ "VERSE",  1, 2, 16, 0.0f, 0 });                   // variation
-        song.rows.push_back ({ "FILL",   2, 1, 16, 0.0f, (uint8_t) (1u << 2) }); // snare roll, hat muted
-        song.rows.push_back ({ "CHORUS", 1, 2, 16, 0.0f, 0 });                   // back to variation
+        //                    LABEL      PTN ↺  +I  BPM   MUTE
+        song.rows.push_back ({ "INTRO",   1, 2, 16, 0.0f, 0 });
+        song.rows.push_back ({ "GROOVE",  0, 4, 16, 0.0f, 0 });
+        song.rows.push_back ({ "BUILD",   2, 2, 16, 0.0f, 0 });
+        song.rows.push_back ({ "DROP",    3, 4, 16, 0.0f, 0 });
+        song.rows.push_back ({ "BREAK",   4, 2, 16, 0.0f, 0 });
+        song.rows.push_back ({ "GROOVE",  0, 4, 16, 0.0f, 0 });
+        song.rows.push_back ({ "DROP",    3, 2, 16, 0.0f, 0 });
+        song.rows.push_back ({ "OUTRO",   5, 2, 16, 0.0f, 0 });
         proj->songs.push_back (std::move (song));
         proj->activeSong = 0;
     }
 
-    // Publish the matching sampler SET (Phase 7). The 3 authored demo slots all
-    // play the SAME synth kit, so they share one immutable bank (cheap; shared RR
-    // state across the demo patterns is benign). Other slots stay null (silent).
-    auto demoBank = std::shared_ptr<const SamplerBank> (std::move (samplerBank));
-    auto set = std::make_shared<SamplerSet>();
-    (*set)[0] = demoBank;
-    (*set)[1] = demoBank;
-    (*set)[2] = demoBank;
-    liveSamplers.store (std::make_shared<const SamplerSet> (std::move (*set)),
-                        std::memory_order_release);
+    // Build the matching sampler set from the kits (file-backed; resampled to sr).
+    auto set = std::make_shared<const SamplerSet> (buildBankForProject (*proj, sr));
+    liveSamplers.store (set, std::memory_order_release);
     return proj;
 }
 
