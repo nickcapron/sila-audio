@@ -589,6 +589,12 @@ function paintCell(cell, trackId, idx, step) {
     + (idx % 4 === 0 ? " beat" : "")
     + (stepIsLocked(step) ? " locked" : "")
     + (sel.trackId === trackId && sel.idx === idx ? " selected" : "");
+  // Velocity = pad brightness (a harder hit lights the pad more). Pure CSS via the
+  // --vel custom property; set once per edit, so there's no runtime/animation cost.
+  if (step.active)
+    cell.style.setProperty("--vel", Math.max(0.05, Math.min(1, (step.velocity ?? 100) / 127)).toFixed(3));
+  else
+    cell.style.removeProperty("--vel");
 }
 
 function repaintCell(trackId, idx) {
