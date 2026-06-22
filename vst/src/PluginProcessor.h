@@ -132,6 +132,12 @@ public:
     // ~/SILA/library — root for resolving relative sample paths from the browser.
     static juce::File libraryRoot();
 
+    // Audition a sample (library preview): decode + resample to the device rate on
+    // the MESSAGE thread, then hand the prepared Sampler to the audio thread via a
+    // lock-free atomic (consumed once in processBlock, spawned as a one-shot voice
+    // through the master bus). Returns false if the file can't be decoded.
+    bool auditionSample (const juce::File& file);
+
     // ~/SILA/projects — standalone project files (Save/Load).
     static juce::File projectsDir();
 
@@ -205,6 +211,11 @@ private:
 
     // Performance scalar not (yet) an APVTS param; read by the audio thread.
     std::atomic<bool> fillActive { false };
+
+    // Library audition handoff: the message thread stores a prepared one-shot
+    // Sampler here; processBlock exchanges it for null and spawns a voice. The
+    // shared_ptr keeps the buffer alive (the voice pins it via keepAlive).
+    std::atomic<std::shared_ptr<sila::engine::Sampler>> pendingAudition { nullptr };
 
     sila::engine::Sequencer  sequencer; // ../sila/engine/sequencer.py (stateless)
 

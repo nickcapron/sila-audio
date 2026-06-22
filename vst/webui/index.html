@@ -81,14 +81,14 @@
     /* a page chip glows when the transport is playing a step on that page */
     #page-bar .page-chip.playing:not(.active) { border-color: var(--accent-2); color: var(--accent-2); }
     /* header action buttons (pinned to the right) */
-    #projects-btn, #export-btn, #song-btn {
+    #projects-btn, #export-midi-btn, #song-btn, #library-btn {
       background: rgba(52,227,196,.06); color: var(--accent);
       border: 1px solid #2a5650; border-radius: var(--radius); padding: 6px 14px;
       font: inherit; font-size: 11px; letter-spacing: 1.5px; font-weight: 700; cursor: pointer;
       transition: background .12s, border-color .12s, color .12s, box-shadow .12s;
     }
     #song-btn { margin-left: auto; }
-    #projects-btn:hover, #export-btn:hover, #song-btn:hover { background: var(--accent); color: #04110d; border-color: var(--accent); box-shadow: 0 0 14px rgba(52,227,196,.35); }
+    #projects-btn:hover, #export-midi-btn:hover, #song-btn:hover, #library-btn:hover { background: var(--accent); color: #04110d; border-color: var(--accent); box-shadow: 0 0 14px rgba(52,227,196,.35); }
     /* SONG button reads as "active" while song mode is engaged */
     #song-btn.engaged { background: rgba(139,108,240,.12); color: var(--accent-2); border-color: #4a3d7a; }
     #proj-save {
@@ -369,6 +369,68 @@
     #song-add-row:hover { color: var(--accent); border-color: var(--accent); background: rgba(52,227,196,.04); }
     #song-add-row:disabled { opacity: .35; cursor: default; }
     .song-hint { color: var(--text-dim); font-size: 11px; }
+
+    /* ── Library manager + importer (full-screen overlay) ── */
+    #library-screen { position: fixed; inset: 0; z-index: 1500; display: none; flex-direction: column;
+      background: radial-gradient(125% 80% at 50% -12%, #101a28 0%, var(--bg) 58%); }
+    #library-screen.open { display: flex; }
+    #library-screen .song-head input#libmgr-search { flex: 1; max-width: 320px; }
+    #lib-import-btn { background: rgba(139,108,240,.12); color: var(--accent-2); border: 1px solid #4a3d7a;
+      border-radius: var(--radius); padding: 5px 12px; font: inherit; font-size: 11px; letter-spacing: 1px; font-weight: 700; cursor: pointer; }
+    #lib-import-btn:hover { background: var(--accent-2); color: #04110d; }
+    .libmgr-body { flex: 1; overflow: auto; padding: 10px 18px; }
+
+    /* browse tree (manager rows reuse the lib-* tree look, with hover actions) */
+    .lm-pack > summary { cursor: pointer; padding: 6px 8px; color: var(--text); font-weight: 700; letter-spacing: .5px; }
+    .lm-cat  > summary { cursor: pointer; padding: 5px 8px 5px 22px; color: var(--text-dim); }
+    .lm-cat  > summary .count { color: var(--accent-2); margin-left: 6px; font-size: 10px; }
+    .lm-row { display: flex; align-items: center; gap: 8px; }
+    .lm-row > summary { flex: 1; }
+    .lm-name { flex: 1; padding: 4px 8px 4px 36px; color: var(--text-dim); cursor: pointer; font-size: 12px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 3px; }
+    .lm-name:hover { background: var(--step-hover); color: var(--accent); }
+    .lm-name.playing { color: var(--accent-2); }
+    .lm-size { color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+    .lm-actions { display: flex; gap: 4px; opacity: 0; transition: opacity .1s; padding-right: 8px; }
+    .lm-row:hover .lm-actions, .lm-pack > summary:hover .lm-actions, .lm-cat > summary:hover .lm-actions { opacity: 1; }
+    .lm-act { width: 22px; height: 22px; border: 1px solid var(--border); background: var(--surface);
+      color: var(--text-dim); border-radius: 4px; cursor: pointer; font: inherit; font-size: 11px; line-height: 1; }
+    .lm-act:hover { border-color: var(--accent); color: var(--accent); }
+    .lm-act.del:hover { background: var(--danger); border-color: var(--danger); color: #04110d; }
+    .lm-act.del.armed { background: var(--danger); border-color: var(--danger); color: #04110d; font-weight: 700; }
+    .lm-rename { padding: 2px 5px; background: var(--bg); color: var(--text); border: 1px solid var(--accent);
+      border-radius: 3px; font: inherit; font-size: 12px; }
+    .lm-move { background: var(--bg); color: var(--text); border: 1px solid var(--accent-2); border-radius: 3px;
+      font: inherit; font-size: 11px; padding: 2px 4px; cursor: pointer; }
+
+    /* import view */
+    .import-src { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    #import-browse-btn { background: rgba(52,227,196,.06); color: var(--accent); border: 1px solid #2a5650;
+      border-radius: var(--radius); padding: 7px 16px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+    #import-browse-btn:hover { background: var(--accent); color: #04110d; }
+    #import-src-path { color: var(--text-dim); font-size: 12px; }
+    .import-status { color: var(--accent-2); font-size: 12px; margin-bottom: 10px; min-height: 16px; }
+    .import-table-wrap { border: 1px solid var(--border-soft); border-radius: 6px; overflow: auto; max-height: 52vh; }
+    .import-table { border-collapse: collapse; width: 100%; }
+    .import-table th { position: sticky; top: 0; background: var(--surface-2); color: var(--text-dim);
+      font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    .import-table td { padding: 6px 12px; border-bottom: 1px solid var(--border-soft); font-size: 12px; }
+    .import-table .ig-name { color: var(--text); }
+    .import-table .ig-count { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+    .import-table select { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: 4px 6px; font: inherit; font-size: 12px; cursor: pointer; min-width: 200px; }
+    .import-table select.skip { color: var(--text-dim); }
+    .import-foot { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+    .import-foot label { color: var(--text-dim); font-size: 11px; display: flex; align-items: center; gap: 7px; }
+    .import-foot input { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: 6px 9px; font: inherit; font-size: 12px; width: 200px; }
+    #import-run { background: var(--accent); color: #04110d; border: none; border-radius: var(--radius);
+      padding: 7px 18px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+    #import-run:hover { box-shadow: 0 0 14px rgba(52,227,196,.35); }
+    #import-run:disabled { opacity: .35; cursor: default; box-shadow: none; }
+    #import-back { background: transparent; color: var(--text-dim); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 7px 14px; font: inherit; font-size: 11px; cursor: pointer; }
+    #import-back:hover { color: var(--text); border-color: var(--text-dim); }
   </style>
 </head>
 <body>
@@ -385,8 +447,9 @@
     <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>
     <button id="song-btn">SONG</button>
+    <button id="library-btn">LIBRARY</button>
     <button id="projects-btn">PROJECTS</button>
-    <button id="export-btn">EXPORT</button>
+    <button id="export-midi-btn">MIDI</button>
   </header>
 
   <div class="body">
@@ -519,6 +582,42 @@
     <div class="song-foot">
       <button id="song-add-row">+ Insert Row</button>
       <span class="song-hint">Rows play top → bottom · ↺ repeats · +I row length in steps · BPM overrides tempo (Standalone) · MUTE silences a track for the row</span>
+    </div>
+  </div>
+
+  <div id="library-screen">
+    <div class="song-head">
+      <h2>LIBRARY</h2>
+      <button id="lib-import-btn" title="import an external sample pack">+ Import</button>
+      <input id="libmgr-search" type="text" placeholder="search samples…" autocomplete="off" spellcheck="false">
+      <button class="close" id="libmgr-close" title="close">×</button>
+    </div>
+
+    <div class="libmgr-body" id="libmgr-browse">
+      <div class="lib-tree" id="libmgr-tree"></div>
+    </div>
+
+    <div class="libmgr-body" id="libmgr-import" style="display:none">
+      <div class="import-src">
+        <button id="import-browse-btn">Browse folder…</button>
+        <span id="import-src-path">No folder selected.</span>
+        <label style="margin-left:auto; color:var(--text-dim); font-size:11px; display:flex; align-items:center; gap:6px;">
+          <input type="checkbox" id="import-smart" checked> Smart sort by sample type
+        </label>
+      </div>
+      <div class="import-status" id="import-status"></div>
+      <div class="import-table-wrap">
+        <table class="import-table">
+          <thead><tr><th id="import-col0">Detected type</th><th>Files</th><th>SILA category</th></tr></thead>
+          <tbody id="import-rows"></tbody>
+        </table>
+      </div>
+      <div class="import-foot">
+        <button id="import-back">← Back</button>
+        <label>Pack name <input id="import-pack" type="text" placeholder="pack name…" autocomplete="off" spellcheck="false"></label>
+        <button id="import-run" disabled>Import</button>
+        <span id="import-result" class="song-hint"></span>
+      </div>
     </div>
   </div>
 

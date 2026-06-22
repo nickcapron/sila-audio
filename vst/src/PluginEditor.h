@@ -50,6 +50,14 @@ private:
     // 48k/16-bit/mono WAVs there; pushes the result via the "export" event.
     void launchDigitaktExport();
 
+    // Launch a native save dialog, then bounce the active song (or current pattern)
+    // to a Standard MIDI File there; pushes the result via the "midi-export" event.
+    void launchMidiExport();
+
+    // Launch the native folder picker for the sample importer; pushes the chosen
+    // folder back to the UI via the "import-folder" event (then the UI scans it).
+    void launchImportBrowse();
+
     SilaAudioProcessor& processor;
 
     // Kept alive while the async FileChooser dialog is open.

@@ -307,6 +307,21 @@ void SilaAudioProcessor::removeTrack (int index)
     setProject (std::move (next), std::make_shared<const SamplerSet> (std::move (*set)));
 }
 
+bool SilaAudioProcessor::auditionSample (const juce::File& file)
+{
+    if (! file.existsAsFile())
+        return false;
+
+    auto smp = std::make_shared<sila::engine::Sampler>();
+    smp->prepare (sampleRate);
+    if (! smp->addFile (file))      // decode + resample to the device rate (msg thread)
+        return false;
+
+    // Publish for the audio thread; a previous un-consumed audition is just dropped.
+    pendingAudition.store (std::move (smp), std::memory_order_release);
+    return true;
+}
+
 std::shared_ptr<sila::engine::Sampler>
 SilaAudioProcessor::buildSamplerFromLayers (const std::vector<sila::engine::SampleRef>& layers, double sr)
 {
@@ -646,6 +661,25 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         trackMix[i].gain = juce::jlimit (0.0f, 1.0f, vol);
         trackMix[i].panL = std::cos (theta);
         trackMix[i].panR = std::sin (theta);
+    }
+
+    // Library audition: consume a pending preview (one per block) and spawn a
+    // one-shot voice through the master bus. Works whether or not the transport is
+    // playing; trackIndex = -1 => unity gain/pan (no per-track mix). The sampler is
+    // pinned by keepAlive for the voice's lifetime (RT-safe, no dealloc race).
+    if (auto preview = pendingAudition.exchange (nullptr, std::memory_order_acquire))
+    {
+        const auto slice = preview->get (127);
+        if (slice.buffer != nullptr)
+        {
+            sila::engine::Voice v;
+            v.audio      = slice.buffer;
+            v.pos        = (double) slice.start;
+            v.endPos     = slice.start + slice.length;
+            v.trackIndex = -1;                 // unity mix (not a project track)
+            v.keepAlive  = std::move (preview);
+            mixer.addVoice (v);
+        }
     }
 
     // Tails keep ringing even when stopped, so always render + master.

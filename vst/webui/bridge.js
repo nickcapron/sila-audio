@@ -12,8 +12,8 @@
 //                                           track's sampler over the RCU seam);
 //                                           also commits trimmer start/end edits
 //   GET  /tracks/{id}/waveform?points=N  -> downsampled peaks + start/end (trim)
-//   POST /export/digitakt                -> native folder picker + transcode;
-//                                           result arrives via the "export" event
+//   POST /export/midi                    -> native save dialog + SMF bounce;
+//                                           result arrives via the "midi-export" event
 //   event "playhead"                     -> highlight the playing column
 //   event "status"                       -> playing / bpm / active song slot
 //   toggle "songModeToggle"              -> bound to the songMode APVTS param
@@ -95,7 +95,7 @@ const trimEndH   = document.getElementById("trim-end");
 const trimNameEl = document.getElementById("trim-name");
 const trimStartV = document.getElementById("trim-start-v");
 const trimEndV   = document.getElementById("trim-end-v");
-const exportBtn  = document.getElementById("export-btn");
+const exportMidiBtn = document.getElementById("export-midi-btn");
 const lfoPanel   = document.getElementById("lfo-panel");
 const lfoNameEl  = document.getElementById("lfo-name");
 const lfoShapeEl = document.getElementById("lfo-shape");
@@ -1066,17 +1066,309 @@ async function commitTrim() {
   setStatus(`trimmed ${sampleLabel(track)} → ${Math.round(trimStart * 100)}–${Math.round(trimEnd * 100)}%`, true);
 }
 
-// ── Digitakt export (C++ owns the native folder dialog; result via event) ────
-async function triggerExport() {
-  setStatus("choose a folder to export Digitakt WAVs…", false);
-  try { await POST("/export/digitakt"); }   // C++ opens the picker; summary arrives via "export"
-  catch { setStatus("export failed to start", false); }
+// ── MIDI export (C++ owns the native save dialog; result via event) ──────────
+async function triggerMidiExport() {
+  setStatus("choose where to save the MIDI file…", false);
+  try { await POST("/export/midi"); }   // C++ opens the picker; summary arrives via "midi-export"
+  catch { setStatus("MIDI export failed to start", false); }
 }
 
-function onExport(res) {
-  const line = (res && res.summary) ? res.summary.split("\n")[0] : "export done";
-  setStatus(line, !!(res && res.exported));
-  if (res && res.summary) console.log("[export] " + (res.dir ? res.dir + "\n" : "") + res.summary);
+function onMidiExport(res) {
+  const ok = !!(res && res.ok);
+  setStatus(res && res.summary ? res.summary : (ok ? "MIDI exported" : "MIDI export failed"), ok);
+  if (res && res.path) console.log("[midi-export] " + (ok ? "" : "FAILED ") + res.path + "\n" + (res.summary || ""));
+}
+
+// ── Library manager + importer (full-screen overlay) ─────────────────────────
+const libScreen      = document.getElementById("library-screen");
+const libMgrTree     = document.getElementById("libmgr-tree");
+const libMgrSearch   = document.getElementById("libmgr-search");
+const libBrowseView  = document.getElementById("libmgr-browse");
+const libImportView  = document.getElementById("libmgr-import");
+const importRowsEl   = document.getElementById("import-rows");
+const importStatusEl = document.getElementById("import-status");
+const importPackEl   = document.getElementById("import-pack");
+const importRunBtn   = document.getElementById("import-run");
+const importSrcPathEl = document.getElementById("import-src-path");
+const importResultEl = document.getElementById("import-result");
+
+let libMgrCache  = null;     // GET /library tree for the manager
+let libCategories = null;    // GET /library/categories (the 59 canonical names)
+let importScan   = null;     // current scan result
+let importSrcPath = null;    // last folder picked (so the Smart toggle can re-scan)
+let _libArmedDel = null;     // path armed for 2-click delete
+const importSmartEl = document.getElementById("import-smart");
+
+async function openLibraryManager() {
+  libScreen.classList.add("open");
+  showLibBrowse();
+  libMgrSearch.value = "";
+  if (!libCategories) { try { libCategories = (await GET("/library/categories")).categories || []; } catch { libCategories = []; } }
+  await refreshLibManager();
+}
+function closeLibraryManager() { libScreen.classList.remove("open"); _libArmedDel = null; }
+function showLibBrowse() { libBrowseView.style.display = ""; libImportView.style.display = "none"; }
+function showLibImport() { libBrowseView.style.display = "none"; libImportView.style.display = ""; }
+
+async function refreshLibManager() {
+  libMgrTree.innerHTML = '<div class="lib-empty">loading…</div>';
+  try { libMgrCache = await GET("/library"); }
+  catch { libMgrTree.innerHTML = '<div class="lib-empty">could not load ~/SILA/library</div>'; return; }
+  libraryCache = libMgrCache;   // keep the per-track picker cache in sync (manager mutates the library)
+  renderLibManager(libMgrSearch.value);
+}
+
+function auditionSample(path) { POST("/library/preview", { path }).catch(() => {}); }
+
+// All existing "pack/category" destinations, for the move dropdown.
+function allCategoryPaths() {
+  const out = [];
+  for (const p of (libMgrCache && libMgrCache.packs) || [])
+    for (const c of p.categories) out.push({ label: `${p.name} / ${c.name}`, path: c.path });
+  return out;
+}
+
+function lmActionBtn(label, cls, title, onClick) {
+  const b = document.createElement("button");
+  b.className = "lm-act" + (cls ? " " + cls : "");
+  b.textContent = label; b.title = title;
+  b.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); onClick(b); });
+  return b;
+}
+
+// Inline rename: swap `targetEl` for an input; Enter/blur commits, Esc cancels.
+function startLibRename(path, isFile, targetEl, curName) {
+  const input = document.createElement("input");
+  input.className = "lm-rename";
+  input.value = curName;
+  let done = false;
+  const cancel = () => { if (!done) { done = true; targetEl.style.display = ""; input.remove(); } };
+  const commit = async () => {
+    if (done) return; done = true;
+    const name = input.value.trim();
+    input.remove(); targetEl.style.display = "";
+    if (!name || name === curName) return;
+    try {
+      const r = await PUT("/library/rename", { path, new_name: name });
+      if (r && r.ok) { setStatus("renamed", true); await refreshLibManager(); }
+      else setStatus("rename failed: " + ((r && r.error) || "?"), false);
+    } catch { setStatus("rename failed", false); }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") commit();
+    else if (e.key === "Escape") cancel();
+  });
+  input.addEventListener("blur", commit);
+  targetEl.style.display = "none";
+  targetEl.parentNode.insertBefore(input, targetEl);
+  input.focus(); input.select();
+}
+
+// Inline move (samples only): swap actions for a destination <select>.
+function startLibMove(path, actionsEl) {
+  const sel = document.createElement("select");
+  sel.className = "lm-move";
+  const ph = document.createElement("option"); ph.value = ""; ph.textContent = "move to…"; sel.appendChild(ph);
+  for (const d of allCategoryPaths()) {
+    const o = document.createElement("option"); o.value = d.path; o.textContent = d.label; sel.appendChild(o);
+  }
+  sel.addEventListener("click", (e) => e.stopPropagation());
+  sel.addEventListener("change", async (e) => {
+    e.stopPropagation();
+    if (!sel.value) return;
+    try {
+      const r = await PUT("/library/move", { path, dest: sel.value });
+      if (r && r.ok) { setStatus("moved", true); await refreshLibManager(); }
+      else setStatus("move failed: " + ((r && r.error) || "?"), false);
+    } catch { setStatus("move failed", false); }
+  });
+  actionsEl.replaceChildren(sel);
+  sel.focus();
+}
+
+// 2-click delete arm. First click arms (red); second within the armed window deletes.
+function armLibDelete(path, btn) {
+  if (_libArmedDel === path) {
+    _libArmedDel = null;
+    POST("/library/delete", { path }).then((r) => {
+      if (r && r.ok) { setStatus("deleted", true); refreshLibManager(); }
+      else setStatus("delete failed", false);
+    }).catch(() => setStatus("delete failed", false));
+    return;
+  }
+  _libArmedDel = path;
+  document.querySelectorAll(".lm-act.del.armed").forEach((b) => b.classList.remove("armed"));
+  btn.classList.add("armed");
+  setTimeout(() => { if (_libArmedDel === path) { _libArmedDel = null; btn.classList.remove("armed"); } }, 2500);
+}
+
+function lmSampleRow(s, sub) {
+  const row = document.createElement("div");
+  row.className = "lm-row";
+  const name = document.createElement("div");
+  name.className = "lm-name";
+  name.textContent = sub ? `${s.name}   ·   ${sub}` : s.name;
+  name.title = "click to audition · " + s.path;
+  name.addEventListener("click", () => {
+    document.querySelectorAll(".lm-name.playing").forEach((n) => n.classList.remove("playing"));
+    name.classList.add("playing");
+    setTimeout(() => name.classList.remove("playing"), 350);
+    auditionSample(s.path);
+  });
+  const size = document.createElement("div");
+  size.className = "lm-size";
+  size.textContent = s.size_bytes ? (s.size_bytes / 1024).toFixed(0) + " KB" : "";
+  const actions = document.createElement("div");
+  actions.className = "lm-actions";
+  actions.append(
+    lmActionBtn("✎", "", "rename", () => startLibRename(s.path, true, name, s.name)),
+    lmActionBtn("⇄", "", "move to another category", () => startLibMove(s.path, actions)),
+    lmActionBtn("✕", "del", "delete (click twice)", (b) => armLibDelete(s.path, b)),
+  );
+  row.append(name, size, actions);
+  return row;
+}
+
+function renderLibManager(filter) {
+  const packs = (libMgrCache && libMgrCache.packs) || [];
+  libMgrTree.innerHTML = "";
+  const q = (filter || "").trim().toLowerCase();
+
+  if (q) {
+    let n = 0;
+    for (const pack of packs)
+      for (const cat of pack.categories)
+        for (const s of cat.samples)
+          if (s.filename.toLowerCase().includes(q)) {
+            libMgrTree.appendChild(lmSampleRow(s, `${pack.name} / ${cat.name}`));
+            if (++n >= 300) { const m = document.createElement("div"); m.className = "lib-empty"; m.textContent = "… refine your search to see more"; libMgrTree.appendChild(m); return; }
+          }
+    if (n === 0) libMgrTree.innerHTML = '<div class="lib-empty">no matches</div>';
+    return;
+  }
+
+  if (packs.length === 0) { libMgrTree.innerHTML = '<div class="lib-empty">library is empty — use + Import to add a sample pack</div>'; return; }
+  for (const pack of packs) {
+    const pd = document.createElement("details");
+    pd.className = "lm-pack"; pd.open = pack.name === "My Samples";
+    const ps = document.createElement("summary");
+    const pname = document.createElement("span"); pname.textContent = pack.name; pname.style.flex = "1";
+    const pacts = document.createElement("span"); pacts.className = "lm-actions";
+    pacts.append(
+      lmActionBtn("✎", "", "rename pack", () => startLibRename(pack.path, false, pname, pack.name)),
+      lmActionBtn("✕", "del", "delete pack (click twice)", (b) => armLibDelete(pack.path, b)),
+    );
+    ps.style.display = "flex"; ps.style.alignItems = "center"; ps.append(pname, pacts);
+    pd.appendChild(ps);
+
+    for (const cat of pack.categories) {
+      const cd = document.createElement("details");
+      cd.className = "lm-cat";
+      const cs = document.createElement("summary");
+      const cname = document.createElement("span");
+      cname.innerHTML = `${cat.name}<span class="count">${cat.samples.length}</span>`;
+      cname.style.flex = "1";
+      const cacts = document.createElement("span"); cacts.className = "lm-actions";
+      cacts.append(
+        lmActionBtn("✎", "", "rename category", () => startLibRename(cat.path, false, cname, cat.name)),
+        lmActionBtn("✕", "del", "delete category (click twice)", (b) => armLibDelete(cat.path, b)),
+      );
+      cs.style.display = "flex"; cs.style.alignItems = "center"; cs.append(cname, cacts);
+      cd.appendChild(cs);
+      cd.addEventListener("toggle", () => {
+        if (cd.open && cd.dataset.built !== "1") {
+          cd.dataset.built = "1";
+          for (const s of cat.samples) cd.appendChild(lmSampleRow(s, null));
+        }
+      });
+      pd.appendChild(cd);
+    }
+    libMgrTree.appendChild(pd);
+  }
+}
+
+// ── Importer (C++ owns the native folder dialog; path arrives via event) ──────
+function startImport() {
+  showLibImport();
+  importScan = null;
+  importSrcPath = null;
+  importRowsEl.innerHTML = "";
+  importStatusEl.textContent = "";
+  importResultEl.textContent = "";
+  importSrcPathEl.textContent = "No folder selected.";
+  importPackEl.value = "";
+  importRunBtn.disabled = true;
+  POST("/import/browse").catch(() => setStatus("could not open folder picker", false));
+}
+
+async function onImportFolder(res) {
+  const path = res && res.path;
+  if (!path) return;
+  importSrcPath = path;
+  importSrcPathEl.textContent = path;
+  importPackEl.value = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+  await rescanImport();
+}
+
+async function rescanImport() {
+  if (!importSrcPath) return;
+  importStatusEl.textContent = "scanning…";
+  importRowsEl.innerHTML = "";
+  importRunBtn.disabled = true;
+  try {
+    importScan = await POST("/import/scan", { path: importSrcPath, smart: importSmartEl.checked });
+  } catch { importStatusEl.textContent = "scan failed"; return; }
+  if (importScan.error) { importStatusEl.textContent = importScan.error; return; }
+  renderImportTable();
+}
+
+function renderImportTable() {
+  importRowsEl.innerHTML = "";
+  const groups = (importScan && importScan.groups) || [];
+  const col0 = document.getElementById("import-col0");
+  if (col0) col0.textContent = importSmartEl.checked ? "Detected type" : "Group (folder)";
+  const noun = importSmartEl.checked ? "type" : "group";
+  importStatusEl.textContent = `Scanned ${importScan.total_files} files → ${groups.length} ${noun}${groups.length === 1 ? "" : "s"}.`;
+  for (const g of groups) {
+    const tr = document.createElement("tr");
+    const tdN = document.createElement("td"); tdN.className = "ig-name"; tdN.textContent = g.name;
+    const tdC = document.createElement("td"); tdC.className = "ig-count"; tdC.textContent = g.file_count;
+    const tdS = document.createElement("td");
+    const sel = document.createElement("select");
+    sel.dataset.group = g.name;
+    const skip = document.createElement("option"); skip.value = ""; skip.textContent = "(skip)"; sel.appendChild(skip);
+    for (const c of (libCategories || [])) {
+      const o = document.createElement("option"); o.value = c; o.textContent = c; sel.appendChild(o);
+    }
+    sel.value = g.suggestion || "";
+    sel.classList.toggle("skip", !sel.value);
+    sel.addEventListener("change", () => sel.classList.toggle("skip", !sel.value));
+    tdS.appendChild(sel);
+    tr.append(tdN, tdC, tdS);
+    importRowsEl.appendChild(tr);
+  }
+  importRunBtn.disabled = groups.length === 0;
+}
+
+async function runImport() {
+  if (!importScan) return;
+  const mappings = {};
+  for (const sel of importRowsEl.querySelectorAll("select")) if (sel.value) mappings[sel.dataset.group] = sel.value;
+  const mapped = Object.keys(mappings).length;
+  if (mapped === 0) { importResultEl.textContent = "map at least one group to a category."; return; }
+  const pack = importPackEl.value.trim();
+  if (!pack) { importResultEl.textContent = "enter a pack name."; return; }
+
+  importRunBtn.disabled = true;
+  importResultEl.textContent = "importing…";
+  try {
+    const r = await POST("/import/execute", { source_path: importScan.source_path, pack_name: pack, mappings, smart: importSmartEl.checked });
+    if (r.error) { importResultEl.textContent = "error: " + r.error; importRunBtn.disabled = false; return; }
+    importResultEl.textContent = `imported ${r.imported}, skipped ${r.skipped}, ${r.categories_created} categories created.`;
+    setStatus(`imported ${r.imported} samples into "${pack}"`, true);
+    libCategories = null;   // categories may have grown
+    await openLibraryManager();   // back to browse, refreshed
+  } catch { importResultEl.textContent = "import failed."; importRunBtn.disabled = false; }
 }
 
 // ── Per-track param push (host automation / generic editor -> UI) ────────────
@@ -1538,9 +1830,10 @@ async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
     window.__JUCE__.backend.addEventListener("playhead", onPlayhead);
     window.__JUCE__.backend.addEventListener("status", onStatus);
-    window.__JUCE__.backend.addEventListener("export", onExport);
+    window.__JUCE__.backend.addEventListener("midi-export", onMidiExport);
     window.__JUCE__.backend.addEventListener("project", onProjectReload);
     window.__JUCE__.backend.addEventListener("params", onParams);
+    window.__JUCE__.backend.addEventListener("import-folder", onImportFolder);
   }
 
   project = await GET("/project");
@@ -1601,11 +1894,23 @@ async function boot() {
   songAddRowEl.addEventListener("click", addSongRow);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && songScreen.classList.contains("open")) closeSongEditor(); });
 
-  // Library browser controls.
+  // Library browser controls (per-track sample picker).
   libSearch.addEventListener("input", () => renderLibrary(libSearch.value));
   libCloseEl.addEventListener("click", closeLibrary);
   libModal.addEventListener("click", (e) => { if (e.target === libModal) closeLibrary(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLibrary(); });
+
+  // Library manager + importer (full-screen overlay).
+  document.getElementById("library-btn").addEventListener("click", openLibraryManager);
+  document.getElementById("libmgr-close").addEventListener("click", closeLibraryManager);
+  libMgrSearch.addEventListener("input", () => renderLibManager(libMgrSearch.value));
+  document.getElementById("lib-import-btn").addEventListener("click", startImport);
+  document.getElementById("import-browse-btn").addEventListener("click", () => POST("/import/browse").catch(() => setStatus("could not open folder picker", false)));
+  document.getElementById("import-back").addEventListener("click", showLibBrowse);
+  importSmartEl.addEventListener("change", rescanImport);
+  importRunBtn.addEventListener("click", runImport);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && libScreen.classList.contains("open")) closeLibraryManager(); });
+  attachTip(document.getElementById("library-btn"), "<b>Library</b> — browse, audition, organize, and import samples.");
 
   // Pattern-parts browser controls.
   partsSearch.addEventListener("input", () => renderParts(partsSearch.value));
@@ -1618,8 +1923,8 @@ async function boot() {
   trimEndH.addEventListener("mousedown", (e) => startTrimDrag(e, "end"));
   window.addEventListener("resize", () => { if (trimmerEl.classList.contains("visible")) updateTrimHandles(); });
 
-  // Digitakt export.
-  exportBtn.addEventListener("click", triggerExport);
+  // MIDI export.
+  exportMidiBtn.addEventListener("click", triggerMidiExport);
 
   // Track management.
   const addBtn = document.getElementById("add-track");
@@ -1655,7 +1960,7 @@ async function boot() {
   attachTip(patternLenEl, "<b>Length</b> — pattern length in steps (1–128). Shrinking discards steps past the new end.");
   attachTip(songBtn, "<b>Song</b> — open the arrangement editor (Digitakt-style row chain).");
   attachTip(projectsBtn, "<b>Projects</b> — save / load projects in ~/SILA/projects.");
-  attachTip(exportBtn, "<b>Export</b> — transcode all project samples to 48k/16-bit mono WAVs for the Elektron Digitakt.");
+  attachTip(exportMidiBtn, "<b>MIDI</b> — bounce the active song (or current pattern) to a Standard MIDI File; one track per lane on its own MIDI channel.");
   // Inspector's discrete selects.
   attachTip($("i-trig"), "<b>Trig condition</b> — when this step is allowed to fire.");
   attachTip($("i-fmode"), "<b>Filter mode</b> — low-pass / high-pass / band-pass.");
