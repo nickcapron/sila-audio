@@ -56,6 +56,16 @@ struct TrackMix
     float panL = 0.70710678f, panR = 0.70710678f;   // equal-power (constant power)
 };
 
+// One per-track (aux) output target for multi-out: raw stereo channel pointers
+// into the host's process buffer. L == nullptr means that lane's bus is disabled,
+// so its voices only sum into the Main mix. Raw pointers (not an AudioBuffer) so
+// the processor can hand the mixer views into the bus channels without copying.
+struct LaneOut
+{
+    float* L = nullptr;
+    float* R = nullptr;
+};
+
 struct Voice
 {
     const juce::AudioBuffer<float>* audio = nullptr;  // mono source
@@ -115,7 +125,13 @@ public:
     int  activeVoiceCount() const { return (int) voices.size(); }
 
     // `trackMix` is indexed by Voice.trackIndex (per-track gain + equal-power pan).
-    void renderInto (juce::AudioBuffer<float>& block, const std::vector<TrackMix>& trackMix);
+    // `block` is the Main bus (the full summed mix). If `lanes` is non-null, each
+    // voice is ALSO written to lanes[trackIndex] (its per-track multi-out bus, pre-
+    // master) in the SAME pass, so the per-lane stems sum to the Main mix exactly.
+    // numLanes bounds the lookup; a voice with no matching lane (e.g. an audition,
+    // trackIndex < 0) goes to Main only.
+    void renderInto (juce::AudioBuffer<float>& block, const std::vector<TrackMix>& trackMix,
+                     const LaneOut* lanes = nullptr, int numLanes = 0);
     void applyMaster (juce::AudioBuffer<float>& block, bool smallSpeaker, float masterVol);
 
 private:

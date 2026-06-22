@@ -4,9 +4,36 @@
 #include <cmath>
 #include <algorithm>
 
+juce::AudioProcessor::BusesProperties SilaAudioProcessor::makeBusesProperties()
+{
+    // Bus 0 = "Main" (the full summed mix, for plain stereo use). Buses 1..kMaxTracks
+    // = one stereo aux per lane, so a host can route each track to its own channel /
+    // FX chain (e.g. Reaper: bump the track channel count and add per-pair receives).
+    auto props = BusesProperties().withOutput ("Main", juce::AudioChannelSet::stereo(), true);
+    for (int i = 0; i < kMaxTracks; ++i)
+        props = props.withOutput ("Track " + juce::String (i + 1),
+                                  juce::AudioChannelSet::stereo(), true);
+    return props;
+}
+
+bool SilaAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    // Main must be stereo; each per-lane aux bus is stereo or disabled (the host may
+    // turn off lanes it isn't routing). No input buses (this is an instrument).
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+
+    for (int i = 1; i <= kMaxTracks; ++i)
+    {
+        const auto set = layouts.getChannelSet (false, i);
+        if (! set.isDisabled() && set != juce::AudioChannelSet::stereo())
+            return false;
+    }
+    return true;
+}
+
 SilaAudioProcessor::SilaAudioProcessor()
-    : juce::AudioProcessor (BusesProperties()
-          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : juce::AudioProcessor (makeBusesProperties()),
       apvts (*this, nullptr, "SILA", makeParameters())
 {
     // Cache the per-slot raw-value pointers once (audio thread reads them lock-free).
@@ -682,13 +709,32 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
 
+    // Multi-out: the Main bus (0) carries the full summed mix; each enabled aux bus
+    // (1..kMaxTracks) carries one lane's stem (pre-master) for per-track Reaper FX.
+    // renderInto writes the same per-track signal to both, so the stems sum to the
+    // Main mix by construction. Master (vol + small-speaker) applies to Main only —
+    // the per-lane stems stay clean for downstream processing.
+    auto mainBus = getBusBuffer (buffer, false, 0);
+
+    sila::engine::LaneOut lanes[kMaxTracks] = {};
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        const int busIdx = i + 1;
+        if (auto* b = getBus (false, busIdx); b != nullptr && b->isEnabled())
+        {
+            auto laneBus = getBusBuffer (buffer, false, busIdx);   // referencing view (no copy)
+            lanes[i].L = laneBus.getWritePointer (0);
+            lanes[i].R = laneBus.getNumChannels() > 1 ? laneBus.getWritePointer (1) : nullptr;
+        }
+    }
+
     // Tails keep ringing even when stopped, so always render + master.
-    mixer.renderInto (buffer, trackMix);
+    mixer.renderInto (mainBus, trackMix, lanes, kMaxTracks);
 
     jassert (pMasterVol != nullptr && pSmallSpeaker != nullptr);
     const float masterVol    = pMasterVol    != nullptr ? pMasterVol->load() : 1.0f;
     const bool  smallSpeaker = pSmallSpeaker != nullptr && pSmallSpeaker->load() > 0.5f;
-    mixer.applyMaster (buffer, smallSpeaker, masterVol);
+    mixer.applyMaster (mainBus, smallSpeaker, masterVol);
 }
 
 void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,

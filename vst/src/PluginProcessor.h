@@ -30,6 +30,10 @@ public:
     void releaseResources() override {}
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
+    // Multi-out (Reaper per-track FX): a Main stereo bus (the full mix) plus one
+    // stereo aux bus per lane. Each aux is stereo or disabled; Main is stereo.
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
@@ -160,6 +164,11 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameters();
+
+    // Build the bus layout: "Main" stereo + kMaxTracks "Track N" stereo aux buses
+    // (one per lane), all enabled by default so a host like Reaper exposes them for
+    // per-lane routing. See isBusesLayoutSupported.
+    static BusesProperties makeBusesProperties();
 
     // Find the 16th-note boundaries inside this block, evaluate the Sequencer at
     // each, and spawn voices sample-accurately (swing + micro-timing folded into

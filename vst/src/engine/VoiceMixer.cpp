@@ -113,7 +113,8 @@ void VoiceMixer::reset()
     ssSub[0] = ssSub[1] = ssLow[0] = ssLow[1] = ssHarm[0] = ssHarm[1] = 0.0;
 }
 
-void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<TrackMix>& trackMix)
+void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<TrackMix>& trackMix,
+                             const LaneOut* lanes, int numLanes)
 {
     const int n = block.getNumSamples();
     if (n <= 0) return;
@@ -128,6 +129,14 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<
         Voice& v = voices[i];
         const TrackMix& tm = (v.trackIndex >= 0 && v.trackIndex < (int) trackMix.size())
                                  ? trackMix[(size_t) v.trackIndex] : unity;
+
+        // Multi-out: this voice's per-track aux bus (pre-master). Null when no lanes
+        // were passed, the index is out of range, or that bus is disabled — then the
+        // voice only lands in the Main mix.
+        const LaneOut* lane = (lanes != nullptr && v.trackIndex >= 0 && v.trackIndex < numLanes)
+                                  ? &lanes[v.trackIndex] : nullptr;
+        float* laneL = (lane != nullptr) ? lane->L : nullptr;
+        float* laneR = (lane != nullptr) ? lane->R : nullptr;
 
         // Defer voices whose start offset is beyond this block (port of the
         // delay_frames >= frames branch in audio.py::_callback).
@@ -168,8 +177,12 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<
             float x = hermite4 (src, srcN, v.pos);
             if (v.filterOn) x = v.svf.process (x);   // filter -> envelope -> gain/pan
             const float s = x * v.volume * env * tm.gain;
-            L[j] += tm.panL * s;
-            if (R != nullptr) R[j] += tm.panR * s;
+            const float sampL = tm.panL * s;
+            const float sampR = tm.panR * s;
+            L[j] += sampL;
+            if (R != nullptr) R[j] += sampR;
+            // Same per-track signal to this lane's aux bus, so stems sum to Main.
+            if (laneL != nullptr) { laneL[j] += sampL; if (laneR != nullptr) laneR[j] += sampR; }
             v.pos += v.rate;          // varispeed: rate = 2^(pitch_offset/12)
             ++v.elapsed;
             ++j;
