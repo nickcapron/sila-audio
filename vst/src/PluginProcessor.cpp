@@ -529,16 +529,25 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // --- Resolve transport: host if playing, else the UI internal transport ----
     double bpm = kDefaultBpm, ppqStart = internalPpq;
     bool playing = false, hostPlaying = false;
+    bool haveHostBpm = false; double hostBpm = kDefaultBpm;
 
     if (auto* ph = getPlayHead())
     {
         if (auto pos = ph->getPosition())
         {
+            // The host reports its project tempo even while the transport is
+            // parked, so capture it unconditionally — that lets SILA track a
+            // tempo change made in the DAW while stopped. Standalone has no real
+            // host (the wrapper's playhead is meaningless), so skip it there and
+            // let the UI wheel govern as before.
+            if (wrapperType != wrapperType_Standalone)
+                if (auto hb = pos->getBpm()) { hostBpm = *hb; haveHostBpm = true; }
+
             if (pos->getIsPlaying())
             {
                 hostPlaying = true;
                 playing     = true;
-                bpm         = pos->getBpm().orFallback (kDefaultBpm);
+                bpm         = haveHostBpm ? hostBpm : kDefaultBpm;
                 ppqStart    = pos->getPpqPosition().orFallback (internalPpq);
             }
         }
@@ -546,15 +555,16 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (! hostPlaying)
     {
-        // No host transport (Standalone, or a stopped DAW): the UI-controlled
-        // internal transport governs. Stop resets the playhead to the top
+        // No host transport running. Stop resets the playhead to the top
         // (groovebox-style) — done here on the audio thread so internalPpq is
         // never written from the message thread (no data race).
         const bool intPlay = internalPlaying.load (std::memory_order_relaxed);
         if (wasInternalPlaying && ! intPlay) { internalPpq = 0.0; lastFiredSixteenth = -1; }
         wasInternalPlaying = intPlay;
         playing  = intPlay;
-        bpm      = internalBpm.load (std::memory_order_relaxed);
+        // A present-but-parked DAW still owns tempo (so the readout/clock match
+        // the project); only true Standalone falls back to the UI wheel.
+        bpm      = haveHostBpm ? hostBpm : internalBpm.load (std::memory_order_relaxed);
         ppqStart = internalPpq;
     }
 
