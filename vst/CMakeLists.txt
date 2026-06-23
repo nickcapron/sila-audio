@@ -100,3 +100,20 @@ target_link_libraries(SILA PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
 )
+
+# ── Unit tests ───────────────────────────────────────────────────────────────
+# A tiny console app over the pure, security-critical engine pieces (the path-
+# traversal guard + filename/pack sanitizers — the backstop for every library file
+# op). No audio device / host needed. Build + run:
+#   cmake --build vst/build --target SILA_Tests
+#   "vst/build/SILA_Tests_artefacts/Debug/SILA Tests.exe"
+juce_add_console_app(SILA_Tests PRODUCT_NAME "SILA Tests")
+target_sources(SILA_Tests PRIVATE
+    tests/test_main.cpp
+    src/engine/Library.cpp)
+target_include_directories(SILA_Tests PRIVATE src)
+target_compile_definitions(SILA_Tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(SILA_Tests PRIVATE
+    juce::juce_core
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
