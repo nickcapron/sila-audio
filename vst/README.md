@@ -14,7 +14,8 @@ full feature list).
 - `src/PluginEditor.{h,cpp}` — the WebView editor and the native bridge that maps
   the UI's REST-shaped calls onto the engine.
 - `src/engine/` — `Sampler`, `VoiceMixer`, `Sequencer`, `ProjectJson`,
-  `DigitaktExport` (ported from `../sila/engine/*.py`).
+  `MidiExport` (song → SMF), `Library` (sample importer). Ported from / inspired
+  by `../sila/engine/*.py`.
 - `webui/` — the vanilla HTML/JS UI; `bridge.js` swaps `fetch("/api")` for the
   native JUCE bridge (`window.__JUCE__`).
 

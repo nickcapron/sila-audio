@@ -24,6 +24,17 @@ constexpr int kProjectSchemaVersion = 6;   // v2 added `songs`; v3 moved step da
                                            // v6 added the per-pattern mix snapshot
                                            // (vol/pan/cutoff/res/filter in LaneSound)
 
+// ── Format stability contract ────────────────────────────────────────────────
+// .sila files must round-trip between builds AND, by design, between desktop and a
+// future mobile app — so the format is intentionally permissive:
+//   * projectFromVar NEVER rejects on schema_version. It reads whatever fields are
+//     present: unknown keys are ignored (FORWARD-compatible — a newer writer's file
+//     still loads on an older build) and missing keys take safe defaults or run the
+//     structural migrations in projectFromVar (BACKWARD-compatible).
+//   * So evolve the format additively: only ADD keys with a sensible default; never
+//     repurpose or remove an existing key's meaning. Bump kProjectSchemaVersion when
+//     you add one — it is informational/diagnostic only, NOT a load gate.
+
 // Step / trig.
 juce::var      stepToVar (const Step&);
 void           applyStepVar (Step&, const juce::var&);   // applies onto an existing Step

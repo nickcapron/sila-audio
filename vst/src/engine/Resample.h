@@ -4,8 +4,8 @@
 
 // Shared offline resampler — highest-quality windowed-sinc anti-aliasing, paid
 // once on the message thread. Used by the Sampler (file -> device rate, so
-// samples play at their original pitch) and by the Digitakt export (source ->
-// 48 kHz). Mono in, mono out. A no-op rate (|src-dst| < 1e-6) returns a copy.
+// samples play at their original pitch). Mono in, mono out. A no-op rate
+// (|src-dst| < 1e-6) returns a copy.
 namespace sila::engine
 {
 inline juce::AudioBuffer<float> resampleMonoTo (const juce::AudioBuffer<float>& mono,

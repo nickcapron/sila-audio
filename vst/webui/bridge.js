@@ -60,6 +60,16 @@ function attachTip(el, html) {
   el.addEventListener("mousedown", _hideTip);
 }
 
+// Escape a string before interpolating it into innerHTML. Names from the filesystem
+// (sample/category folders) and from projects (track names, shared .sila files) are
+// untrusted — without this a crafted name could inject markup into the WebView, which
+// can reach the native bridge. Sample/pack/project NAMES already use textContent;
+// this guards the few spots that must build HTML (counts, labels).
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 const tracksEl   = document.getElementById("tracks");
 const barBeatEl  = document.getElementById("barbeat");
 const swingHostEl = document.getElementById("swing-host");
@@ -315,7 +325,7 @@ function renderTracks() {
     slot.textContent = sampleLabel(track);
     slot.onclick = (e) => { e.stopPropagation(); openLibrary(track.id, track.name); };
     attachTip(slot, (track.samples && track.samples[0])
-      ? "<b>Sample</b> — " + track.samples[0].path.split("/").pop() + " · click to change"
+      ? "<b>Sample</b> — " + esc(track.samples[0].path.split("/").pop()) + " · click to change"
       : "<b>Sample</b> — click to load one from the library.");
 
     const mix = document.createElement("div");
@@ -961,7 +971,7 @@ function renderLibrary(filter) {
       const cd = document.createElement("details");
       cd.className = "lib-cat";
       const cs = document.createElement("summary");
-      cs.innerHTML = `${cat.name}<span class="count">${cat.samples.length}</span>`;
+      cs.innerHTML = `${esc(cat.name)}<span class="count">${cat.samples.length}</span>`;
       cd.appendChild(cs);
       cd.addEventListener("toggle", () => {
         if (cd.open && cd.dataset.built !== "1") {
@@ -1275,7 +1285,7 @@ function renderLibManager(filter) {
       cd.className = "lm-cat";
       const cs = document.createElement("summary");
       const cname = document.createElement("span");
-      cname.innerHTML = `${cat.name}<span class="count">${cat.samples.length}</span>`;
+      cname.innerHTML = `${esc(cat.name)}<span class="count">${cat.samples.length}</span>`;
       cname.style.flex = "1";
       const cacts = document.createElement("span"); cacts.className = "lm-actions";
       cacts.append(
@@ -1791,7 +1801,7 @@ function partToSteps(preset) {
 let partsTrackId = null;
 function openParts(trackId, trackName) {
   partsTrackId = trackId;
-  partsTargetEl.innerHTML = `load onto <b>${trackName}</b> · pattern ${patName(project.current_pattern || 0)}`;
+  partsTargetEl.innerHTML = `load onto <b>${esc(trackName)}</b> · pattern ${patName(project.current_pattern || 0)}`;
   partsSearch.value = "";
   partsModal.classList.add("open");
   renderParts("");
@@ -1809,7 +1819,7 @@ function renderParts(filter) {
     d.className = "lib-cat";
     d.open = !!q;
     const s = document.createElement("summary");
-    s.innerHTML = `${group.cat}<span class="count">${matching.length}</span>`;
+    s.innerHTML = `${esc(group.cat)}<span class="count">${matching.length}</span>`;
     d.appendChild(s);
     for (const p of matching) {
       const row = document.createElement("div");

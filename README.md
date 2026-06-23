@@ -19,6 +19,11 @@ SILA exists in two forms in this repo:
 A self-contained instrument plugin — no external server, no scripts, no
 configuration. Load it in your DAW (or run the Standalone) and go.
 
+On first load it opens to a **playable factory beat** — a Behringer RD-6 drum kit
+plus Casio CZ-1 mini synth voices, with an extended showcase song already
+arranged — so there's sound the moment you insert it. The factory samples install
+themselves to `~/SILA/library` (they never overwrite your own files).
+
 ### Features
 
 **Sampler**
@@ -44,6 +49,14 @@ configuration. Load it in your DAW (or run the Standalone) and go.
 - Per-track volume / pan / cutoff / resonance / filter-mode, swing and master
   exposed as host-automatable parameters
 
+**DAW integration**
+- **Multi-out** — a Main mix bus plus one stereo bus per track, so each lane can
+  be routed to its own DAW channel / FX chain (e.g. Reaper per-track effects)
+- Host-synced transport — tempo and play/stop follow your DAW; in the Standalone,
+  SILA drives its own clock
+- **MIDI export** — bounce the song (or current pattern) to a Standard MIDI File,
+  one track per lane on its own MIDI channel
+
 **Arrangement**
 - Pattern bank: 16 slots, up to 128 steps each, paged in 16s with a per-pattern master length
 - **Song mode** — a Digitakt-style row chain (label / pattern / repeat / length /
@@ -58,11 +71,32 @@ configuration. Load it in your DAW (or run the Standalone) and go.
 - Add / remove / rename tracks, per-track colour
 - Vanilla HTML/JS UI in a JUCE WebView: rotary dials, hover tooltips, beat-grouped grid
 - Project save/load (`~/SILA/projects`) **and** full DAW state persistence
-- Digitakt export — transcode all samples to 48 kHz / 16-bit / mono WAV
+- Sample library browser + importer (auto-categorizes an external sample pack)
 
 See **[`vst/DESIGN.md`](vst/DESIGN.md)** for the architecture (host-transport
 timing model, the lock-free RCU state seam, the WebView bridge) and the phased
 roadmap.
+
+### Getting started
+
+1. **Install** — drop `SILA.vst3` into your VST3 folder (`%USERPROFILE%\VST3` on
+   Windows), or run the Standalone app. *(No prebuilt release yet — build from
+   source, below.)*
+2. Add SILA to an instrument track and press play — the factory beat plays.
+3. Hit **SONG** (or the Song Mode toggle) for the full arrangement.
+4. Swap sounds: click a track's sample slot to **BROWSE** the library, or import
+   your own pack with **LIBRARY → + Import**.
+
+### Per-track outputs (multi-out)
+
+SILA exposes a **Main** mix plus one stereo bus per track, so each lane can be
+processed with your DAW's effects. In Reaper:
+
+1. On the SILA track, open **Route** and set **Track channels** to 16.
+2. Add a track and give it a **Receive** from the SILA track, picking the lane's
+   channel pair (Track 1 = 3/4, Track 2 = 5/6, Track 3 = 7/8, …).
+3. Drop effects on that track; repeat per lane. To avoid hearing a lane twice,
+   turn off the SILA track's master/parent send.
 
 ### Build
 

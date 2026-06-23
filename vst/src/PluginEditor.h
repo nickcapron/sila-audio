@@ -46,10 +46,6 @@ private:
     float slotValue (int slot, const juce::String& pid) const;  // raw param value
     void  setSlotValue (int slot, const juce::String& pid, float value);  // via setValueNotifyingHost
 
-    // Launch the native folder picker, then transcode every project sample to
-    // 48k/16-bit/mono WAVs there; pushes the result via the "export" event.
-    void launchDigitaktExport();
-
     // Launch a native save dialog, then bounce the active song (or current pattern)
     // to a Standard MIDI File there; pushes the result via the "midi-export" event.
     void launchMidiExport();

@@ -28,7 +28,16 @@ juce_add_plugin(SILA
     BUNDLE_ID               "audio.sila.plugin"
     PLUGIN_MANUFACTURER_CODE Sila
     PLUGIN_CODE             Sila
+    ICON_BIG                "${CMAKE_CURRENT_SOURCE_DIR}/branding/sila-icon.png"
+    ICON_SMALL              "${CMAKE_CURRENT_SOURCE_DIR}/branding/sila-icon.png"
     FORMATS                 VST3 AU Standalone
+    VST3_AUTO_MANIFEST      FALSE         # skip the post-build moduleinfo step: it
+                                          # LoadLibrary()s the freshly-built unsigned
+                                          # plugin, which Windows Smart App Control
+                                          # blocks. The .vst3 still loads fine in a
+                                          # signed host (Reaper) — the manifest is
+                                          # just an enumeration cache. (Public release
+                                          # needs code-signing; see DESIGN/README.)
     COPY_PLUGIN_AFTER_BUILD TRUE          # auto-install the built plugin...
     VST3_COPY_DIR           "$ENV{USERPROFILE}/VST3"   # ...to a user-writable VST3 folder (no admin)
     IS_SYNTH                TRUE          # instrument: produces audio
@@ -65,7 +74,6 @@ target_sources(SILA PRIVATE
     src/engine/Sampler.cpp       # Phase 2
     src/engine/VoiceMixer.cpp    # Phase 2
     src/engine/Sequencer.cpp     # Phase 3
-    src/engine/DigitaktExport.cpp # Phase 4 Step 2d (Digitakt sample export)
     src/engine/MidiExport.cpp     # song/pattern MIDI file export
     src/engine/ProjectJson.cpp    # Phase 4 Step 2e (shared Project <-> JSON)
     src/engine/Library.cpp        # Phase 8 (sample importer + library manager)
