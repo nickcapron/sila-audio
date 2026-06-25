@@ -250,6 +250,39 @@ function makeKnob({ min, max, value, label, def, color, format, onInput, onChang
   return { el: wrap, set: (v) => { if (!dragging) set(v, false); } };
 }
 
+// Retrig is a lit-up button rather than a dial: each click cycles Off -> x2 -> x3
+// ... -> xMax, then wraps back to Off. The button lights up in the track colour
+// while enabled; right-click resets to Off. Name label above keeps grid alignment.
+function makeRetrig({ label, tip, max = 5, onChange }) {
+  const last = Math.max(2, Math.round(max));                 // 1 (Off) ... last
+  const fmt = (v) => (v <= 1 ? "OFF" : "×" + v);
+  const wrap = document.createElement("div");
+  wrap.className = "knob-wrap retrig-wrap";
+  const name = document.createElement("span"); name.className = "knob-name"; name.textContent = label;
+  const btn = document.createElement("button"); btn.type = "button"; btn.className = "retrig-btn off";
+  wrap.append(name, btn);
+
+  let val = 1;
+  function paint() {
+    btn.textContent = fmt(val);
+    btn.classList.toggle("off", val <= 1);
+    btn.classList.toggle("on",  val > 1);
+  }
+  paint();
+  btn.addEventListener("click", () => {
+    val = val >= last ? 1 : val + 1;
+    paint();
+    if (onChange) onChange(val);
+  });
+  btn.addEventListener("contextmenu", (e) => {              // right-click resets to Off
+    e.preventDefault();
+    if (val !== 1) { val = 1; paint(); if (onChange) onChange(val); }
+  });
+  if (tip) attachTip(btn, tip);
+
+  return { el: wrap, set: (v) => { val = Math.min(last, Math.max(1, Math.round(v) || 1)); paint(); } };
+}
+
 // A step carries non-default params worth flagging with a dot.
 function stepIsLocked(s) {
   const pl = s.p_locks || {};
@@ -686,8 +719,8 @@ const INSP_KNOBS = [
   { id:"micro", label:"Micro",   min:-23, max:23,  def:0,   fmt:v=>fmtSigned(Math.round(v)),
     tip:"<b>Micro-timing</b> — nudge this hit earlier / later than the grid.",
     read:s=>s.micro_timing ?? 0,                              write:(s,v)=>{ s.micro_timing = Math.round(v); } },
-  { id:"retrig", label:"Retrig", min:1, max:8, def:1, fmt:v=>Math.round(v)+"×",
-    tip:"<b>Retrig</b> — re-fire the sample this many times within the step (ratchet / roll).",
+  { id:"retrig", label:"Retrig", kind:"cycle", min:1, max:5, def:1,
+    tip:"<b>Retrig</b> — click to cycle Off → ×2 → ×3 → ×4 → ×5: re-fire the sample this many times within the step (ratchet / roll).",
     read:s=>s.retrig ?? 1,                                    write:(s,v)=>{ s.retrig = Math.round(v); } },
   { id:"rfade", label:"R.Fade", min:-1, max:1, def:0, color:"v2", fmt:v=>Math.round(v*100)+"%",
     tip:"<b>Retrig Fade</b> — velocity ramp across the retrigs (+ swells up, − fades out).",
@@ -718,12 +751,17 @@ function buildInspectorKnobs() {
   const grid = $("insp-knobs");
   if (!grid) return;
   for (const p of INSP_KNOBS) {
-    const k = makeKnob({
-      min: p.min, max: p.max, value: p.def, label: p.label, def: p.def, color: p.color,
-      format: p.fmt, valueInCap: true, tip: p.tip, useTrackColor: true,
-      onInput: v => { const s = curStep(); if (s) p.write(s, v); },
-      onChange: () => { if (curStep()) saveSelectedStep(); }
-    });
+    const k = p.kind === "cycle"
+      ? makeRetrig({
+          label: p.label, tip: p.tip, max: p.max,
+          onChange: v => { const s = curStep(); if (s) { p.write(s, v); saveSelectedStep(); } }
+        })
+      : makeKnob({
+          min: p.min, max: p.max, value: p.def, label: p.label, def: p.def, color: p.color,
+          format: p.fmt, valueInCap: true, tip: p.tip, useTrackColor: true,
+          onInput: v => { const s = curStep(); if (s) p.write(s, v); },
+          onChange: () => { if (curStep()) saveSelectedStep(); }
+        });
     inspKnobs[p.id] = k;
     grid.appendChild(k.el);
   }

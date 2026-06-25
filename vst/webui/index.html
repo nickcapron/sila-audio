@@ -175,6 +175,16 @@
     .knob.v2 .knob-ind > i { box-shadow: 0 0 5px rgba(139,108,240,.65); }
     .knob.track-clr .knob-ind > i { box-shadow: 0 0 5px var(--track-color, rgba(52,227,196,.6)); }
     .knob-cap { font-size: 8px; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; font-variant-numeric: tabular-nums; }
+    /* retrig: click-to-cycle button — lights up in the track colour when enabled */
+    .retrig-wrap { justify-content: center; }
+    .retrig-btn { width: 100%; height: 32px; border-radius: 6px; cursor: pointer; font: inherit;
+      font-size: 11px; font-weight: 700; letter-spacing: .5px; font-variant-numeric: tabular-nums;
+      border: 1px solid var(--border); background: var(--bg); color: var(--text-dim);
+      transition: background .12s ease, color .12s ease, border-color .12s ease, box-shadow .12s ease; }
+    .retrig-btn:hover { border-color: var(--track-color, #34e3c4); color: var(--text); }
+    .retrig-btn.on { color: #08131a; background: var(--track-color, #34e3c4);
+      border-color: var(--track-color, #34e3c4); text-shadow: none;
+      box-shadow: 0 0 11px var(--track-color, rgba(52,227,196,.6)), inset 0 1px 1px rgba(255,255,255,.35); }
     .knob-name { font-size: 8px; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; text-align: center; }
     /* inspector knob grid (value shown in the cap, name above) */
     .knob-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px 2px; margin-bottom: 16px; }
