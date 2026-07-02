@@ -922,9 +922,10 @@ function onStatus(s) {
     if (Date.now() - _bpmWheelAt > 400) bpmEl.textContent = uiBpm.toFixed(1);
   }
 
-  // Active song-mode pattern (null = off/stopped). Slot 0 -> "A", 1 -> "B"...
+  // Active song-mode pattern (null = off/stopped). Same A01/A02… naming as the
+  // pattern selector and the song grid, so the badge matches what the user edits.
   const slot = s.current_song_slot;
-  activePatEl.textContent = (slot != null) ? "PATTERN " + String.fromCharCode(65 + slot) : "";
+  activePatEl.textContent = (slot != null) ? "PTN " + patName(slot) : "";
 
   // Song-mode playhead row (null = not in a song). Highlight it in the editor.
   songPlayRow = (s.current_song_row != null) ? s.current_song_row : -1;
@@ -1045,13 +1046,16 @@ async function assignSample(trackId, path, filename) {
 let trimTrackId = null;
 let trimStart = 0, trimEnd = 1;
 let trimPeaks = [];
+let _trimReq = 0;   // request token: rapid track switches, only the newest wins
 
 async function showTrimmer(trackId) {
+  const req = ++_trimReq;
   const track = findTrack(trackId);
   if (!track || !track.samples || !track.samples.length) { hideTrimmer(); return; }
   let data;
   try { data = await GET(`/tracks/${trackId}/waveform?points=600`); }
-  catch { hideTrimmer(); return; }
+  catch { if (req === _trimReq) hideTrimmer(); return; }
+  if (req !== _trimReq) return;   // a newer track was selected while we awaited
   if (!data.waveform || !data.waveform.length) { hideTrimmer(); return; }
   trimTrackId = trackId;
   trimPeaks = data.waveform;
@@ -1706,12 +1710,18 @@ async function toggleRowMute(i, slot, btn) {
   try { const s = await PUT(`/song/rows/${i}`, { mute_toggle: slot }); if (s) songState = s; } catch {}
 }
 
-async function addSongRow()      { applySongState(await POST("/song/rows", {})); }
-async function deleteRow(i)      { applySongState(await DEL(`/song/rows/${i}`)); }
-async function selectSong(i)     { applySongState(await PUT("/song/active", { index: i })); }
-async function newSong()         { applySongState(await POST("/song/new", {})); }
-async function renameSong()      { applySongState(await PUT("/song/name", { name: songNameEl.value.trim() })); }
-async function setSongEnd()      { applySongState(await PUT("/song/end", { end: songEndEl.value })); }
+// Structural song ops surface a status-bar error instead of dying as an
+// unhandled rejection (these run straight off click/change listeners).
+async function songOp(promise) {
+  try { applySongState(await promise); }
+  catch { setStatus("song edit failed", false); }
+}
+const addSongRow = ()  => songOp(POST("/song/rows", {}));
+const deleteRow  = (i) => songOp(DEL(`/song/rows/${i}`));
+const selectSong = (i) => songOp(PUT("/song/active", { index: i }));
+const newSong    = ()  => songOp(POST("/song/new", {}));
+const renameSong = ()  => songOp(PUT("/song/name", { name: songNameEl.value.trim() }));
+const setSongEnd = ()  => songOp(PUT("/song/end", { end: songEndEl.value }));
 
 function highlightSongRow() {
   songRowsEl.querySelectorAll("tr").forEach((tr, i) => tr.classList.toggle("playing", i === songPlayRow));
@@ -1883,6 +1893,21 @@ async function loadPart(preset) {
 }
 
 // ── Boot ────────────────────────────────────────────────────────────────────
+// Some hosts open the editor before the processor has published its first
+// project snapshot; GET /project then returns an empty object. Retry briefly
+// instead of dying with "bridge error" on a race the user can't do anything about.
+async function fetchProject(tries = 40) {
+  for (let i = 0; ; i++) {
+    try {
+      const p = await GET("/project");
+      if (p && Array.isArray(p.tracks)) return p;
+    } catch { /* bridge not ready yet */ }
+    if (i >= tries) throw new Error("audio engine not responding");
+    if (i === 2) setStatus("waiting for the audio engine…", false);
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
 async function boot() {
   if (typeof window.__JUCE__ !== "undefined" && window.__JUCE__.backend) {
     window.__JUCE__.backend.addEventListener("playhead", onPlayhead);
@@ -1893,7 +1918,7 @@ async function boot() {
     window.__JUCE__.backend.addEventListener("import-folder", onImportFolder);
   }
 
-  project = await GET("/project");
+  project = await fetchProject();
   ensureTrackColors();
   renderTracks();
   renderPatternSelect();
@@ -1961,13 +1986,11 @@ async function boot() {
   songNameEl.addEventListener("change", renameSong);
   songEndEl.addEventListener("change", setSongEnd);
   songAddRowEl.addEventListener("click", addSongRow);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && songScreen.classList.contains("open")) closeSongEditor(); });
 
   // Library browser controls (per-track sample picker).
   libSearch.addEventListener("input", () => renderLibrary(libSearch.value));
   libCloseEl.addEventListener("click", closeLibrary);
   libModal.addEventListener("click", (e) => { if (e.target === libModal) closeLibrary(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLibrary(); });
 
   // Library manager + importer (full-screen overlay).
   document.getElementById("library-btn").addEventListener("click", openLibraryManager);
@@ -1978,14 +2001,34 @@ async function boot() {
   document.getElementById("import-back").addEventListener("click", showLibBrowse);
   importSmartEl.addEventListener("change", rescanImport);
   importRunBtn.addEventListener("click", runImport);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && libScreen.classList.contains("open")) closeLibraryManager(); });
   attachTip(document.getElementById("library-btn"), "<b>Library</b> — browse, audition, organize, and import samples.");
 
   // Pattern-parts browser controls.
   partsSearch.addEventListener("input", () => renderParts(partsSearch.value));
   partsCloseEl.addEventListener("click", closeParts);
   partsModal.addEventListener("click", (e) => { if (e.target === partsModal) closeParts(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeParts(); });
+
+  // Keyboard: one handler, so a single Escape closes only the TOPMOST open
+  // overlay (modals sit above the full-screen editors) and never fires while
+  // typing — there it just leaves the field. Space = play/stop in Standalone
+  // (hosted, the DAW owns the transport).
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
+                         || t.tagName === "SELECT" || t.isContentEditable);
+    if (e.key === "Escape") {
+      if (typing) { t.blur(); return; }
+      if      (libModal.classList.contains("open"))   closeLibrary();
+      else if (partsModal.classList.contains("open")) closeParts();
+      else if (projModal.classList.contains("open"))  closeProjects();
+      else if (libScreen.classList.contains("open"))  closeLibraryManager();
+      else if (songScreen.classList.contains("open")) closeSongEditor();
+    } else if (e.code === "Space" && _standalone && !typing
+               && (!t || t.tagName !== "BUTTON")) {   // let a focused button keep its native Space-click
+      e.preventDefault();   // don't scroll the grid
+      PUT("/transport/playing", { playing: !_playing });
+    }
+  });
 
   // Trimmer drag handles.
   trimStartH.addEventListener("mousedown", (e) => startTrimDrag(e, "start"));

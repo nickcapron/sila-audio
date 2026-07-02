@@ -23,9 +23,12 @@
       background: radial-gradient(125% 80% at 50% -12%, #101a28 0%, var(--bg) 58%);
       color: var(--text); font-family: 'SF Mono','Consolas',monospace; font-size: 13px;
       height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+      user-select: none; -webkit-user-select: none;   /* plugin feel: no stray text selection */
     }
+    input, textarea { user-select: text; -webkit-user-select: text; }
     header {
       display: flex; align-items: center; gap: 16px; padding: 11px 18px;
+      flex-wrap: wrap; row-gap: 8px;   /* controls wrap instead of clipping at narrow editor sizes */
       border-bottom: 1px solid var(--border); flex-shrink: 0; position: relative;
       background: linear-gradient(180deg, #131c28 0%, var(--bg) 100%);
     }
@@ -304,7 +307,7 @@
       border-radius: 4px; padding: 6px 9px; font: inherit; font-size: 12px;
     }
     .modal-head .close { background: none; border: none; color: var(--text-dim); font-size: 20px; line-height: 1; cursor: pointer; }
-    #lib-target, #parts-target { padding: 0 14px 8px; color: var(--text-dim); font-size: 11px; }
+    #lib-target, #parts-target, #proj-target { padding: 0 14px 8px; color: var(--text-dim); font-size: 11px; }
     #parts-target b { color: var(--accent); }
     .lib-tree { flex: 1; overflow: auto; padding: 6px; }
     .lib-pack > summary { cursor: pointer; padding: 5px 8px; color: var(--text); font-weight: 700; letter-spacing: .5px; }
@@ -684,7 +687,7 @@
         <button id="proj-save">Save</button>
         <button class="close" id="proj-close" title="close">×</button>
       </div>
-      <div id="lib-target">~/SILA/projects — click a name to load</div>
+      <div id="proj-target">~/SILA/projects — click a name to load</div>
       <div class="lib-tree" id="proj-list"></div>
     </div>
   </div>
