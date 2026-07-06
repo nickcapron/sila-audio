@@ -354,10 +354,16 @@ function renderTracks() {
     name.ondblclick = () => startRename(track.id, name);
 
     const slot = document.createElement("div");
-    slot.className = "sample-slot" + (track.samples && track.samples.length ? " loaded" : "");
-    slot.textContent = sampleLabel(track);
+    const missing = track.samples_missing > 0;
+    slot.className = "sample-slot"
+      + (track.samples && track.samples.length ? " loaded" : "")
+      + (missing ? " missing" : "");
+    slot.textContent = (missing ? "⚠ " : "") + sampleLabel(track);
     slot.onclick = (e) => { e.stopPropagation(); openLibrary(track.id, track.name); };
-    attachTip(slot, (track.samples && track.samples[0])
+    attachTip(slot, missing
+      ? "<b>Sample missing</b> — " + esc((track.samples[0] && track.samples[0].path.split("/").pop()) || "")
+        + "<br>The file couldn't be found (moved or renamed?). Click to load a replacement."
+      : (track.samples && track.samples[0])
       ? "<b>Sample</b> — " + esc(track.samples[0].path.split("/").pop()) + " · click to change"
       : "<b>Sample</b> — click to load one from the library.");
 

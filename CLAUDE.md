@@ -124,14 +124,6 @@ Open items (public-release audit, 2026-07-06 — ordered by priority):
   The VST3 currently installs to `%USERPROFILE%\VST3`, which most DAWs do NOT
   scan; a real installer must target `C:\Program Files\Common Files\VST3`, and
   unsigned binaries hit SmartScreen/Smart App Control warnings for downloaders.
-- **Missing samples fail silently** — `buildSamplerFromLayers` skips unresolved
-  paths with no UI feedback. Needs a per-lane "sample missing" badge + relink
-  flow (and ideally "collect samples into project" for session portability).
-- **No hard voice cap** — `voices.reserve(512)` is a soft reserve; pathological
-  stacking can blow CPU. Add voice-stealing at a hard cap.
-- **Version is 0.1.0** in CMake `project()` — bump to 1.0.0 before release.
-  PLUGIN_CODE/MANUFACTURER_CODE are frozen forever (changing them breaks
-  saved sessions).
 - **WebView2 runtime guard** — editor hard-requires WebView2 with no fallback;
   detect a missing runtime and show a message; installer should bundle the
   Evergreen bootstrapper.

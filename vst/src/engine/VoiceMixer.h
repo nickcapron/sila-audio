@@ -121,7 +121,24 @@ public:
     void prepare (double sr);
     void reset();
 
-    void addVoice (const Voice& v) { voices.push_back (v); }
+    // Hard-capped at kMaxVoices: at the cap, steal the longest-ringing voice
+    // (max `elapsed` — a not-yet-started deferred voice has elapsed 0 and is
+    // never stolen). This bounds worst-case CPU and guarantees push_back never
+    // reallocates on the audio thread. The steal is a hard cut; at a 512-voice
+    // density the dropped tail is masked by the mix.
+    void addVoice (const Voice& v)
+    {
+        if ((int) voices.size() >= kMaxVoices)
+        {
+            size_t victim = 0;
+            for (size_t i = 1; i < voices.size(); ++i)
+                if (voices[i].elapsed > voices[victim].elapsed)
+                    victim = i;
+            voices[victim] = v;
+            return;
+        }
+        voices.push_back (v);
+    }
     int  activeVoiceCount() const { return (int) voices.size(); }
 
     // `trackMix` is indexed by Voice.trackIndex (per-track gain + equal-power pan).

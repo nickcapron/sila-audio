@@ -360,6 +360,24 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                             i < (int) curKit.size() ? curKit[(size_t) i] : dfltSound);
                         to->setProperty ("samples", laneVar.getProperty ("samples", juce::var()));
                         to->setProperty ("lfo",     laneVar.getProperty ("lfo", juce::var()));
+                        // Ship audit: a sample whose file no longer resolves (moved
+                        // library, other machine) must not fail SILENTLY — count the
+                        // unresolvable layers so the UI can badge the lane. Same
+                        // resolution rule as buildSamplerFromLayers (absolute, else
+                        // library-relative). Message-thread stat() calls, cheap.
+                        int missing = 0;
+                        if (i < (int) curKit.size())
+                            for (const auto& layer : curKit[(size_t) i].samples)
+                                if (layer.path.isNotEmpty())
+                                {
+                                    const bool foundAbs = juce::File::isAbsolutePath (layer.path)
+                                                          && juce::File (layer.path).existsAsFile();
+                                    if (! foundAbs
+                                        && ! SilaAudioProcessor::libraryRoot()
+                                                 .getChildFile (layer.path).existsAsFile())
+                                        ++missing;
+                                }
+                        to->setProperty ("samples_missing", missing);
                         // Phase 7b: per-pattern lane visibility (UI hides inactive rows).
                         to->setProperty ("active", laneVar.getProperty ("active", true));
 
