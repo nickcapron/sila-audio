@@ -176,6 +176,11 @@ public:
     // result is a pure function of position, so a DAW loop/seek relocates exactly.
     static SongPosition resolveSong (const Project&, long songSixteenth);
 
+    // The per-pattern kit sound for (slot, lane); nullptr if unauthored/out of
+    // range. Public: the processor's live MIDI input resolves the played lane's
+    // sound the same way a sequenced trig does.
+    static const LaneSound* laneSound (const Project&, int slot, int lane);
+
 private:
     static bool trigConditionPasses (const Step&, long iteration, bool fillActive);
     bool        probabilityPasses (int probability);
@@ -185,9 +190,6 @@ private:
     // the active pattern's kit lane (per-pattern LFO config); null => LFO off.
     static void fillTrigEvent (TrigEvent&, const Track&, int trackIndex, long stepIndex,
                                const Step&, const LaneSound* sound);
-
-    // The per-pattern kit sound for (slot, lane); nullptr if unauthored/out of range.
-    static const LaneSound* laneSound (const Project&, int slot, int lane);
 
     // The Step vector for (trackIndex, slot) in the unified PatternBank — a const
     // reference, no copy. Empty (a static empty vector) when the slot is

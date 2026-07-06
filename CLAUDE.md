@@ -114,18 +114,36 @@ human/audible verification.
 
 Feature-complete v1.0: sequencer (patterns/pages/song mode/p-locks/retrig),
 per-pattern kits, sampler + library importer, DSP (filter/LFO/gate/pitch),
-multi-out, MIDI + Digitakt export, factory pack, tests, hardened webui.
+multi-out, MIDI + Digitakt export, live MIDI note input (channel N → lane N−1,
+C3 = programmed pitch — mirrors the export map), factory pack, tests, hardened
+webui.
 
-Open items:
+Open items (public-release audit, 2026-07-06 — ordered by priority):
 
-- **Code signing** — the real blocker before public distribution: unsigned
-  binaries hit SmartScreen/Smart App Control warnings for downloaders.
+- **Installer + code signing** — the real blockers before public distribution.
+  The VST3 currently installs to `%USERPROFILE%\VST3`, which most DAWs do NOT
+  scan; a real installer must target `C:\Program Files\Common Files\VST3`, and
+  unsigned binaries hit SmartScreen/Smart App Control warnings for downloaders.
+- **Missing samples fail silently** — `buildSamplerFromLayers` skips unresolved
+  paths with no UI feedback. Needs a per-lane "sample missing" badge + relink
+  flow (and ideally "collect samples into project" for session portability).
+- **No hard voice cap** — `voices.reserve(512)` is a soft reserve; pathological
+  stacking can blow CPU. Add voice-stealing at a hard cap.
+- **Version is 0.1.0** in CMake `project()` — bump to 1.0.0 before release.
+  PLUGIN_CODE/MANUFACTURER_CODE are frozen forever (changing them breaks
+  saved sessions).
+- **WebView2 runtime guard** — editor hard-requires WebView2 with no fallback;
+  detect a missing runtime and show a message; installer should bundle the
+  Evergreen bootstrapper.
 - **Reaper multi-out routing recipe** — buses are built but never verified in a
-  DAW; a routing walkthrough doc is still owed.
+  DAW; a routing walkthrough doc is still owed. Run **pluginval** + test in
+  Reaper/Ableton/FL/Bitwig before release.
 - Library rename/move/delete **orphans** a loaded project's `SampleRef`
   (references are not rewritten; reload goes silent).
-- AU validation (needs macOS). Installer. Song mode does not recall per-pattern
-  mix snapshots as it advances (user-accepted APVTS limitation).
+- Demo-kit-only sessions reload silent (synth buffers aren't reconstructable);
+  ASIO for the Standalone (needs the Steinberg ASIO SDK); AU validation (needs
+  macOS). Song mode does not recall per-pattern mix snapshots as it advances
+  (user-accepted APVTS limitation).
 
 Many features were verified only as "builds clean + Standalone soaks"; when a
 commit message or note says **"pending human verify"**, treat the feature as

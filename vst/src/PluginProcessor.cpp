@@ -733,7 +733,7 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
 }
 
 void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                       juce::MidiBuffer& /*midi*/)
+                                       juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
@@ -862,6 +862,56 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         trackMix[i].panR = std::sin (theta);
     }
 
+    // Live MIDI note input — mirrors the MIDI *export* map, so SILA's own exported
+    // song, played back into SILA, reproduces the performance: channel N triggers
+    // lane N-1; note 60 (C3) = the lane's programmed pitch, other notes transpose
+    // via varispeed; velocity drives level + layer selection. Pad semantics:
+    // one-shot (note-offs ignored), works with the transport stopped, and — like
+    // the hardware — manual hits sound even on muted lanes (mute gates the
+    // sequencer, not the pads). Sample-accurate via the event's block position.
+    if (proj != nullptr && ! midi.isEmpty())
+    {
+        if (const SamplerSetPtr bankSet = samplerSnapshot())
+        {
+            // Notes play the pattern you're hearing: the song row's slot when song
+            // mode is rolling, else the edited pattern.
+            const int slot = juce::jlimit (0, sila::engine::PatternBank::kNumSlots - 1,
+                                           (songMode && blockSong.valid && ! blockSong.stopped)
+                                               ? blockSong.patternSlot : proj->currentPattern);
+            const auto& bank = (*bankSet)[(size_t) slot];
+            const double samplesPer16 = sampleRate * 60.0 / (bpm > 0.0 ? bpm : kDefaultBpm) / 4.0;
+
+            for (const auto meta : midi)
+            {
+                const auto msg = meta.getMessage();
+                if (! msg.isNoteOn())
+                    continue;
+                const int lane = msg.getChannel() - 1;         // export convention: lane 0 = ch 1
+                if (lane < 0 || lane >= (int) proj->tracks.size())
+                    continue;
+                const auto* snd = sila::engine::Sequencer::laneSound (*proj, slot, lane);
+                if (snd != nullptr && ! snd->active)
+                    continue;                                  // lane hidden in this pattern
+
+                sila::engine::TrigEvent ev;
+                ev.trackIndex  = lane;
+                ev.velocity    = (int) msg.getVelocity();
+                ev.pitchOffset = juce::jlimit (-24, 24, msg.getNoteNumber() - 60);
+                ev.length      = 0.0f;                         // one-shot (no gate)
+                // Same per-pattern LFO resolution as a sequenced trig (no p-locks).
+                if (snd != nullptr)
+                {
+                    ev.lfoShape = snd->lfoShape;
+                    ev.lfoDest  = snd->lfoDest;
+                    ev.lfoRate  = snd->lfoRate;
+                    ev.lfoDepth = snd->lfoDepth;
+                    ev.lfoSync  = snd->lfoSync;
+                }
+                spawnVoice (ev, meta.samplePosition, bank.get(), samplesPer16);
+            }
+        }
+    }
+
     // Library audition: consume a pending preview (one per block) and spawn a
     // one-shot voice through the master bus. Works whether or not the transport is
     // playing; trackIndex = -1 => unity gain/pan (no per-track mix). The sampler is
@@ -942,20 +992,6 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
             {
                 if (activeSlot < 0 || activeSlot >= (int) bankSet->size())
                     return;
-                const auto& bank = (*bankSet)[(size_t) activeSlot];
-                if (bank == nullptr)
-                    return;                       // unauthored slot => silent
-                if (ev.trackIndex < 0 || ev.trackIndex >= (int) bank->size())
-                    return;
-                const auto& smp = (*bank)[(size_t) ev.trackIndex];
-                if (smp == nullptr)
-                    return;
-
-                const float s = ev.pStart.has_value() ? *ev.pStart : -1.0f;
-                const float e = ev.pEnd.has_value()   ? *ev.pEnd   : -1.0f;
-                const auto slice = smp->get (ev.velocity, s, e);
-                if (slice.buffer == nullptr)
-                    return;
 
                 // clock.py timing: odd 16ths swung; micro-timing late only (the
                 // sleep-loop original clamps negative offsets to 0). VoiceMixer
@@ -970,99 +1006,8 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
                 if (startOffset < 0)
                     startOffset = 0;     // can't render in the past (clamp at block edge)
 
-                sila::engine::Voice v;
-                v.audio       = slice.buffer;
-                v.pos         = (double) slice.start;
-                v.endPos      = slice.start + slice.length;
-                v.rate        = std::pow (2.0, (double) ev.pitchOffset / 12.0);   // varispeed pitch
-                v.startOffset = startOffset;
-                // Note-length gate (output samples); length <= 0 => one-shot.
-                v.gateSamples = (ev.length > 0.0f)
-                                  ? juce::jmax (1, (int) std::lround ((double) ev.length * samplesPer16))
-                                  : 0;
-                v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
-                v.trackIndex  = ev.trackIndex;     // per-track gain/pan applied in the mixer
-
-                // Resolve the filter base from the APVTS slot bank; step p-locks
-                // override. (The engine only passes the p-lock optionals through.)
-                const int   fslot   = ev.trackIndex;
-                const bool  inBank  = fslot >= 0 && fslot < kMaxTracks;
-                const float baseCut = (inBank && pCutoff[fslot]) ? pCutoff[fslot]->load() : 1.0f;
-                const float baseRes = (inBank && pRes[fslot])    ? pRes[fslot]->load()    : 0.0f;
-                const auto  baseMode = (inBank && pFmode[fslot])
-                                         ? (sila::engine::FilterMode) juce::roundToInt (pFmode[fslot]->load())
-                                         : sila::engine::FilterMode::LowPass;
-                const float cutoff = ev.pCutoff.value_or (baseCut);
-                const float reso   = ev.pResonance.value_or (baseRes);
-                const auto  fmode  = ev.pFilterMode.value_or (baseMode);
-
-                // Base (pre-LFO) values the LFO modulates from at control rate.
-                v.baseGain      = v.volume;
-                v.baseRate      = v.rate;
-                v.baseCutoff    = cutoff;
-                v.baseResonance = reso;
-
-                // Per-voice LFO: armed when depth & rate > 0. Trig-sync starts the
-                // phase at 0; free-run samples the track's running phase so
-                // overlapping voices stay aligned to the track LFO clock.
-                const bool lfoOn = ev.lfoDepth > 0.0f && ev.lfoRate > 0.0f;
-                if (lfoOn)
-                {
-                    v.lfo.on    = true;
-                    v.lfo.shape = (int) ev.lfoShape;
-                    v.lfo.dest  = (int) ev.lfoDest;
-                    v.lfo.depth = ev.lfoDepth;
-                    v.lfo.inc   = 2.0 * juce::MathConstants<double>::pi * (double) ev.lfoRate / sampleRate;
-                    v.lfo.phase = ev.lfoSync ? 0.0
-                                  : (ev.trackIndex >= 0 && ev.trackIndex < (int) trackLfoPhase.size()
-                                         ? trackLfoPhase[(size_t) ev.trackIndex] : 0.0);
-                    v.lfo.shVal = (ev.lfoShape == sila::engine::LfoShape::Random)
-                                      ? lfoRng.nextFloat() * 2.0f - 1.0f : 0.0f;
-                }
-
-                // Filter engages when: LP with a non-open cutoff, any HP/BP mode,
-                // or an LFO that sweeps cutoff. (LP at fully-open = transparent =
-                // skip, for zero cost; the LFO update re-bakes coeffs each block.)
-                const bool lfoCutoff = lfoOn && ev.lfoDest == sila::engine::LfoDest::Cutoff;
-                const bool lpOpen    = fmode == sila::engine::FilterMode::LowPass && cutoff >= 0.999f;
-                if (! lpOpen || lfoCutoff)
-                {
-                    v.filterOn = true;
-                    v.svf.mode = fmode;
-                    v.svf.bake (cutoff, reso, sampleRate);
-                }
-
-                v.keepAlive   = smp;   // pin this sampler alive until the voice ends
-                                       // (an RCU bank swap must not free a buffer a
-                                       // ringing voice still points into)
-
-                const int rt = juce::jlimit (1, 8, ev.retrig);
-                if (rt <= 1)
-                {
-                    mixer.addVoice (v);
-                }
-                else
-                {
-                    // Retrig (ratchet): re-fire the sample rt times evenly across the
-                    // step, each a fresh copy restarting at the slice start, with an
-                    // optional velocity ramp (+ swells up, - fades out). Copies inherit
-                    // the fully-built voice (filter/LFO/gate + the keepAlive pin).
-                    const double spacing = samplesPer16 / (double) rt;
-                    const float  fade    = juce::jlimit (-1.0f, 1.0f, ev.retrigFade);
-                    for (int k = 0; k < rt; ++k)
-                    {
-                        sila::engine::Voice rv = v;
-                        rv.startOffset = startOffset + (int) std::lround (k * spacing);
-                        const float t    = (float) k / (float) (rt - 1);
-                        const float mult = fade >= 0.0f ? (1.0f - fade * (1.0f - t))
-                                                        : (1.0f + fade * t);
-                        rv.volume   = juce::jlimit (0.0f, 1.0f, v.volume * mult);
-                        rv.baseGain = rv.volume;
-                        mixer.addVoice (rv);
-                    }
-                }
+                spawnVoice (ev, startOffset, (*bankSet)[(size_t) activeSlot].get(), samplesPer16);
             };
-
     long idx = (long) std::ceil (sixteenthStart - 1e-9);
     for (;;)
     {
@@ -1098,6 +1043,121 @@ void SilaAudioProcessor::scheduleTriggers (const sila::engine::Project& proj,
             }
         }
         ++idx;
+    }
+}
+
+// Build + enqueue the voice(s) for one trigger — the single spawn path shared by
+// the sequencer (pattern + song mode) and live MIDI note input, so their DSP
+// resolution (velocity layers, filter base, LFO, retrig) can never drift. Audio
+// thread, allocation-free. `bank` = the ACTIVE pattern slot's sampler bank
+// (null => unauthored/silent); `startOffset` = sample position within the block.
+void SilaAudioProcessor::spawnVoice (const sila::engine::TrigEvent& ev, int startOffset,
+                                     const SamplerBank* bank, double samplesPer16)
+{
+    if (bank == nullptr)
+        return;                       // unauthored slot => silent
+    if (ev.trackIndex < 0 || ev.trackIndex >= (int) bank->size())
+        return;
+    const auto& smp = (*bank)[(size_t) ev.trackIndex];
+    if (smp == nullptr)
+        return;
+
+    const float s = ev.pStart.has_value() ? *ev.pStart : -1.0f;
+    const float e = ev.pEnd.has_value()   ? *ev.pEnd   : -1.0f;
+    const auto slice = smp->get (ev.velocity, s, e);
+    if (slice.buffer == nullptr)
+        return;
+
+    sila::engine::Voice v;
+    v.audio       = slice.buffer;
+    v.pos         = (double) slice.start;
+    v.endPos      = slice.start + slice.length;
+    v.rate        = std::pow (2.0, (double) ev.pitchOffset / 12.0);   // varispeed pitch
+    v.startOffset = startOffset;
+    // Note-length gate (output samples); length <= 0 => one-shot.
+    v.gateSamples = (ev.length > 0.0f)
+                      ? juce::jmax (1, (int) std::lround ((double) ev.length * samplesPer16))
+                      : 0;
+    v.volume      = juce::jlimit (0.0f, 1.0f, (float) ev.velocity / 127.0f);
+    v.trackIndex  = ev.trackIndex;     // per-track gain/pan applied in the mixer
+
+    // Resolve the filter base from the APVTS slot bank; step p-locks override.
+    // (The engine only passes the p-lock optionals through.)
+    const int   fslot   = ev.trackIndex;
+    const bool  inBank  = fslot >= 0 && fslot < kMaxTracks;
+    const float baseCut = (inBank && pCutoff[fslot]) ? pCutoff[fslot]->load() : 1.0f;
+    const float baseRes = (inBank && pRes[fslot])    ? pRes[fslot]->load()    : 0.0f;
+    const auto  baseMode = (inBank && pFmode[fslot])
+                             ? (sila::engine::FilterMode) juce::roundToInt (pFmode[fslot]->load())
+                             : sila::engine::FilterMode::LowPass;
+    const float cutoff = ev.pCutoff.value_or (baseCut);
+    const float reso   = ev.pResonance.value_or (baseRes);
+    const auto  fmode  = ev.pFilterMode.value_or (baseMode);
+
+    // Base (pre-LFO) values the LFO modulates from at control rate.
+    v.baseGain      = v.volume;
+    v.baseRate      = v.rate;
+    v.baseCutoff    = cutoff;
+    v.baseResonance = reso;
+
+    // Per-voice LFO: armed when depth & rate > 0. Trig-sync starts the phase at 0;
+    // free-run samples the track's running phase so overlapping voices stay
+    // aligned to the track LFO clock.
+    const bool lfoOn = ev.lfoDepth > 0.0f && ev.lfoRate > 0.0f;
+    if (lfoOn)
+    {
+        v.lfo.on    = true;
+        v.lfo.shape = (int) ev.lfoShape;
+        v.lfo.dest  = (int) ev.lfoDest;
+        v.lfo.depth = ev.lfoDepth;
+        v.lfo.inc   = 2.0 * juce::MathConstants<double>::pi * (double) ev.lfoRate / sampleRate;
+        v.lfo.phase = ev.lfoSync ? 0.0
+                      : (ev.trackIndex >= 0 && ev.trackIndex < (int) trackLfoPhase.size()
+                             ? trackLfoPhase[(size_t) ev.trackIndex] : 0.0);
+        v.lfo.shVal = (ev.lfoShape == sila::engine::LfoShape::Random)
+                          ? lfoRng.nextFloat() * 2.0f - 1.0f : 0.0f;
+    }
+
+    // Filter engages when: LP with a non-open cutoff, any HP/BP mode, or an LFO
+    // that sweeps cutoff. (LP at fully-open = transparent = skip, for zero cost;
+    // the LFO update re-bakes coeffs each block.)
+    const bool lfoCutoff = lfoOn && ev.lfoDest == sila::engine::LfoDest::Cutoff;
+    const bool lpOpen    = fmode == sila::engine::FilterMode::LowPass && cutoff >= 0.999f;
+    if (! lpOpen || lfoCutoff)
+    {
+        v.filterOn = true;
+        v.svf.mode = fmode;
+        v.svf.bake (cutoff, reso, sampleRate);
+    }
+
+    v.keepAlive   = smp;   // pin this sampler alive until the voice ends (an RCU
+                           // bank swap must not free a buffer a ringing voice
+                           // still points into)
+
+    const int rt = juce::jlimit (1, 8, ev.retrig);
+    if (rt <= 1)
+    {
+        mixer.addVoice (v);
+    }
+    else
+    {
+        // Retrig (ratchet): re-fire the sample rt times evenly across the step,
+        // each a fresh copy restarting at the slice start, with an optional
+        // velocity ramp (+ swells up, - fades out). Copies inherit the fully-built
+        // voice (filter/LFO/gate + the keepAlive pin).
+        const double spacing = samplesPer16 / (double) rt;
+        const float  fade    = juce::jlimit (-1.0f, 1.0f, ev.retrigFade);
+        for (int k = 0; k < rt; ++k)
+        {
+            sila::engine::Voice rv = v;
+            rv.startOffset = startOffset + (int) std::lround (k * spacing);
+            const float t    = (float) k / (float) (rt - 1);
+            const float mult = fade >= 0.0f ? (1.0f - fade * (1.0f - t))
+                                            : (1.0f + fade * t);
+            rv.volume   = juce::jlimit (0.0f, 1.0f, v.volume * mult);
+            rv.baseGain = rv.volume;
+            mixer.addVoice (rv);
+        }
     }
 }
 

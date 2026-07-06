@@ -178,6 +178,12 @@ private:
                            double ppqStart, double bpm, int numSamples,
                            float swing, bool songMode, bool fillActive);
 
+    // The single voice-spawn path, shared by scheduleTriggers and live MIDI note
+    // input so their DSP resolution can never drift. Audio thread, allocation-free.
+    // `bank` = the active pattern slot's sampler bank (null => silent).
+    void spawnVoice (const sila::engine::TrigEvent& ev, int startOffset,
+                     const SamplerBank* bank, double samplesPer16);
+
     // Build the in-code demo project; returns the snapshot and (re)builds the
     // parallel sampler array. Replaced by UI-authored state in later steps.
     ProjectPtr buildDemoProject (double sampleRate);
