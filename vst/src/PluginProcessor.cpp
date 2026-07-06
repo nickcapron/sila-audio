@@ -548,13 +548,16 @@ void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerSetPtr bank)
     reapRetired();   // message thread; keeps the retire lists from growing on reload
 }
 
-// The factory project new users open: an extended showcase song built from the
-// bundled RD-6 drum kit + CZ-1 mini synth voices (installed to ~/SILA/library on
-// first run, see installFactoryLibrary). 8 tracks, 6 patterns with per-pattern
-// kits (clean vs. RD-6 distortion in the DROP), an acid CZ bassline + pad/keys via
-// pitch, trig conditions / probability / micro-timing / retrig, and a 22-bar song
-// chain. currentPattern 0 is the main groove that auto-plays; the SONG (Song Mode)
-// is the full arrangement. Swing is live from the "swing" APVTS param.
+// The factory project new users open: a 24-bar showcase song in C minor built
+// from the bundled RD-6 drum kit + CZ-1 mini synth voices (installed to
+// ~/SILA/library on first run, see installFactoryLibrary). It deliberately tours
+// the feature set: per-pattern kits (distortion drums in the DROP, toms in the
+// BUILD, a CZ-pluck melody voice in the BREAK), velocity LAYERS (the OH lane's
+// hard hits are the RD-6 cymbal = crash), long patterns (32-step INTRO/DROP/
+// OUTRO, a 64-step BREAK walking Cm - Ab - Eb - Bb), p-locks (the OUTRO bass
+// cutoff walks down), plus trig conditions / probability / micro-timing /
+// retrig. currentPattern 0 is the main groove that auto-plays; the SONG (Song
+// Mode) is the full arrangement. Swing is live from the "swing" APVTS param.
 SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
 {
     using namespace sila::engine;
@@ -562,7 +565,7 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
     auto proj = std::make_shared<Project>();
 
     // ── 8 factory tracks (RD-6 drums + CZ-1 mini synth) ──────────────────────
-    const char* names[8]  = { "Kick", "Snare", "Clap", "CH", "OH", "Bass", "Keys", "Pad" };
+    const char* names[8]  = { "Kick", "Snare", "Perc", "CH", "OH", "Bass", "Keys", "Pad" };
     const char* colors[8] = { "#ff5a5a", "#ffae57", "#ffd23f", "#34e3c4",
                               "#5fd0e0", "#8b6cf0", "#c66cf0", "#6c8cf0" };
     for (int i = 0; i < 8; ++i)
@@ -585,7 +588,11 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
                                           : "SILA Factory/03. Clap/rd-6 clap.wav" } };
         k[3].samples = { SampleRef { dist ? "SILA Factory/04. Hi-Hat Closed/rd-6 closed hat distortion.wav"
                                           : "SILA Factory/04. Hi-Hat Closed/rd-6 closedhat.wav" } };
-        k[4].samples = { SampleRef { "SILA Factory/05. Hi-Hat Open/rd-6 openhat.wav" } };
+        // The OH lane is velocity-LAYERED: soft hits = open hat, hard hits
+        // (vel >= 100) = the RD-6 cymbal — a crash without spending a 9th lane.
+        k[4].samples = { SampleRef { "SILA Factory/05. Hi-Hat Open/rd-6 openhat.wav", 0, 99 },
+                         SampleRef { dist ? "SILA Factory/06. Cymbal/rd-6 cymbal distortion.wav"
+                                          : "SILA Factory/06. Cymbal/rd-6 cymbal.wav", 100, 127 } };
         k[5].samples = { SampleRef { "SILA Factory/21. Bass - Sub/cz-1 mini bass 01.wav" } };
         k[6].samples = { SampleRef { "SILA Factory/33. Keys - Piano/cz1 mini crystal keys.wav" } };
         k[7].samples = { SampleRef { "SILA Factory/32. Pad - Choir/cz1 choir vox pad.wav" } };
@@ -602,26 +609,29 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         return k;
     };
 
-    // Column helpers (16 steps): C = drum hits {step, vel}; Cn = pitched notes
-    // {step, vel, semitone}; sustain() sets a gate length on a column's active steps.
-    auto C = [] (std::initializer_list<std::pair<int,int>> hits)
+    // Column helpers: Cx/Cnx build an n-step column (16 = 1 bar, 32 = 2 bars, …);
+    // Cx = drum hits {step, vel}, Cnx = pitched notes {step, vel, semitones from C}.
+    // C/Cn are the 1-bar shorthands; sustain() gates a column's active steps.
+    auto Cx = [] (int n, std::initializer_list<std::pair<int,int>> hits)
     {
-        std::vector<Step> v (16);
+        std::vector<Step> v ((size_t) n);
         for (auto h : hits) { auto& s = v[(size_t) h.first]; s.active = true; s.velocity = h.second; }
         return v;
     };
-    auto Cn = [] (std::initializer_list<std::array<int,3>> hits)
+    auto Cnx = [] (int n, std::initializer_list<std::array<int,3>> hits)
     {
-        std::vector<Step> v (16);
+        std::vector<Step> v ((size_t) n);
         for (auto h : hits) { auto& s = v[(size_t) h[0]]; s.active = true; s.velocity = h[1]; s.pitchOffset = h[2]; }
         return v;
     };
+    auto C  = [&] (std::initializer_list<std::pair<int,int>> hits) { return Cx (16, hits); };
+    auto Cn = [&] (std::initializer_list<std::array<int,3>> hits) { return Cnx (16, hits); };
     auto sustain = [] (std::vector<Step> v, float len)
     {
         for (auto& s : v) if (s.active) s.length = len;
         return v;
     };
-    auto empty = [] { return std::vector<Step> (16); };
+    auto empty = [] (int n = 16) { return std::vector<Step> ((size_t) n); };
 
     // The driving 16th acid bass, reused by the GROOVE/BUILD patterns.
     auto grooveBass = [&] { return Cn ({ {0,112,0},{2,78,0},{3,86,12},{4,96,0},{6,78,0},{7,86,10},
@@ -634,9 +644,11 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         auto snare = C ({ {4,108},{12,108},{7,60},{14,70} });
         snare[7].trig  = TrigCondition::OneIn2;     // ghost every other bar
         snare[14].trig = TrigCondition::OneIn4;     // rarer pickup
-        auto ch = C ({ {0,50},{2,60},{4,50},{6,60},{8,50},{10,60},{12,50},{14,60},{15,40} });
+        auto ch = C ({ {0,50},{2,62},{4,50},{6,62},{8,50},{10,62},{12,50},{14,62},{15,40} });
         ch[6].microTiming = 10;                     // a touch of shuffle on the "&"
         ch[15].probability = 50;
+        auto keys = sustain (Cn ({ {2,84,7},{10,84,3},{14,76,10} }), 2.0f);
+        keys[14].trig = TrigCondition::OneIn2;      // answer phrase every other bar
         bank.slots[0] = {
             C ({ {0,115},{4,115},{8,115},{12,115} }),   // kick 4-on-the-floor
             snare,
@@ -644,16 +656,20 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
             ch,
             C ({ {6,60},{14,68} }),                     // open-hat lift on the "&"s
             grooveBass(),
-            sustain (Cn ({ {2,84,7},{10,84,3} }), 2.0f),// crystal-key stabs
+            keys,                                       // crystal-key call & answer
             sustain (Cn ({ {0,52,0} }), 16.0f),         // sustained choir pad
         };
     }
-    // ── Slot 1 · INTRO (sparse, pad-led) ─────────────────────────────────────
+    // ── Slot 1 · INTRO (2 bars: pad-led bar 1; hats + kick pickup arrive bar 2,
+    //    a Bb bass pickup pulls the ear back to C for the groove) ──────────────
     bank.slots[1] = {
-        C ({ {0,100},{8,100} }), empty(), empty(),
-        C ({ {2,48},{6,48},{10,48},{14,48} }), empty(),
-        Cn ({ {0,90,0},{8,90,0} }), empty(),
-        sustain (Cn ({ {0,55,0} }), 16.0f),
+        Cx (32, { {0,100},{16,100},{24,88},{30,72} }),
+        empty (32), empty (32),
+        Cx (32, { {18,48},{22,48},{26,48},{30,50} }),
+        empty (32),
+        Cnx (32, { {0,90,0},{16,90,0},{28,72,-2} }),
+        sustain (Cnx (32, { {8,58,12},{24,58,15} }), 3.0f),
+        sustain (Cnx (32, { {0,55,0},{16,55,0} }), 16.0f),
     };
     // ── Slot 2 · BUILD (rising tension into the drop) ────────────────────────
     {
@@ -662,49 +678,94 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         snare[15].retrig = 4; snare[15].retrigFade = 0.5f;   // accelerating roll
         bank.slots[2] = {
             C ({ {0,112},{4,112},{8,112},{12,112} }), snare,
-            C ({ {4,58},{12,58} }),
+            C ({ {1,84},{3,108},{5,88},{7,112} }),   // hi/lo tom run (velocity layers)
             C ({ {0,52},{1,42},{2,54},{3,42},{4,52},{5,42},{6,54},{7,42},
                  {8,52},{9,42},{10,54},{11,42},{12,52},{13,42},{14,54},{15,46} }),
             C ({ {14,70} }),
             grooveBass(),
-            sustain (Cn ({ {2,84,7},{6,84,10},{10,84,7},{14,84,12} }), 2.0f),
-            sustain (Cn ({ {0,55,7} }), 16.0f),
+            sustain (Cn ({ {2,84,7},{6,84,10},{10,84,12},{14,84,15} }), 2.0f),   // climbing stabs
+            sustain (Cn ({ {0,55,7} }), 16.0f),      // pad holds the dominant
         };
     }
-    // ── Slot 3 · DROP (RD-6 distortion kit, heaviest) ────────────────────────
+    // ── Slot 3 · DROP (2 bars, RD-6 distortion kit, heaviest; the vel-120 hit on
+    //    the OH lane's downbeat is the CRASH via its velocity layer) ────────────
     {
-        auto clap = C ({ {4,66},{12,66},{7,52} });
+        auto clap = Cx (32, { {4,66},{12,66},{20,66},{28,66},{7,52} });
         clap[7].trig = TrigCondition::OneIn2;
         bank.slots[3] = {
-            C ({ {0,120},{4,120},{8,120},{12,120},{14,90} }),
-            C ({ {4,115},{12,115} }), clap,
-            C ({ {0,60},{2,60},{4,60},{6,60},{8,60},{10,60},{12,60},{14,60} }),
-            C ({ {2,70},{6,70},{10,70},{14,70} }),
-            Cn ({ {0,120,0},{2,100,0},{4,120,12},{6,100,0},{8,120,0},{10,100,0},{12,120,12},{14,100,7} }),
-            sustain (Cn ({ {0,95,12},{4,95,15},{8,95,12},{12,95,19} }), 2.0f),
-            sustain (Cn ({ {0,60,0} }), 16.0f),
+            Cx (32, { {0,120},{4,120},{8,120},{12,120},{14,90},
+                      {16,120},{20,120},{24,120},{28,120},{30,95} }),
+            Cx (32, { {4,115},{12,115},{20,115},{28,115} }),
+            clap,
+            Cx (32, { {0,60},{2,60},{4,60},{6,60},{8,60},{10,60},{12,60},{14,60},
+                      {16,60},{18,60},{20,60},{22,60},{24,60},{26,60},{28,60},{30,60} }),
+            Cx (32, { {0,120},{2,70},{6,70},{10,70},{14,70},{18,70},{22,70},{26,70},{30,70} }),
+            Cnx (32, { {0,120,0},{2,100,0},{4,120,12},{6,100,0},{8,120,0},{10,100,0},{12,120,12},{14,100,7},
+                       {16,120,0},{18,100,0},{20,120,12},{22,100,0},{24,120,0},{26,100,0},{28,120,15},{30,110,12} }),
+            sustain (Cnx (32, { {0,95,12},{4,95,15},{8,95,12},{12,95,19},
+                                {16,95,12},{20,95,15},{24,95,12},{28,95,17} }), 2.0f),
+            sustain (Cnx (32, { {0,60,0},{16,60,0} }), 16.0f),
         };
     }
-    // ── Slot 4 · BREAK (drums drop out; CZ melody over the pad) ───────────────
-    bank.slots[4] = {
-        empty(), empty(), empty(),
-        C ({ {2,44},{6,44},{10,44},{14,44} }), empty(),
-        Cn ({ {0,80,0},{6,80,3},{8,80,0},{12,80,5} }),
-        sustain (Cn ({ {0,90,0},{2,85,3},{4,90,7},{6,85,5},{8,90,3},{10,85,0},{12,90,7},{14,85,10} }), 2.0f),
-        sustain (Cn ({ {0,60,0} }), 16.0f),
-    };
-    // ── Slot 5 · OUTRO (wind down) ───────────────────────────────────────────
-    bank.slots[5] = {
-        C ({ {0,100},{8,90} }), empty(), empty(),
-        C ({ {4,40},{12,40} }), empty(),
-        Cn ({ {0,80,0},{8,75,0} }), empty(),
-        sustain (Cn ({ {0,55,0} }), 16.0f),
-    };
+    // ── Slot 4 · BREAK (4 bars — the harmonic centrepiece: Cm → Ab → Eb → Bb,
+    //    voice-led pad roots, CZ-pluck melody (kit-swapped), kick returns bar 4) ─
+    {
+        const int r[4] = { 0, -4, 3, -2 };            // bar roots: Cm  Ab  Eb  Bb
+        std::vector<Step> bass (64), pad (64), ch (64);
+        for (int b = 0; b < 4; ++b)
+        {
+            auto on = [&] (std::vector<Step>& col, int step, int vel, int note, float len = 0.0f)
+            {
+                auto& s = col[(size_t) (b * 16 + step)];
+                s.active = true; s.velocity = vel; s.pitchOffset = note; s.length = len;
+            };
+            on (bass, 0, 82, r[b]);  on (bass, 8, 74, r[b]);  on (bass, 12, 70, r[b] + 7);
+            on (pad,  0, 60, r[b], 16.0f);
+            for (int st : { 2, 6, 10, 14 }) on (ch, st, 44, 0);
+        }
+        auto melody = sustain (Cnx (64, {
+            {0,90,12},{4,85,15},{8,88,10},{12,84,7},          // Cm — falling answer
+            {16,88,8},{20,84,12},{24,86,15},{28,82,12},       // Ab — lifts
+            {32,90,15},{36,85,19},{40,88,15},{44,84,10},      // Eb — the peak
+            {48,88,10},{52,84,14},{56,86,17},{60,88,19} }),   // Bb — climbs back in
+            2.0f);
+        bank.slots[4] = {
+            Cx (64, { {48,88},{56,88} }),                     // heartbeat returns in bar 4
+            empty (64), empty (64),
+            ch, empty (64),
+            bass, melody, pad,
+        };
+    }
+    // ── Slot 5 · OUTRO (2 bars, wind down: p-locked cutoff walks the bass darker
+    //    with each note; a soft crash opens it) ────────────────────────────────
+    {
+        auto bass = Cnx (32, { {0,80,0},{8,75,0},{16,72,0},{24,66,0} });
+        const float fade[4] = { 0.50f, 0.40f, 0.30f, 0.22f };
+        int fi = 0;
+        for (auto& s : bass) if (s.active) s.pCutoff = fade[fi++];
+        bank.slots[5] = {
+            Cx (32, { {0,100},{8,85},{16,92},{24,72} }),
+            empty (32), empty (32),
+            Cx (32, { {4,36},{12,34},{20,30},{28,26} }),
+            Cx (32, { {0,104} }),                            // soft crash into the outro
+            bass,
+            sustain (Cnx (32, { {8,55,12},{24,45,7} }), 4.0f),   // last key echoes
+            sustain (Cnx (32, { {0,55,0},{16,50,0} }), 16.0f),
+        };
+    }
 
     // Per-pattern kits: clean RD-6 everywhere except the DROP, which swaps in the
     // distortion drums (the kit-per-pattern showcase).
     for (int s : { 0, 1, 2, 4, 5 }) bank.kits[(size_t) s] = makeKit (false);
     bank.kits[3] = makeKit (true);
+    // BUILD: the Perc lane becomes the RD-6 toms (hi soft / lo hard velocity
+    // split) — kit-per-pattern means different SOUNDS, not just FX variants.
+    bank.kits[2][2].samples = { SampleRef { "SILA Factory/09. Tom/rd-6 hightom.wav", 0, 99 },
+                                SampleRef { "SILA Factory/09. Tom/rd-6 low tom.wav", 100, 127 } };
+    // BREAK: the Keys lane swaps to the CZ pluck (a new voice marks the scene
+    // change) and the choir pad breathes a little deeper.
+    bank.kits[4][6].samples = { SampleRef { "SILA Factory/27. Lead - Pluck/cz1 mini pluck bass.wav" } };
+    bank.kits[4][7].lfoDepth = 0.30f;
 
     proj->currentPattern = 0;            // pattern mode shows/plays the main groove
 
@@ -713,15 +774,17 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         Song song;
         song.name = "Factory Showcase";
         song.end  = SongEnd::Loop;
+        // Row +I must equal the pattern's authored length (the pattern WRAPS
+        // inside the row): INTRO/DROP/OUTRO are 32-step, BREAK is 64-step.
         //                    LABEL      PTN ↺  +I  BPM   MUTE
-        song.rows.push_back ({ "INTRO",   1, 2, 16, 0.0f, 0 });
+        song.rows.push_back ({ "INTRO",   1, 1, 32, 0.0f, 0 });
         song.rows.push_back ({ "GROOVE",  0, 4, 16, 0.0f, 0 });
         song.rows.push_back ({ "BUILD",   2, 2, 16, 0.0f, 0 });
-        song.rows.push_back ({ "DROP",    3, 4, 16, 0.0f, 0 });
-        song.rows.push_back ({ "BREAK",   4, 2, 16, 0.0f, 0 });
-        song.rows.push_back ({ "GROOVE",  0, 4, 16, 0.0f, 0 });
-        song.rows.push_back ({ "DROP",    3, 2, 16, 0.0f, 0 });
-        song.rows.push_back ({ "OUTRO",   5, 2, 16, 0.0f, 0 });
+        song.rows.push_back ({ "DROP",    3, 2, 32, 0.0f, 0 });
+        song.rows.push_back ({ "BREAK",   4, 1, 64, 0.0f, 0 });
+        song.rows.push_back ({ "BUILD",   2, 2, 16, 0.0f, 0 });
+        song.rows.push_back ({ "DROP",    3, 2, 32, 0.0f, 0 });
+        song.rows.push_back ({ "OUTRO",   5, 1, 32, 0.0f, 0 });
         proj->songs.push_back (std::move (song));
         proj->activeSong = 0;
     }
