@@ -122,8 +122,6 @@ Open items:
   binaries hit SmartScreen/Smart App Control warnings for downloaders.
 - **Reaper multi-out routing recipe** — buses are built but never verified in a
   DAW; a routing walkthrough doc is still owed.
-- **Sampler cache** — dedup identical sample layers across pattern kits
-  (key: path/start/end/rrGroup/deviceRate) to cut memory + load time.
 - Library rename/move/delete **orphans** a loaded project's `SampleRef`
   (references are not rewritten; reload goes silent).
 - AU validation (needs macOS). Installer. Song mode does not recall per-pattern

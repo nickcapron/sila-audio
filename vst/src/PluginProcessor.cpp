@@ -4,6 +4,7 @@
 #include "SILAFactoryData.h"   // bundled factory sample pack (FactoryData namespace)
 #include <cmath>
 #include <algorithm>
+#include <map>
 
 juce::AudioProcessor::BusesProperties SilaAudioProcessor::makeBusesProperties()
 {
@@ -414,6 +415,24 @@ bool SilaAudioProcessor::auditionSample (const juce::File& file)
     return true;
 }
 
+// Cache key for sharing one Sampler across pattern slots whose kit lane has an
+// identical layer list (the common case: a kit copied per pattern) — dedups the
+// decode + windowed-sinc resample and the buffer memory. The LANE INDEX is part
+// of the key on purpose: Sampler::get() advances round-robin state, so sharing
+// across lanes would interleave two tracks' RR streams. Sharing across slots is
+// safe — only the active slot's sampler is triggered, and RR continuity across
+// identical kits on a pattern switch is the musically expected behaviour.
+static juce::String laneLayersKey (size_t lane, const std::vector<sila::engine::SampleRef>& layers)
+{
+    juce::String k ((juce::int64) lane);
+    for (const auto& l : layers)
+        k << '|' << l.path
+          << '\x01' << l.velMin << '\x01' << l.velMax
+          << '\x01' << juce::String (l.start, 9) << '\x01' << juce::String (l.end, 9)
+          << '\x01' << l.rrGroup;
+    return k;
+}
+
 std::shared_ptr<sila::engine::Sampler>
 SilaAudioProcessor::buildSamplerFromLayers (const std::vector<sila::engine::SampleRef>& layers, double sr)
 {
@@ -461,6 +480,7 @@ void SilaAudioProcessor::rebuildSamplerBankForRate (double sr)
         return;
 
     auto set = std::make_shared<SamplerSet>();
+    std::map<juce::String, std::shared_ptr<sila::engine::Sampler>> cache;   // see laneLayersKey
     for (int s = 0; s < sila::engine::PatternBank::kNumSlots; ++s)
     {
         const auto& kit = proj->patternBank.kits[(size_t) s];
@@ -471,7 +491,12 @@ void SilaAudioProcessor::rebuildSamplerBankForRate (double sr)
         for (size_t i = 0; i < kit.size(); ++i)
         {
             if (! kit[i].samples.empty())
-                (*bank)[i] = buildSamplerFromLayers (kit[i].samples, sr);   // re-resample at the new rate
+            {
+                auto& shared = cache[laneLayersKey (i, kit[i].samples)];
+                if (shared == nullptr)
+                    shared = buildSamplerFromLayers (kit[i].samples, sr);   // re-resample at the new rate
+                (*bank)[i] = shared;
+            }
             else if (cur != nullptr && (*cur)[(size_t) s] != nullptr && i < (*cur)[(size_t) s]->size())
                 (*bank)[i] = (*(*cur)[(size_t) s])[i];   // transitional synth kit: keep (built at the old rate)
         }
@@ -488,6 +513,7 @@ SilaAudioProcessor::SamplerSet
 SilaAudioProcessor::buildBankForProject (const sila::engine::Project& proj, double sr)
 {
     SamplerSet set;   // all-null by default => unauthored slots are silent
+    std::map<juce::String, std::shared_ptr<sila::engine::Sampler>> cache;   // see laneLayersKey
     for (int s = 0; s < sila::engine::PatternBank::kNumSlots; ++s)
     {
         const auto& kit = proj.patternBank.kits[(size_t) s];
@@ -495,8 +521,13 @@ SilaAudioProcessor::buildBankForProject (const sila::engine::Project& proj, doub
             continue;
         auto bank = std::make_shared<SamplerBank>();
         bank->reserve (kit.size());
-        for (const auto& lane : kit)
-            bank->push_back (buildSamplerFromLayers (lane.samples, sr));   // empty layers => silent sampler
+        for (size_t i = 0; i < kit.size(); ++i)
+        {
+            auto& shared = cache[laneLayersKey (i, kit[i].samples)];
+            if (shared == nullptr)
+                shared = buildSamplerFromLayers (kit[i].samples, sr);   // empty layers => silent sampler
+            bank->push_back (shared);
+        }
         set[(size_t) s] = std::move (bank);
     }
     return set;
