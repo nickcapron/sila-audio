@@ -803,7 +803,9 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
     }
 
     // POST /import/scan { path } — recursively scan an external folder, group its
-    // audio files, and suggest a SILA category per group.
+    // audio files, and suggest a SILA category per group. The walk of a multi-
+    // thousand-file pack takes seconds, so it runs on the import pool; the reply
+    // is just {started} and the result arrives via the "import-scan" event.
     if (method == "POST" && path == "/import/scan")
     {
         const juce::File src (body.getProperty ("path", juce::String()).toString());
@@ -814,7 +816,31 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
             return juce::var (o);
         }
         const bool smart = (bool) body.getProperty ("smart", true);
-        return scanResultVar (sila::engine::scanFolder (src, smart));
+
+        if (importBusy.exchange (true))
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("busy", true);   // UI queues a re-scan for when the job lands
+            return juce::var (o);
+        }
+
+        juce::Component::SafePointer<SilaAudioProcessorEditor> safeThis (this);
+        importPool.addJob ([safeThis, src, smart]
+        {
+            const juce::var result = scanResultVar (sila::engine::scanFolder (src, smart));
+            juce::MessageManager::callAsync ([safeThis, result]
+            {
+                if (auto* ed = safeThis.getComponent())   // editor may have closed mid-scan
+                {
+                    ed->importBusy.store (false);
+                    ed->webView.emitEventIfBrowserIsVisible ("import-scan", result);
+                }
+            });
+        });
+
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("started", true);
+        return juce::var (o);
     }
 
     // POST /import/execute { source_path, pack_name, mappings } — copy the mapped
@@ -835,14 +861,41 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
             }
 
         const bool smart = (bool) body.getProperty ("smart", true);
-        const auto r = sila::engine::executeImport (
-            src, packName, mappings, SilaAudioProcessor::libraryRoot(), smart);
+
+        // Copying a large pack is seconds of file I/O — same background pattern as
+        // /import/scan: reply {started}, result arrives via the "import-done" event.
+        if (importBusy.exchange (true))
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("busy", true);
+            return juce::var (o);
+        }
+
+        juce::Component::SafePointer<SilaAudioProcessorEditor> safeThis (this);
+        importPool.addJob ([safeThis, src, packName, mappings, smart]
+        {
+            const auto r = sila::engine::executeImport (
+                src, packName, mappings, SilaAudioProcessor::libraryRoot(), smart);
+
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("imported",           r.imported);
+            o->setProperty ("skipped",            r.skipped);
+            o->setProperty ("categories_created", r.categoriesCreated);
+            if (r.error.isNotEmpty()) o->setProperty ("error", r.error);
+            const juce::var result (o);
+
+            juce::MessageManager::callAsync ([safeThis, result]
+            {
+                if (auto* ed = safeThis.getComponent())
+                {
+                    ed->importBusy.store (false);
+                    ed->webView.emitEventIfBrowserIsVisible ("import-done", result);
+                }
+            });
+        });
 
         auto* o = new juce::DynamicObject();
-        o->setProperty ("imported",           r.imported);
-        o->setProperty ("skipped",            r.skipped);
-        o->setProperty ("categories_created", r.categoriesCreated);
-        if (r.error.isNotEmpty()) o->setProperty ("error", r.error);
+        o->setProperty ("started", true);
         return juce::var (o);
     }
 

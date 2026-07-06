@@ -88,5 +88,15 @@ private:
     float lastRes[SilaAudioProcessor::kMaxTracks]    {};
     float lastFmode[SilaAudioProcessor::kMaxTracks]  { -1, -1, -1, -1, -1, -1, -1, -1 };
 
+    // Sample-import worker: /import/scan and /import/execute walk/copy thousands
+    // of files, which would freeze the editor (and the host UI) if run on the
+    // message thread. One pool thread serialises jobs (importBusy gates a second
+    // request); results hop back to the message thread via a SafePointer and are
+    // pushed to the UI as "import-scan" / "import-done" events. Declared LAST so
+    // it is destroyed FIRST — the destructor waits for a running job, so a job
+    // can never outlive the editor members it hops back to.
+    std::atomic<bool> importBusy { false };
+    juce::ThreadPool  importPool { 1 };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilaAudioProcessorEditor)
 };

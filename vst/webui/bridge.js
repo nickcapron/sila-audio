@@ -1377,14 +1377,27 @@ async function onImportFolder(res) {
   await rescanImport();
 }
 
+// Scanning runs on a backend worker thread (a big pack takes seconds); the POST
+// returns immediately and the result lands via the "import-scan" event. If a
+// scan is already in flight (busy), remember to re-scan with the current
+// settings once it finishes — e.g. the smart toggle was flipped mid-scan.
+let importRescanPending = false;
+
 async function rescanImport() {
   if (!importSrcPath) return;
   importStatusEl.textContent = "scanning…";
   importRowsEl.innerHTML = "";
   importRunBtn.disabled = true;
   try {
-    importScan = await POST("/import/scan", { path: importSrcPath, smart: importSmartEl.checked });
-  } catch { importStatusEl.textContent = "scan failed"; return; }
+    const r = await POST("/import/scan", { path: importSrcPath, smart: importSmartEl.checked });
+    if (r.busy) { importRescanPending = true; return; }
+    if (r.error) { importStatusEl.textContent = r.error; return; }
+  } catch { importStatusEl.textContent = "scan failed"; }
+}
+
+function onImportScan(res) {
+  if (importRescanPending) { importRescanPending = false; rescanImport(); return; }
+  importScan = res || {};
   if (importScan.error) { importStatusEl.textContent = importScan.error; return; }
   renderImportTable();
 }
@@ -1429,13 +1442,20 @@ async function runImport() {
   importRunBtn.disabled = true;
   importResultEl.textContent = "importing…";
   try {
+    // Runs on the backend worker thread; completion lands via "import-done".
     const r = await POST("/import/execute", { source_path: importScan.source_path, pack_name: pack, mappings, smart: importSmartEl.checked });
+    if (r.busy) { importResultEl.textContent = "another import is still running…"; return; }
     if (r.error) { importResultEl.textContent = "error: " + r.error; importRunBtn.disabled = false; return; }
-    importResultEl.textContent = `imported ${r.imported}, skipped ${r.skipped}, ${r.categories_created} categories created.`;
-    setStatus(`imported ${r.imported} samples into "${pack}"`, true);
-    libCategories = null;   // categories may have grown
-    await openLibraryManager();   // back to browse, refreshed
   } catch { importResultEl.textContent = "import failed."; importRunBtn.disabled = false; }
+}
+
+async function onImportDone(r) {
+  r = r || {};
+  if (r.error) { importResultEl.textContent = "error: " + r.error; importRunBtn.disabled = false; return; }
+  importResultEl.textContent = `imported ${r.imported}, skipped ${r.skipped}, ${r.categories_created} categories created.`;
+  setStatus(`imported ${r.imported} samples into "${importPackEl.value.trim()}"`, true);
+  libCategories = null;   // categories may have grown
+  await openLibraryManager();   // back to browse, refreshed
 }
 
 // ── Per-track param push (host automation / generic editor -> UI) ────────────
@@ -1922,6 +1942,8 @@ async function boot() {
     window.__JUCE__.backend.addEventListener("project", onProjectReload);
     window.__JUCE__.backend.addEventListener("params", onParams);
     window.__JUCE__.backend.addEventListener("import-folder", onImportFolder);
+    window.__JUCE__.backend.addEventListener("import-scan", onImportScan);
+    window.__JUCE__.backend.addEventListener("import-done", onImportDone);
   }
 
   project = await fetchProject();
