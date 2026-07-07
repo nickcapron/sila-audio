@@ -655,24 +655,24 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::makeShowcaseProject()
 
     auto& bank = proj->patternBank;
 
-    // ── Slot 0 · GROOVE (the main loop; auto-plays in pattern mode) ───────────
+    // ── Slot 0 · GROOVE (the main loop) — kept SPACIOUS on purpose: it's home
+    //    base, so the BUILD/DROP add energy to it rather than competing. Clap sits
+    //    out (the snare owns the backbeat), the bass breathes instead of running
+    //    16ths (that driving line is saved for the BUILD), hats are a clean pulse. ─
     {
-        auto snare = C ({ {4,108},{12,108},{7,60},{14,70} });
-        snare[7].trig  = TrigCondition::OneIn2;     // ghost every other bar
-        snare[14].trig = TrigCondition::OneIn4;     // rarer pickup
-        auto ch = C ({ {0,50},{2,62},{4,50},{6,62},{8,50},{10,62},{12,50},{14,62},{15,40} });
+        auto snare = C ({ {4,108},{12,108},{7,60} });
+        snare[7].trig  = TrigCondition::OneIn2;     // one ghost, every other bar
+        auto ch = C ({ {0,52},{2,60},{4,52},{6,60},{8,52},{10,60},{12,52},{14,60} });
         ch[6].microTiming = 10;                     // a touch of shuffle on the "&"
-        ch[15].probability = 50;
-        auto keys = sustain (Cn ({ {2,84,7},{10,84,3},{14,76,10} }), 2.0f);
-        keys[14].trig = TrigCondition::OneIn2;      // answer phrase every other bar
         bank.slots[0] = {
             C ({ {0,115},{4,115},{8,115},{12,115} }),   // kick 4-on-the-floor
             snare,
-            C ({ {4,60},{12,60} }),                     // clap reinforces the backbeat
-            ch,
+            empty(),                                    // clap rests in the groove
+            ch,                                         // steady offbeat hats
             C ({ {6,60},{14,68} }),                     // open-hat lift on the "&"s
-            grooveBass(),
-            keys,                                       // crystal-key call & answer
+            // Spacious bass: root + an octave pickup + a fifth — room between hits.
+            Cn ({ {0,110,0},{3,82,12},{8,104,0},{11,82,12},{14,80,7} }),
+            sustain (Cn ({ {2,84,7},{10,80,3} }), 2.0f),// two crystal-key stabs
             sustain (Cn ({ {0,52,0} }), 16.0f),         // sustained choir pad
         };
     }
