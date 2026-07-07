@@ -1116,6 +1116,21 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return juce::var (o);
     }
 
+    // POST /projects/delete { name } — remove a saved project file. The active
+    // (loaded) project is untouched; this only deletes the on-disk file, so a user
+    // can clear out the Factory Showcase (or their own saves) from the UI.
+    if (method == "POST" && path == "/projects/delete")
+    {
+        const juce::String name = juce::File::createLegalFileName (body.getProperty ("name", juce::String()).toString());
+        auto* o = new juce::DynamicObject();
+        const auto file = SilaAudioProcessor::projectsDir().getChildFile (name + ".json");
+        if (name.isNotEmpty() && file.existsAsFile() && file.deleteFile())
+            o->setProperty ("deleted", name);
+        else
+            o->setProperty ("error", "not found");
+        return juce::var (o);
+    }
+
     // ── Song Mode (Phase 6) ──────────────────────────────────────────────────
     // All mutations run on the message thread via editProject() (RCU copy-on-
     // write — the audio thread never blocks) and return the fresh song state, so

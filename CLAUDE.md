@@ -109,6 +109,12 @@ human/audible verification.
   Main bus carries the full mix (master applied); per-lane aux buses are
   pre-master stems.
 - Don't scaffold future phases (AI composition etc.) until asked.
+- **No magic auto-playing demo.** A fresh instance opens to a clean default
+  project (`buildDefaultProject`: factory tracks + clean kit, empty patterns,
+  no song). The "Factory Showcase" example is installed as a real, loadable,
+  deletable project file on first run (`installFactoryProject`, marker-guarded
+  so a user deletion sticks) — it is an EXAMPLE in the PROJECTS list, not
+  baked-in state. `makeShowcaseProject` builds its structure.
 
 ## Status & open items (as of 2026-07-06)
 

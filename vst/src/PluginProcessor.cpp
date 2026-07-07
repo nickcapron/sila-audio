@@ -56,9 +56,14 @@ SilaAudioProcessor::SilaAudioProcessor()
     pSmallSpeaker = apvts.getRawParameterValue ("smallSpeaker");
 
     // Install the bundled factory pack into ~/SILA/library on load (idempotent), so
-    // the demo project's samples resolve for brand-new users. Independent of the
-    // audio device (runs even before prepareToPlay).
+    // the factory samples resolve for brand-new users. Independent of the audio
+    // device (runs even before prepareToPlay).
     installFactoryLibrary();
+
+    // Install the "Factory Showcase" EXAMPLE into ~/SILA/projects on first run
+    // (once, marker-guarded). A fresh instance opens to a clean project; the
+    // showcase is there to LOAD from the PROJECTS list, not to auto-play.
+    installFactoryProject();
 }
 
 SilaAudioProcessor::~SilaAudioProcessor() = default;
@@ -186,6 +191,46 @@ const FactoryMapEntry kFactoryMap[] = {
     { "cz1 mini crystal keys.wav",      "33. Keys - Piano" },
     { "cz1 choir vox pad.wav",          "32. Pad - Choir" },
 };
+
+// The 8-lane factory kit, shared by the clean default project and the showcase so
+// their sample paths can't drift. `dist` swaps the four drum lanes to the RD-6
+// distortion variants (the DROP's heavier kit). `movement` adds the synth motion
+// (CZ bass acid wobble + choir-pad tremolo) — ON for the showcase, OFF for the
+// clean starter so a new user's canvas is neutral.
+std::vector<sila::engine::LaneSound> factoryKit (bool dist, bool movement)
+{
+    using namespace sila::engine;
+    std::vector<LaneSound> k (8);
+    k[0].samples = { SampleRef { dist ? "SILA Factory/01. Kick/rd-6 bass distortion.wav"
+                                      : "SILA Factory/01. Kick/bass drum rd-6.wav" } };
+    k[1].samples = { SampleRef { dist ? "SILA Factory/02. Snare/rd-6 snare distortion.wav"
+                                      : "SILA Factory/02. Snare/rd-6 snare.wav" } };
+    k[2].samples = { SampleRef { dist ? "SILA Factory/03. Clap/rd-6 clap distortion.wav"
+                                      : "SILA Factory/03. Clap/rd-6 clap.wav" } };
+    k[3].samples = { SampleRef { dist ? "SILA Factory/04. Hi-Hat Closed/rd-6 closed hat distortion.wav"
+                                      : "SILA Factory/04. Hi-Hat Closed/rd-6 closedhat.wav" } };
+    // The OH lane is velocity-LAYERED: soft hits = open hat, hard hits (vel >= 100)
+    // = the RD-6 cymbal — a crash without spending a 9th lane.
+    k[4].samples = { SampleRef { "SILA Factory/05. Hi-Hat Open/rd-6 openhat.wav", 0, 99 },
+                     SampleRef { dist ? "SILA Factory/06. Cymbal/rd-6 cymbal distortion.wav"
+                                      : "SILA Factory/06. Cymbal/rd-6 cymbal.wav", 100, 127 } };
+    k[5].samples = { SampleRef { "SILA Factory/21. Bass - Sub/cz-1 mini bass 01.wav" } };
+    k[6].samples = { SampleRef { "SILA Factory/33. Keys - Piano/cz1 mini crystal keys.wav" } };
+    k[7].samples = { SampleRef { "SILA Factory/32. Pad - Choir/cz1 choir vox pad.wav" } };
+
+    if (movement)
+    {
+        // A synced cutoff LFO gives the CZ bass an acid wobble; a slow free-run
+        // tremolo breathes the pad. (The engine reads kit LFO in pattern + song mode.)
+        k[5].lfoShape = LfoShape::Triangle; k[5].lfoDest = LfoDest::Cutoff;
+        k[5].lfoRate = 6.0f; k[5].lfoDepth = 0.30f; k[5].lfoSync = true;
+        k[5].cutoff = 0.55f; k[5].resonance = 0.55f;
+        k[7].lfoShape = LfoShape::Sine; k[7].lfoDest = LfoDest::Volume;
+        k[7].lfoRate = 0.5f; k[7].lfoDepth = 0.22f; k[7].lfoSync = false;
+        k[7].cutoff = 0.7f;
+    }
+    return k;
+}
 }
 
 void SilaAudioProcessor::installFactoryLibrary()
@@ -232,10 +277,11 @@ void SilaAudioProcessor::prepareToPlay (double sr, int /*samplesPerBlock*/)
 
     if (liveProject.load (std::memory_order_acquire) == nullptr)
     {
-        // First prepare: author the in-code demo project + its sampler bank. The
+        // First prepare: author the clean default project + its sampler bank. The
         // factory pack it references is installed in the constructor (above), so the
-        // sample files already resolve here.
-        liveProject.store (buildDemoProject (sr), std::memory_order_release);
+        // sample files already resolve here. (State-load paths swap in saved work,
+        // so this only fires for a genuinely fresh instance.)
+        liveProject.store (buildDefaultProject (sr), std::memory_order_release);
     }
     else
     {
@@ -548,17 +594,17 @@ void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerSetPtr bank)
     reapRetired();   // message thread; keeps the retire lists from growing on reload
 }
 
-// The factory project new users open: a 24-bar showcase song in C minor built
-// from the bundled RD-6 drum kit + CZ-1 mini synth voices (installed to
-// ~/SILA/library on first run, see installFactoryLibrary). It deliberately tours
-// the feature set: per-pattern kits (distortion drums in the DROP, toms in the
-// BUILD, a CZ-pluck melody voice in the BREAK), velocity LAYERS (the OH lane's
-// hard hits are the RD-6 cymbal = crash), long patterns (32-step INTRO/DROP/
-// OUTRO, a 64-step BREAK walking Cm - Ab - Eb - Bb), p-locks (the OUTRO bass
-// cutoff walks down), plus trig conditions / probability / micro-timing /
-// retrig. currentPattern 0 is the main groove that auto-plays; the SONG (Song
-// Mode) is the full arrangement. Swing is live from the "swing" APVTS param.
-SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
+// The "Factory Showcase" EXAMPLE project (structure only — no sample rate, no
+// sampler side effect; installFactoryProject serialises this to a real project
+// file on first run). A 24-bar song in C minor from the bundled RD-6 drum kit +
+// CZ-1 mini synth voices. It deliberately tours the feature set: per-pattern kits
+// (distortion drums in the DROP, toms in the BUILD, a CZ-pluck melody voice in
+// the BREAK), velocity LAYERS (the OH lane's hard hits are the RD-6 cymbal =
+// crash), long patterns (32-step INTRO/DROP/OUTRO, a 64-step BREAK walking
+// Cm - Ab - Eb - Bb), p-locks (the OUTRO bass cutoff walks down), plus trig
+// conditions / probability / micro-timing / retrig. currentPattern 0 is the main
+// groove; the SONG (Song Mode) is the full arrangement.
+SilaAudioProcessor::ProjectPtr SilaAudioProcessor::makeShowcaseProject()
 {
     using namespace sila::engine;
 
@@ -575,39 +621,9 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
     }
     proj->keyRoot = 0; proj->keyScale = "minor";   // C minor — drives the keyboard UI
 
-    // One pattern's kit (8 lanes of library-relative samples). `dist` swaps the four
-    // drum lanes to the RD-6 distortion variants for the heavier DROP (kit-per-pattern).
-    auto makeKit = [] (bool dist)
-    {
-        std::vector<LaneSound> k (8);
-        k[0].samples = { SampleRef { dist ? "SILA Factory/01. Kick/rd-6 bass distortion.wav"
-                                          : "SILA Factory/01. Kick/bass drum rd-6.wav" } };
-        k[1].samples = { SampleRef { dist ? "SILA Factory/02. Snare/rd-6 snare distortion.wav"
-                                          : "SILA Factory/02. Snare/rd-6 snare.wav" } };
-        k[2].samples = { SampleRef { dist ? "SILA Factory/03. Clap/rd-6 clap distortion.wav"
-                                          : "SILA Factory/03. Clap/rd-6 clap.wav" } };
-        k[3].samples = { SampleRef { dist ? "SILA Factory/04. Hi-Hat Closed/rd-6 closed hat distortion.wav"
-                                          : "SILA Factory/04. Hi-Hat Closed/rd-6 closedhat.wav" } };
-        // The OH lane is velocity-LAYERED: soft hits = open hat, hard hits
-        // (vel >= 100) = the RD-6 cymbal — a crash without spending a 9th lane.
-        k[4].samples = { SampleRef { "SILA Factory/05. Hi-Hat Open/rd-6 openhat.wav", 0, 99 },
-                         SampleRef { dist ? "SILA Factory/06. Cymbal/rd-6 cymbal distortion.wav"
-                                          : "SILA Factory/06. Cymbal/rd-6 cymbal.wav", 100, 127 } };
-        k[5].samples = { SampleRef { "SILA Factory/21. Bass - Sub/cz-1 mini bass 01.wav" } };
-        k[6].samples = { SampleRef { "SILA Factory/33. Keys - Piano/cz1 mini crystal keys.wav" } };
-        k[7].samples = { SampleRef { "SILA Factory/32. Pad - Choir/cz1 choir vox pad.wav" } };
-
-        // Synth movement: a synced cutoff LFO gives the CZ bass an acid wobble; a
-        // slow free-run tremolo breathes the pad. (The engine reads kit LFO in both
-        // pattern and song mode.)
-        k[5].lfoShape = LfoShape::Triangle; k[5].lfoDest = LfoDest::Cutoff;
-        k[5].lfoRate = 6.0f; k[5].lfoDepth = 0.30f; k[5].lfoSync = true;
-        k[5].cutoff = 0.55f; k[5].resonance = 0.55f;
-        k[7].lfoShape = LfoShape::Sine; k[7].lfoDest = LfoDest::Volume;
-        k[7].lfoRate = 0.5f; k[7].lfoDepth = 0.22f; k[7].lfoSync = false;
-        k[7].cutoff = 0.7f;
-        return k;
-    };
+    // Per-pattern kit: `dist` swaps the drum lanes to the RD-6 distortion variants
+    // (see factoryKit). Movement (synth LFOs) on for the showcase.
+    auto makeKit = [] (bool dist) { return factoryKit (dist, true); };
 
     // Column helpers: Cx/Cnx build an n-step column (16 = 1 bar, 32 = 2 bars, …);
     // Cx = drum hits {step, vel}, Cnx = pitched notes {step, vel, semitones from C}.
@@ -789,10 +805,92 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDemoProject (double sr)
         proj->activeSong = 0;
     }
 
-    // Build the matching sampler set from the kits (file-backed; resampled to sr).
+    return proj;   // pure structure; the caller builds the sampler bank
+}
+
+// The clean starter a fresh instance opens to: the 8 factory tracks with the
+// clean kit loaded (anything the user programs is immediately audible), but
+// EMPTY patterns and no song — nothing plays by itself. This replaces the old
+// auto-playing baked-in demo; the showcase now lives in the PROJECTS list.
+SilaAudioProcessor::ProjectPtr SilaAudioProcessor::buildDefaultProject (double sr)
+{
+    using namespace sila::engine;
+
+    auto proj = std::make_shared<Project>();
+
+    const char* names[8]  = { "Kick", "Snare", "Perc", "CH", "OH", "Bass", "Keys", "Pad" };
+    const char* colors[8] = { "#ff5a5a", "#ffae57", "#ffd23f", "#34e3c4",
+                              "#5fd0e0", "#8b6cf0", "#c66cf0", "#6c8cf0" };
+    for (int i = 0; i < 8; ++i)
+    {
+        Track t; t.id = names[i]; t.name = names[i]; t.color = colors[i];
+        proj->tracks.push_back (std::move (t));
+    }
+    proj->keyRoot = 0; proj->keyScale = "minor";
+
+    // Kit only, no steps: pattern 0 has the clean sounds loaded (no synth movement
+    // — a neutral canvas) while its step columns stay unauthored (silent). The UI
+    // renders an empty grid for an unauthored slot, so the user sees 8 empty lanes,
+    // each already holding a sound.
+    proj->patternBank.kits[0] = factoryKit (false, false);
+    proj->currentPattern = 0;
+
     auto set = std::make_shared<const SamplerSet> (buildBankForProject (*proj, sr));
     liveSamplers.store (set, std::memory_order_release);
     return proj;
+}
+
+void SilaAudioProcessor::installFactoryProject()
+{
+    using namespace sila::engine;
+
+    const auto silaRoot = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                              .getChildFile ("SILA");
+    const auto marker = silaRoot.getChildFile (".factory_project_installed");
+    if (marker.existsAsFile())
+        return;   // ran once already — respect a user who deleted the showcase
+
+    const auto file = projectsDir().getChildFile ("Factory Showcase.json");
+    if (! file.existsAsFile())   // never clobber a same-named file the user has
+    {
+        auto proj = makeShowcaseProject();
+
+        // Write the same { project, params } shape the Save route produces, so
+        // loading the showcase behaves exactly like loading a user project. The
+        // params block encodes pattern 0's kit mix; convertTo0to1 keeps it robust
+        // to parameter-range changes.
+        auto* root   = new juce::DynamicObject();
+        root->setProperty ("project", projectToVar (*proj));
+
+        auto* params = new juce::DynamicObject();
+        auto setNorm = [&] (const juce::String& id, float value)
+        {
+            if (auto* p = apvts.getParameter (id))
+                params->setProperty (id, (double) p->convertTo0to1 (value));
+        };
+        const auto& kit0 = proj->patternBank.kits[0];
+        for (int s = 0; s < kMaxTracks; ++s)
+        {
+            const LaneSound ls = s < (int) kit0.size() ? kit0[(size_t) s] : LaneSound {};
+            const juce::String pfx = "t" + juce::String (s) + "_";
+            setNorm (pfx + "vol",    ls.volume);
+            setNorm (pfx + "pan",    ls.pan);
+            setNorm (pfx + "cutoff", ls.cutoff);
+            setNorm (pfx + "res",    ls.resonance);
+            setNorm (pfx + "fmode",  (float) (int) ls.filterMode);
+        }
+        setNorm ("masterVol", 1.0f);
+        setNorm ("swing", 0.0f);
+        setNorm ("smallSpeaker", 0.0f);
+        setNorm ("songMode", 1.0f);   // load the showcase with its arrangement engaged
+        root->setProperty ("params", juce::var (params));
+
+        projectsDir().createDirectory();
+        file.replaceWithText (juce::JSON::toString (juce::var (root), false));
+    }
+
+    silaRoot.createDirectory();
+    marker.create();   // only ever attempt the install once
 }
 
 void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,

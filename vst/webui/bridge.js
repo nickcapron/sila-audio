@@ -1552,8 +1552,28 @@ async function refreshProjectList() {
     label.textContent = name;
     label.onclick = () => loadProject(name);
     row.appendChild(label);
+    // Delete button (2-click arm, so a stray click can't wipe a project).
+    const del = document.createElement("button");
+    del.className = "proj-del";
+    del.textContent = "✕";
+    del.title = "delete this project file";
+    del.onclick = (e) => {
+      e.stopPropagation();
+      if (del.classList.contains("armed")) { deleteProject(name); return; }
+      del.classList.add("armed"); del.textContent = "sure?";
+      setTimeout(() => { del.classList.remove("armed"); del.textContent = "✕"; }, 2500);
+    };
+    row.appendChild(del);
     projListEl.appendChild(row);
   }
+}
+
+async function deleteProject(name) {
+  try {
+    const res = await POST("/projects/delete", { name });
+    if (res && res.deleted) { setStatus(`deleted "${res.deleted}"`, true); refreshProjectList(); }
+    else setStatus("delete failed: " + ((res && res.error) || "?"), false);
+  } catch { setStatus("delete failed", false); }
 }
 
 async function saveProject() {

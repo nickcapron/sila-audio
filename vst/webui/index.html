@@ -105,9 +105,12 @@
       padding: 6px 14px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: box-shadow .12s, filter .12s;
     }
     #proj-save:hover { box-shadow: 0 0 14px rgba(52,227,196,.35); }
-    .proj-item { display: flex; justify-content: space-between; }
-    .proj-item .del { color: var(--text-dim); padding: 0 6px; }
-    .proj-item .del:hover { color: #ffae57; }
+    .proj-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .proj-item > span { flex: 1; }
+    .proj-del { flex: 0 0 auto; border: none; background: transparent; color: var(--text-dim);
+      cursor: pointer; padding: 2px 8px; border-radius: 5px; font-size: 12px; line-height: 1; }
+    .proj-del:hover { color: #ff6b6b; }
+    .proj-del.armed { color: #fff; background: #c0392b; font-size: 11px; }
     /* themed sliders (teal by default; .pan/.res are purple) */
     input[type=range] { -webkit-appearance: none; appearance: none; width: 120px; background: transparent; cursor: pointer; }
     input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 3px; background: #1c2836; }

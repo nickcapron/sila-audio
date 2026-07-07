@@ -184,14 +184,27 @@ private:
     void spawnVoice (const sila::engine::TrigEvent& ev, int startOffset,
                      const SamplerBank* bank, double samplesPer16);
 
-    // Build the in-code demo project; returns the snapshot and (re)builds the
-    // parallel sampler array. Replaced by UI-authored state in later steps.
-    ProjectPtr buildDemoProject (double sampleRate);
+    // The clean starter a FRESH instance opens to: the 8 factory tracks with the
+    // clean kit loaded (so anything the user programs is immediately audible), but
+    // empty patterns and no song — nothing plays by itself. Builds + stores the
+    // sampler bank. Message/init thread.
+    ProjectPtr buildDefaultProject (double sampleRate);
+
+    // Pure structure of the "Factory Showcase" example project (no sample rate, no
+    // sampler side effect) — serialised to a real project file on first run so the
+    // demo is a loadable EXAMPLE, not magic auto-playing state. See
+    // installFactoryProject.
+    static ProjectPtr makeShowcaseProject();
 
     // Install the bundled factory sample pack (RD-6 + CZ-1 mini) into ~/SILA/library
     // on first run, so new users open to the showcase song with sound. Idempotent:
     // skips any file that already exists (never clobbers the user's library).
     void installFactoryLibrary();
+
+    // Write the "Factory Showcase" example to ~/SILA/projects on first run (once,
+    // marker-guarded so a user who DELETES it isn't re-served it). Never clobbers a
+    // same-named file the user already has. Runs in the constructor.
+    void installFactoryProject();
 
     // Build a sampler for one track from its sample layers, resampling each file
     // to `sr` (message-thread file I/O). Shared by assignment + rate-change rebuild.
