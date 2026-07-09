@@ -596,14 +596,17 @@ void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerSetPtr bank)
 
 // The "Factory Showcase" EXAMPLE project (structure only — no sample rate, no
 // sampler side effect; installFactoryProject serialises this to a real project
-// file on first run). A 24-bar song in C minor from the bundled RD-6 drum kit +
-// CZ-1 mini synth voices. It deliberately tours the feature set: per-pattern kits
-// (distortion drums in the DROP, toms in the BUILD, a CZ-pluck melody voice in
-// the BREAK), velocity LAYERS (the OH lane's hard hits are the RD-6 cymbal =
-// crash), long patterns (32-step INTRO/DROP/OUTRO, a 64-step BREAK walking
-// Cm - Ab - Eb - Bb), p-locks (the OUTRO bass cutoff walks down), plus trig
-// conditions / probability / micro-timing / retrig. currentPattern 0 is the main
-// groove; the SONG (Song Mode) is the full arrangement.
+// file on first run). "Chrome Corridors": an ORIGINAL 26-bar piece in C
+// Mixolydian written as a 16-bit-JRPG homage (Chrono Trigger-era Mitsuda vibe —
+// hypnotic bell arpeggios, tribal tom groove, wistful pluck melody, choir pad —
+// all original notes, no borrowed melody). Built from the bundled RD-6 drums +
+// CZ-1 mini voices, and it still tours the feature set: per-pattern kits (the
+// Keys lane is crystal-bell arps in some scenes, the CZ pluck melody in others;
+// toms live on the Perc lane throughout), velocity LAYERS (OH lane hard hits =
+// the RD-6 cymbal, tom lane splits hi/lo), long patterns (32-step scenes, 64-step
+// melodies/bridge with real chord movement: C - Gm - Bb - F / Am - F - Bb - C),
+// p-locks (the OUTRO bass darkens note by note), and per-row song tempo (112 BPM,
+// Standalone). currentPattern 0 is the groove; the SONG is the full arrangement.
 SilaAudioProcessor::ProjectPtr SilaAudioProcessor::makeShowcaseProject()
 {
     using namespace sila::engine;
@@ -619,11 +622,20 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::makeShowcaseProject()
         Track t; t.id = names[i]; t.name = names[i]; t.color = colors[i];
         proj->tracks.push_back (std::move (t));
     }
-    proj->keyRoot = 0; proj->keyScale = "minor";   // C minor — drives the keyboard UI
+    proj->keyRoot = 0; proj->keyScale = "mixolydian";   // C Mixolydian — the JRPG mode
 
-    // Per-pattern kit: `dist` swaps the drum lanes to the RD-6 distortion variants
-    // (see factoryKit). Movement (synth LFOs) on for the showcase.
-    auto makeKit = [] (bool dist) { return factoryKit (dist, true); };
+    // The piece's kit: clean drums, toms on the Perc lane throughout (tribal
+    // percussion, no clap), and the CZ bass softened from acid wobble to a slow
+    // gentle cutoff sway that suits the modal calm.
+    auto makeKit = []
+    {
+        auto k = factoryKit (false, true);
+        k[2].samples = { SampleRef { "SILA Factory/09. Tom/rd-6 hightom.wav", 0, 99 },
+                         SampleRef { "SILA Factory/09. Tom/rd-6 low tom.wav", 100, 127 } };
+        k[5].lfoRate = 0.6f; k[5].lfoDepth = 0.10f; k[5].lfoSync = false;
+        k[5].cutoff = 0.62f; k[5].resonance = 0.22f;
+        return k;
+    };
 
     // Column helpers: Cx/Cnx build an n-step column (16 = 1 bar, 32 = 2 bars, …);
     // Cx = drum hits {step, vel}, Cnx = pitched notes {step, vel, semitones from C}.
@@ -649,158 +661,223 @@ SilaAudioProcessor::ProjectPtr SilaAudioProcessor::makeShowcaseProject()
     };
     auto empty = [] (int n = 16) { return std::vector<Step> ((size_t) n); };
 
-    // The driving 16th acid bass, reused by the GROOVE/BUILD patterns.
-    auto grooveBass = [&] { return Cn ({ {0,112,0},{2,78,0},{3,86,12},{4,96,0},{6,78,0},{7,86,10},
-                                         {8,112,0},{10,78,0},{11,86,12},{12,96,7},{14,80,5},{15,86,0} }); };
+    // A one-bar column tiled across multi-bar patterns (percussion-engine reuse).
+    auto tile = [] (const std::vector<Step>& bar, int bars)
+    {
+        std::vector<Step> v; v.reserve (bar.size() * (size_t) bars);
+        for (int b = 0; b < bars; ++b) v.insert (v.end(), bar.begin(), bar.end());
+        return v;
+    };
+
+    // ── The percussion engine (one bar, shared by the GROOVE/MELODY scenes) ────
+    // No four-on-the-floor: a syncopated tribal figure — kick on the 1, the "and"
+    // of 2, and 3&; rolling hi/lo toms; a constant 16th shaker (soft closed hats);
+    // one open-hat breath; a single soft rim-like snare late in the bar.
+    const auto kickBar = C ({ {0,104},{7,72},{10,92} });
+    const auto tomBar  = C ({ {2,80},{5,106},{8,78},{13,84},{15,108} });
+    const auto ohBar   = C ({ {6,58} });
+    const auto rimBar  = C ({ {12,48} });
+    std::vector<Step> shakerBar (16);
+    for (int i = 0; i < 16; ++i)
+    {
+        shakerBar[(size_t) i].active   = true;
+        shakerBar[(size_t) i].velocity = (i % 4 == 0) ? 56 : (i % 2 == 0) ? 46 : 38;
+    }
+
+    // The bell arpeggio (crystal keys): an up-down 8th figure on the C chord,
+    // with a Mixolydian D'-neighbour turn in its second bar. Hypnotic on purpose.
+    auto arpBarsC = [&] (int velHi, int velLo)
+    {
+        std::vector<Step> a (32);
+        const int tones1[8] = { 0, 4, 7, 12, 16, 12, 7, 4 };
+        const int tones2[8] = { 0, 4, 7, 12, 14, 12, 7, 4 };
+        for (int i = 0; i < 8; ++i)
+        {
+            auto& s1 = a[(size_t) (i * 2)];
+            s1.active = true; s1.velocity = (i % 2 == 0) ? velHi : velLo; s1.pitchOffset = tones1[i];
+            auto& s2 = a[(size_t) (16 + i * 2)];
+            s2.active = true; s2.velocity = (i % 2 == 0) ? velHi : velLo; s2.pitchOffset = tones2[i];
+        }
+        return a;
+    };
 
     auto& bank = proj->patternBank;
 
-    // ── Slot 0 · GROOVE (the main loop) — kept SPACIOUS on purpose: it's home
-    //    base, so the BUILD/DROP add energy to it rather than competing. Clap sits
-    //    out (the snare owns the backbeat), the bass breathes instead of running
-    //    16ths (that driving line is saved for the BUILD), hats are a clean pulse. ─
+    // ── Slot 0 · GROOVE (2 bars — home base: tribal engine + pedal bass + bells) ─
     {
-        auto snare = C ({ {4,108},{12,108},{7,60} });
-        snare[7].trig  = TrigCondition::OneIn2;     // one ghost, every other bar
-        auto ch = C ({ {0,52},{2,60},{4,52},{6,60},{8,52},{10,60},{12,52},{14,60} });
-        ch[6].microTiming = 10;                     // a touch of shuffle on the "&"
+        auto kick = tile (kickBar, 2);
+        kick[30].active = true; kick[30].velocity = 64;    // bar-2 pickup
+        auto toms = tile (tomBar, 2);
+        toms[31].active = true; toms[31].velocity = 110;   // roll back into the loop
         bank.slots[0] = {
-            C ({ {0,115},{4,115},{8,115},{12,115} }),   // kick 4-on-the-floor
-            snare,
-            empty(),                                    // clap rests in the groove
-            ch,                                         // steady offbeat hats
-            C ({ {6,60},{14,68} }),                     // open-hat lift on the "&"s
-            // Spacious bass: root + an octave pickup + a fifth — room between hits.
-            Cn ({ {0,110,0},{3,82,12},{8,104,0},{11,82,12},{14,80,7} }),
-            sustain (Cn ({ {2,84,7},{10,80,3} }), 2.0f),// two crystal-key stabs
-            sustain (Cn ({ {0,52,0} }), 16.0f),         // sustained choir pad
+            kick,
+            tile (rimBar, 2),
+            toms,
+            tile (shakerBar, 2),
+            tile (ohBar, 2),
+            // Pedal C, syncopated, with Bb/G/A colour tones (the Mixolydian glow).
+            Cnx (32, { {0,102,0},{3,78,0},{6,84,10},{10,92,0},{13,78,7},
+                       {16,102,0},{19,78,0},{22,84,10},{26,92,0},{29,80,9} }),
+            arpBarsC (70, 58),
+            sustain (Cnx (32, { {0,50,0},{16,50,0} }), 16.0f),
         };
     }
-    // ── Slot 1 · INTRO (2 bars: pad-led bar 1; hats + kick pickup arrive bar 2,
-    //    a Bb bass pickup pulls the ear back to C for the groove) ──────────────
-    bank.slots[1] = {
-        Cx (32, { {0,100},{16,100},{24,88},{30,72} }),
-        empty (32), empty (32),
-        Cx (32, { {18,48},{22,48},{26,48},{30,50} }),
-        empty (32),
-        Cnx (32, { {0,90,0},{16,90,0},{28,72,-2} }),
-        sustain (Cnx (32, { {8,58,12},{24,58,15} }), 3.0f),
-        sustain (Cnx (32, { {0,55,0},{16,55,0} }), 16.0f),
-    };
-    // ── Slot 2 · BUILD (rising tension into the drop) ────────────────────────
+    // ── Slot 1 · OPENING (2 bars — bells + pad alone; soft toms wake in bar 2 and
+    //    a two-note bass pickup leads into the groove) ────────────────────────────
     {
-        auto snare = C ({ {8,90},{10,95},{12,100},{13,105},{14,110},{15,118} });
-        snare[13].retrig = 2; snare[14].retrig = 3;
-        snare[15].retrig = 4; snare[15].retrigFade = 0.5f;   // accelerating roll
-        bank.slots[2] = {
-            C ({ {0,112},{4,112},{8,112},{12,112} }), snare,
-            C ({ {1,84},{3,108},{5,88},{7,112} }),   // hi/lo tom run (velocity layers)
-            C ({ {0,52},{1,42},{2,54},{3,42},{4,52},{5,42},{6,54},{7,42},
-                 {8,52},{9,42},{10,54},{11,42},{12,52},{13,42},{14,54},{15,46} }),
-            C ({ {14,70} }),
-            grooveBass(),
-            sustain (Cn ({ {2,84,7},{6,84,10},{10,84,12},{14,84,15} }), 2.0f),   // climbing stabs
-            sustain (Cn ({ {0,55,7} }), 16.0f),      // pad holds the dominant
+        auto toms = empty (32);
+        const std::pair<int,int> wake[] = { {18,60}, {21,66}, {24,58}, {29,62} };
+        for (auto h : wake) { toms[(size_t) h.first].active = true; toms[(size_t) h.first].velocity = h.second; }
+        bank.slots[1] = {
+            empty (32), empty (32),
+            toms,
+            empty (32), empty (32),
+            Cnx (32, { {24,70,0},{28,66,10} }),
+            arpBarsC (60, 48),
+            sustain (Cnx (32, { {0,58,0},{16,58,-2} }), 16.0f),   // C -> Bb pad shimmer
         };
     }
-    // ── Slot 3 · DROP (2 bars, RD-6 distortion kit, heaviest; the vel-120 hit on
-    //    the OH lane's downbeat is the CRASH via its velocity layer) ────────────
+    // ── Slot 2 · MELODY A (4 bars over C | C | Bb | F — the wistful pluck theme) ─
     {
-        auto clap = Cx (32, { {4,66},{12,66},{20,66},{28,66},{7,52} });
-        clap[7].trig = TrigCondition::OneIn2;
-        bank.slots[3] = {
-            Cx (32, { {0,120},{4,120},{8,120},{12,120},{14,90},
-                      {16,120},{20,120},{24,120},{28,120},{30,95} }),
-            Cx (32, { {4,115},{12,115},{20,115},{28,115} }),
-            clap,
-            Cx (32, { {0,60},{2,60},{4,60},{6,60},{8,60},{10,60},{12,60},{14,60},
-                      {16,60},{18,60},{20,60},{22,60},{24,60},{26,60},{28,60},{30,60} }),
-            Cx (32, { {0,120},{2,70},{6,70},{10,70},{14,70},{18,70},{22,70},{26,70},{30,70} }),
-            Cnx (32, { {0,120,0},{2,100,0},{4,120,12},{6,100,0},{8,120,0},{10,100,0},{12,120,12},{14,100,7},
-                       {16,120,0},{18,100,0},{20,120,12},{22,100,0},{24,120,0},{26,100,0},{28,120,15},{30,110,12} }),
-            sustain (Cnx (32, { {0,95,12},{4,95,15},{8,95,12},{12,95,19},
-                                {16,95,12},{20,95,15},{24,95,12},{28,95,17} }), 2.0f),
-            sustain (Cnx (32, { {0,60,0},{16,60,0} }), 16.0f),
-        };
-    }
-    // ── Slot 4 · BREAK (4 bars — the harmonic centrepiece: Cm → Ab → Eb → Bb,
-    //    voice-led pad roots, CZ-pluck melody (kit-swapped), kick returns bar 4) ─
-    {
-        const int r[4] = { 0, -4, 3, -2 };            // bar roots: Cm  Ab  Eb  Bb
-        std::vector<Step> bass (64), pad (64), ch (64);
+        auto toms = tile (tomBar, 4);
+        toms[60].active = true; toms[60].velocity = 100;   // bar-4 fill
+        toms[62].active = true; toms[62].velocity = 112;
+        auto oh = tile (ohBar, 4);
+        oh[0].active = true; oh[0].velocity = 102;         // soft crash opens the scene
+        const int roots[4] = { 0, 0, -2, 5 };
+        std::vector<Step> bass (64), pad (64);
         for (int b = 0; b < 4; ++b)
         {
+            const int r = roots[b];
             auto on = [&] (std::vector<Step>& col, int step, int vel, int note, float len = 0.0f)
             {
                 auto& s = col[(size_t) (b * 16 + step)];
                 s.active = true; s.velocity = vel; s.pitchOffset = note; s.length = len;
             };
-            on (bass, 0, 82, r[b]);  on (bass, 8, 74, r[b]);  on (bass, 12, 70, r[b] + 7);
-            on (pad,  0, 60, r[b], 16.0f);
-            for (int st : { 2, 6, 10, 14 }) on (ch, st, 44, 0);
+            on (bass, 0, 102, r);  on (bass, 3, 78, r);  on (bass, 6, 84, r + 7);
+            on (bass, 10, 92, r);  on (bass, 13, 78, r + 12);
+            on (pad, 0, 56, r, 16.0f);
         }
         auto melody = sustain (Cnx (64, {
-            {0,90,12},{4,85,15},{8,88,10},{12,84,7},          // Cm — falling answer
-            {16,88,8},{20,84,12},{24,86,15},{28,82,12},       // Ab — lifts
-            {32,90,15},{36,85,19},{40,88,15},{44,84,10},      // Eb — the peak
-            {48,88,10},{52,84,14},{56,86,17},{60,88,19} }),   // Bb — climbs back in
-            2.0f);
-        bank.slots[4] = {
-            Cx (64, { {48,88},{56,88} }),                     // heartbeat returns in bar 4
-            empty (64), empty (64),
-            ch, empty (64),
-            bass, melody, pad,
-        };
+            {0,96,16},{3,86,14},{6,90,12},{10,86,14},{13,80,9},      // E' D' C' D' A
+            {16,92,9},{19,84,7},{22,88,9},{26,92,14},{29,84,12},     // A  G  A  D' C'
+            {32,94,10},{35,86,12},{38,90,14},{42,88,17},{45,82,14},  // Bb C' D' F' D'
+            {48,92,16},{52,88,14},{56,90,12},{60,84,9} }),           // E' D' C' A
+            2.5f);
+        bank.slots[2] = { tile (kickBar, 4), tile (rimBar, 4), toms, tile (shakerBar, 4), oh,
+                          bass, melody, pad };
     }
-    // ── Slot 5 · OUTRO (2 bars, wind down: p-locked cutoff walks the bass darker
-    //    with each note; a soft crash opens it) ────────────────────────────────
+    // ── Slot 3 · MELODY B (4 bars over C | Gm | Bb | C — the answer, a third up,
+    //    fullest scene: real crash, extra kick on beat 2) ─────────────────────────
     {
-        auto bass = Cnx (32, { {0,80,0},{8,75,0},{16,72,0},{24,66,0} });
-        const float fade[4] = { 0.50f, 0.40f, 0.30f, 0.22f };
-        int fi = 0;
-        for (auto& s : bass) if (s.active) s.pCutoff = fade[fi++];
+        auto kick = tile (kickBar, 4);
+        for (int b = 0; b < 4; ++b)
+        {
+            auto& s = kick[(size_t) (b * 16 + 4)];
+            s.active = true; s.velocity = 78;
+        }
+        auto oh = tile (ohBar, 4);
+        oh[0].active = true; oh[0].velocity = 118;         // full crash — the peak
+        const int roots[4] = { 0, 7, -2, 0 };
+        std::vector<Step> bass (64), pad (64);
+        for (int b = 0; b < 4; ++b)
+        {
+            const int r = roots[b];
+            auto on = [&] (std::vector<Step>& col, int step, int vel, int note, float len = 0.0f)
+            {
+                auto& s = col[(size_t) (b * 16 + step)];
+                s.active = true; s.velocity = vel; s.pitchOffset = note; s.length = len;
+            };
+            on (bass, 0, 102, r);  on (bass, 3, 78, r);  on (bass, 6, 84, r + 7);
+            on (bass, 10, 92, r);  on (bass, 13, 78, r + 12);
+            on (pad, 0, 56, r, 16.0f);
+        }
+        auto melody = sustain (Cnx (64, {
+            {0,98,19},{3,88,17},{6,92,16},{10,88,14},{13,84,16},     // G' F' E' D' E'
+            {16,94,14},{19,86,12},{22,90,10},{26,88,14},{29,82,12},  // D' C' Bb D' C'
+            {32,96,17},{35,88,19},{38,92,21},{42,90,19},{45,84,17},  // F' G' A' G' F'
+            {48,98,16},{52,90,14},{55,86,12},{58,88,9},{61,84,7} }), // E' D' C' A  G — falls to rest
+            2.5f);
+        bank.slots[3] = { kick, tile (rimBar, 4), tile (tomBar, 4), tile (shakerBar, 4), oh,
+                          bass, melody, pad };
+    }
+    // ── Slot 4 · BRIDGE (4 bars over Am | F | Bb | C — pad-led; the bells carry
+    //    the chords, percussion falls to a heartbeat, toms roll back in bar 4) ────
+    {
+        const int chords[4][4] = { {9,12,16,21}, {5,9,12,17}, {-2,2,5,10}, {0,4,7,12} };
+        const int shape[8]     = { 0, 1, 2, 3, 2, 1, 0, 1 };   // up-down bell figure
+        std::vector<Step> arp (64), bass (64), pad (64), ch (64);
+        for (int b = 0; b < 4; ++b)
+        {
+            for (int i = 0; i < 8; ++i)
+            {
+                auto& s = arp[(size_t) (b * 16 + i * 2)];
+                s.active = true; s.velocity = (i % 2 == 0) ? 66 : 54;
+                s.pitchOffset = chords[b][shape[i]];
+            }
+            auto& b0 = bass[(size_t) (b * 16)];
+            b0.active = true; b0.velocity = 86; b0.pitchOffset = chords[b][0];
+            auto& b1 = bass[(size_t) (b * 16 + 10)];
+            b1.active = true; b1.velocity = 70; b1.pitchOffset = chords[b][0];
+            auto& p0 = pad[(size_t) (b * 16)];
+            p0.active = true; p0.velocity = 62; p0.pitchOffset = chords[b][0]; p0.length = 16.0f;
+            for (int st : { 2, 6, 10, 14 })
+            {
+                auto& c = ch[(size_t) (b * 16 + st)];
+                c.active = true; c.velocity = 40;
+            }
+        }
+        auto kick = empty (64);
+        kick[48].active = true; kick[48].velocity = 84;    // heartbeat returns, bar 4
+        kick[56].active = true; kick[56].velocity = 86;
+        auto toms = empty (64);
+        const std::pair<int,int> roll[] = { {56,84}, {58,88}, {60,104}, {62,110} };
+        for (auto h : roll) { toms[(size_t) h.first].active = true; toms[(size_t) h.first].velocity = h.second; }
+        bank.slots[4] = { kick, empty (64), toms, ch, empty (64), bass, arp, pad };
+    }
+    // ── Slot 5 · OUTRO (2 bars — bells + pad settle home; the bass darkens note
+    //    by note via p-locked cutoff; a soft cymbal lets it go) ───────────────────
+    {
+        auto bass = Cnx (32, { {0,76,0},{16,70,0} });
+        bass[0].pCutoff = 0.45f; bass[16].pCutoff = 0.28f;
         bank.slots[5] = {
-            Cx (32, { {0,100},{8,85},{16,92},{24,72} }),
-            empty (32), empty (32),
-            Cx (32, { {4,36},{12,34},{20,30},{28,26} }),
-            Cx (32, { {0,104} }),                            // soft crash into the outro
+            empty (32), empty (32), empty (32),
+            Cx (32, { {4,34},{12,30},{20,26},{28,22} }),   // shaker fading out
+            Cx (32, { {0,104} }),                          // soft cymbal release
             bass,
-            sustain (Cnx (32, { {8,55,12},{24,45,7} }), 4.0f),   // last key echoes
-            sustain (Cnx (32, { {0,55,0},{16,50,0} }), 16.0f),
+            arpBarsC (54, 42),
+            sustain (Cnx (32, { {0,54,0},{16,50,0} }), 16.0f),
         };
     }
 
-    // Per-pattern kits: clean RD-6 everywhere except the DROP, which swaps in the
-    // distortion drums (the kit-per-pattern showcase).
-    for (int s : { 0, 1, 2, 4, 5 }) bank.kits[(size_t) s] = makeKit (false);
-    bank.kits[3] = makeKit (true);
-    // BUILD: the Perc lane becomes the RD-6 toms (hi soft / lo hard velocity
-    // split) — kit-per-pattern means different SOUNDS, not just FX variants.
-    bank.kits[2][2].samples = { SampleRef { "SILA Factory/09. Tom/rd-6 hightom.wav", 0, 99 },
-                                SampleRef { "SILA Factory/09. Tom/rd-6 low tom.wav", 100, 127 } };
-    // BREAK: the Keys lane swaps to the CZ pluck (a new voice marks the scene
-    // change) and the choir pad breathes a little deeper.
-    bank.kits[4][6].samples = { SampleRef { "SILA Factory/27. Lead - Pluck/cz1 mini pluck bass.wav" } };
-    bank.kits[4][7].lfoDepth = 0.30f;
+    // Every scene shares the base kit; the two MELODY scenes swap the Keys lane
+    // from crystal bells to the CZ pluck — the melody arrives as a NEW VOICE
+    // (kit-per-pattern as an arrangement tool), and the pad breathes deeper there.
+    for (int s = 0; s < 6; ++s) bank.kits[(size_t) s] = makeKit();
+    for (int s : { 2, 3 })
+    {
+        bank.kits[(size_t) s][6].samples = { SampleRef { "SILA Factory/27. Lead - Pluck/cz1 mini pluck bass.wav" } };
+        bank.kits[(size_t) s][7].lfoDepth = 0.28f;
+    }
 
-    proj->currentPattern = 0;            // pattern mode shows/plays the main groove
+    proj->currentPattern = 0;            // pattern mode shows/plays the groove
 
-    // ── Extended song (Song Mode): a 22-bar arrangement of the patterns above ─
+    // ── The song: a 26-bar arc that loops. Row +I = the pattern's authored
+    //    length. Row tempo 112 gives the piece its unhurried JRPG gait
+    //    (Standalone only — a DAW host owns tempo when hosted). ──────────────────
     {
         Song song;
-        song.name = "Factory Showcase";
+        song.name = "Chrome Corridors";
         song.end  = SongEnd::Loop;
-        // Row +I must equal the pattern's authored length (the pattern WRAPS
-        // inside the row): INTRO/DROP/OUTRO are 32-step, BREAK is 64-step.
-        //                    LABEL      PTN ↺  +I  BPM   MUTE
-        song.rows.push_back ({ "INTRO",   1, 1, 32, 0.0f, 0 });
-        song.rows.push_back ({ "GROOVE",  0, 4, 16, 0.0f, 0 });
-        song.rows.push_back ({ "BUILD",   2, 2, 16, 0.0f, 0 });
-        song.rows.push_back ({ "DROP",    3, 2, 32, 0.0f, 0 });
-        song.rows.push_back ({ "BREAK",   4, 1, 64, 0.0f, 0 });
-        song.rows.push_back ({ "BUILD",   2, 2, 16, 0.0f, 0 });
-        song.rows.push_back ({ "DROP",    3, 2, 32, 0.0f, 0 });
-        song.rows.push_back ({ "OUTRO",   5, 1, 32, 0.0f, 0 });
+        //                    LABEL         PTN ↺  +I   BPM    MUTE
+        song.rows.push_back ({ "OPENING",    1, 1, 32, 112.0f, 0 });
+        song.rows.push_back ({ "GROOVE",     0, 2, 32, 112.0f, 0 });
+        song.rows.push_back ({ "MELODY A",   2, 1, 64, 112.0f, 0 });
+        song.rows.push_back ({ "GROOVE",     0, 1, 32, 112.0f, 0 });
+        song.rows.push_back ({ "MELODY B",   3, 1, 64, 112.0f, 0 });
+        song.rows.push_back ({ "BRIDGE",     4, 1, 64, 112.0f, 0 });
+        song.rows.push_back ({ "MELODY A",   2, 1, 64, 112.0f, 0 });
+        song.rows.push_back ({ "OUTRO",      5, 1, 32, 112.0f, 0 });
         proj->songs.push_back (std::move (song));
         proj->activeSong = 0;
     }

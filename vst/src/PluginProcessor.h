@@ -41,7 +41,10 @@ public:
     bool acceptsMidi()  const override { return true;  }
     bool producesMidi() const override { return false; }
     bool isMidiEffect()  const override { return false; }
-    double getTailLengthSeconds() const override { return 0.5; }
+    // Ringing one-shots (choir pad, cymbal) decay for seconds after the last trig;
+    // hosts use this to size offline bounces — 0.5 s was clipping tails at the end
+    // of a render.
+    double getTailLengthSeconds() const override { return 8.0; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
