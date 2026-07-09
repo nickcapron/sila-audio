@@ -301,7 +301,9 @@ void SilaAudioProcessor::prepareToPlay (double sr, int /*samplesPerBlock*/)
 void SilaAudioProcessor::reapRetired()
 {
     // Message thread: free snapshots no audio-thread reader still holds (only
-    // this retire list references them => use_count() == 1).
+    // this retire list references them => use_count() == 1). retireMutex guards
+    // against a host state-load pushing from a loader thread mid-reap.
+    const std::scoped_lock lock (retireMutex);
     retiredProjects.erase (
         std::remove_if (retiredProjects.begin(), retiredProjects.end(),
                         [] (const ProjectPtr& p) { return p.use_count() <= 1; }),
@@ -515,7 +517,11 @@ void SilaAudioProcessor::assignTrackSamples (int slot, int lane,
 
     auto old = liveSamplers.exchange (std::make_shared<const SamplerSet> (std::move (*next)),
                                       std::memory_order_acq_rel);
-    if (old) retiredSamplers.push_back (std::move (old));
+    if (old)
+    {
+        const std::scoped_lock lock (retireMutex);
+        retiredSamplers.push_back (std::move (old));
+    }
 }
 
 void SilaAudioProcessor::rebuildSamplerBankForRate (double sr)
@@ -585,10 +591,15 @@ void SilaAudioProcessor::setProject (ProjectPtr proj, SamplerSetPtr bank)
     // atomically and retire the old ones (freed later by reapRetired). Publish
     // the bank first: for the one block where track count and bank size may
     // disagree, forEachTrig's bounds check simply skips — no glitch.
-    if (auto oldBank = liveSamplers.exchange (bank, std::memory_order_acq_rel))
-        retiredSamplers.push_back (std::move (oldBank));
-    if (auto oldProj = liveProject.exchange (proj, std::memory_order_acq_rel))
-        retiredProjects.push_back (std::move (oldProj));
+    {
+        // setProject can run on a host LOADER thread (setStateInformation), so the
+        // retire-list pushes are locked against a concurrent editor-timer reap.
+        const std::scoped_lock lock (retireMutex);
+        if (auto oldBank = liveSamplers.exchange (bank, std::memory_order_acq_rel))
+            retiredSamplers.push_back (std::move (oldBank));
+        if (auto oldProj = liveProject.exchange (proj, std::memory_order_acq_rel))
+            retiredProjects.push_back (std::move (oldProj));
+    }
 
     projectEpoch.fetch_add (1, std::memory_order_release);   // tell the editor to refresh
     reapRetired();   // message thread; keeps the retire lists from growing on reload

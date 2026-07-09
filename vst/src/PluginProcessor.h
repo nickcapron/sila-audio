@@ -7,6 +7,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <mutex>
 
 // SILA plugin processor.
 //
@@ -107,7 +108,11 @@ public:
         mutate (*next);
         ProjectPtr published = next;
         auto old = liveProject.exchange (published, std::memory_order_acq_rel);
-        if (old) retiredProjects.push_back (std::move (old));
+        if (old)
+        {
+            const std::scoped_lock lock (retireMutex);
+            retiredProjects.push_back (std::move (old));
+        }
         return published;
     }
 
@@ -242,7 +247,12 @@ private:
 
     // Live immutable project snapshot (RCU). Audio thread loads it per block.
     std::atomic<ProjectPtr> liveProject;
-    // Superseded snapshots awaiting reclamation on the message thread.
+    // Superseded snapshots awaiting reclamation. Guarded by retireMutex: writers
+    // are usually the message thread, but a host may call setStateInformation
+    // (-> setProject -> push) from a LOADER thread while the editor timer reaps —
+    // the lock closes that race. The AUDIO thread never touches these lists, so
+    // the mutex has zero real-time impact.
+    std::mutex retireMutex;
     std::vector<ProjectPtr> retiredProjects;
 
     // Performance scalar not (yet) an APVTS param; read by the audio thread.
@@ -258,7 +268,7 @@ private:
     // Live sampler bank (RCU). Audio thread loads it once per block; the message
     // thread swaps a track's sampler on assignment. Parallel to snapshot tracks.
     std::atomic<SamplerSetPtr> liveSamplers;
-    std::vector<SamplerSetPtr> retiredSamplers;   // awaiting reclamation (msg thread)
+    std::vector<SamplerSetPtr> retiredSamplers;   // awaiting reclamation (retireMutex)
     sila::engine::VoiceMixer mixer;     // ../sila/engine/audio.py
 
     // Per-track gain/pan, rebuilt each block from the snapshot and passed to the

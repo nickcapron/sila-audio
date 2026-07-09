@@ -134,8 +134,9 @@ Open items (public-release audit, 2026-07-06 — ordered by priority):
   detect a missing runtime and show a message; installer should bundle the
   Evergreen bootstrapper.
 - **Reaper multi-out routing recipe** — buses are built but never verified in a
-  DAW; a routing walkthrough doc is still owed. Run **pluginval** + test in
-  Reaper/Ableton/FL/Bitwig before release.
+  DAW; a routing walkthrough doc is still owed. **pluginval strictness 10
+  PASSES (2026-07-09)** — still do a human pass in Reaper/Ableton/FL/Bitwig
+  before release.
 - Library rename/move/delete **orphans** a loaded project's `SampleRef`
   (references are not rewritten; reload goes silent).
 - Demo-kit-only sessions reload silent (synth buffers aren't reconstructable);
