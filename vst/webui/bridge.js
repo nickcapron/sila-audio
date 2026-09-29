@@ -24,7 +24,24 @@
 import { getToggleState, getNativeFunction } from "./js/juce/index.js";
 
 const backendCall = getNativeFunction("backendCall");
-const api  = (method, path, body) => backendCall(method, path, body ?? null);
+
+// Unsaved-changes tracking (UI-side). Any mutating call that touches the PROJECT
+// (steps, kits, songs, key, tracks…) marks the session dirty; transport, library
+// file ops, import/export and the project browser itself don't. Save/load clear
+// it. Used to badge PROJECTS and to arm "load" so a click can't silently discard
+// work (see loadProject).
+let _dirty = false;
+const NON_DIRTY_PREFIXES = ["/transport", "/library", "/import", "/export", "/projects", "/sequencer",
+                            "/pattern/select"];   // browsing patterns isn't an edit
+function setDirty(d) {
+  _dirty = !!d;
+  const b = document.getElementById("projects-btn");
+  if (b) { b.classList.toggle("dirty", _dirty); b.title = _dirty ? "unsaved changes" : ""; }
+}
+const api  = (method, path, body) => {
+  if (method !== "GET" && !NON_DIRTY_PREFIXES.some(p => path.startsWith(p))) setDirty(true);
+  return backendCall(method, path, body ?? null);
+};
 const GET  = (p)    => api("GET", p);
 const PUT  = (p, b) => api("PUT", p, b);
 const POST = (p, b) => api("POST", p, b ?? null);
@@ -300,7 +317,7 @@ function renderTracks() {
   for (const track of project.tracks) {
     if (track.active === false) continue;   // soft-deleted in this pattern (shown as a re-add chip)
     const row = document.createElement("div");
-    row.className = "track-row";
+    row.className = "track-row" + (sel.trackId === track.id ? " selected" : "");
     row.dataset.trackId = track.id;
     if (track.color) row.style.setProperty("--track-color", track.color);   // cascades to dot + cells
 
@@ -409,8 +426,13 @@ function renderTracks() {
       const cell = document.createElement("div");
       cell.dataset.stepIdx = idx;
       paintCell(cell, track.id, idx, step);
-      cell.onclick = () => { toggleStep(track.id, idx); selectStep(track.id, idx); };
-      cell.oncontextmenu = (e) => { e.preventDefault(); resetStep(track.id, idx); };
+      // Left button: toggle + select, and start a paint gesture (drag across the
+      // row sets every pad you cross to the same state). Right button: inspect
+      // WITHOUT toggling (shift+right = reset the step's p-locks). Wheel: velocity.
+      cell.onmousedown = (e) => { if (e.button === 0) { e.preventDefault(); paintStart(track.id, idx); } };
+      cell.onmouseenter = () => paintOver(track.id, idx);
+      cell.oncontextmenu = (e) => { e.preventDefault(); if (e.shiftKey) resetStep(track.id, idx); else selectStep(track.id, idx); };
+      cell.addEventListener("wheel", (e) => { e.preventDefault(); nudgeVelocity(track.id, idx, e.deltaY < 0 ? 5 : -5); }, { passive: false });
       grid.appendChild(cell);
     }
 
@@ -437,6 +459,60 @@ function renderTracks() {
   if (addBtn) addBtn.disabled = project.tracks.length >= 8
                                 && ! project.tracks.some(t => t.active === false);
   _lastCol = {};   // force the playhead to re-light after a rebuild (page/length change)
+  updateEmptyHint();
+}
+
+// Onboarding: a fresh instance opens to a clean, silent pattern. Say so, and
+// point at the three ways in — until the first step is programmed.
+function updateEmptyHint() {
+  const hint = document.getElementById("empty-hint");
+  if (!hint || !project) return;
+  const empty = project.tracks.every(t => !(t.steps || []).some(s => s.active));
+  hint.classList.toggle("visible", empty);
+}
+
+// ── Pad gestures: drag-paint + wheel velocity ────────────────────────────────
+// A left mousedown toggles the pad and remembers the resulting state; crossing
+// other pads on the SAME lane while the button is held sets them to that state
+// (Digitakt-style "hold and sweep"). mouseup anywhere ends the gesture.
+let _paint = null;   // { trackId, state }
+function paintStart(trackId, idx) {
+  const step = findTrack(trackId)?.steps[idx];
+  if (!step) return;
+  _paint = { trackId, state: !step.active };
+  document.querySelector(`[data-track-id="${trackId}"]`)?.classList.add("painting");
+  toggleStep(trackId, idx);
+  selectStep(trackId, idx);
+}
+function paintOver(trackId, idx) {
+  if (!_paint || _paint.trackId !== trackId) return;
+  const step = findTrack(trackId)?.steps[idx];
+  if (!step || step.active === _paint.state) return;
+  step.active = _paint.state;
+  repaintCell(trackId, idx);
+  PUT(`/tracks/${trackId}/steps/${idx}`, { step });
+  updateEmptyHint();
+}
+function paintEnd() {
+  if (!_paint) return;
+  document.querySelector(`[data-track-id="${_paint.trackId}"]`)?.classList.remove("painting");
+  _paint = null;
+}
+document.addEventListener("mouseup", paintEnd);
+
+// Wheel over a pad nudges its velocity (the pad's glow follows). PUTs are
+// debounced per step so a long scroll doesn't spam the bridge.
+const _velTimers = {};
+function nudgeVelocity(trackId, idx, delta) {
+  const step = findTrack(trackId)?.steps[idx];
+  if (!step) return;
+  step.velocity = Math.max(1, Math.min(127, (step.velocity ?? 100) + delta));
+  repaintCell(trackId, idx);
+  if (sel.trackId === trackId && sel.idx === idx && inspKnobs.vel) inspKnobs.vel.set(step.velocity);
+  setStatus(`step ${idx + 1} · velocity ${step.velocity}`, true);
+  const key = trackId + ":" + idx;
+  clearTimeout(_velTimers[key]);
+  _velTimers[key] = setTimeout(() => { delete _velTimers[key]; PUT(`/tracks/${trackId}/steps/${idx}`, { step }); }, 150);
 }
 
 // ── Pattern selector (which PatternBank slot the grid edits / plays) ─────────
@@ -453,6 +529,7 @@ function renderPatternSelect() {
     patternSelectEl.appendChild(o);
   }
   patternSelectEl.value = cur;
+  renderPtnTools();
 }
 
 // ── Pattern length + pages (master length; pages of 16, view state only) ─────
@@ -501,6 +578,7 @@ async function setPatternLength(len) {
     project = await GET("/project");
   } catch { setStatus("length change failed", false); return; }
   if (currentPage >= pageCount()) currentPage = pageCount() - 1;
+  if (sel.idx !== null && sel.idx >= v) sel = { trackId: sel.trackId, idx: null };   // selection past the new end
   renderTracks();
   renderPatternMeta();
   const pages = pageCount();
@@ -525,9 +603,89 @@ async function selectPattern(i) {
   $("insp-empty").style.display = "block";
   $("insp-fields").style.display = "none";
   $("insp-title").textContent = "INSPECTOR";
-  $("insp-sub").textContent = "left-click toggles · right-click inspects";
+  $("insp-sub").textContent = "click toggles · right-click inspects";
   setStatus(`editing pattern ${patName(i)}`, true);
 }
+
+// ── Pattern clipboard (COPY / PASTE / CLR in the header) ─────────────────────
+// COPY remembers the edited slot; PASTE duplicates it (steps + kit + mix) over
+// the slot currently edited; CLR blanks every step here (2-click arm). Both
+// mutations re-fetch the grid.
+let _ptnClip = null;
+function renderPtnTools() {
+  const paste = $("ptn-paste"), copy = $("ptn-copy");
+  if (!paste || !copy) return;
+  const cur = project ? (project.current_pattern || 0) : 0;
+  paste.disabled = _ptnClip === null || _ptnClip === cur;
+  paste.title = _ptnClip === null ? "copy a pattern first"
+              : _ptnClip === cur ? `${patName(_ptnClip)} is copied — switch to another slot to paste`
+              : `paste ${patName(_ptnClip)} over ${patName(cur)} (steps + kit)`;
+  copy.classList.toggle("has-clip", _ptnClip !== null);
+}
+function copyPattern() {
+  if (!project) return;
+  _ptnClip = project.current_pattern || 0;
+  renderPtnTools();
+  setStatus(`copied pattern ${patName(_ptnClip)} — pick another slot and PASTE`, true);
+}
+async function pastePattern() {
+  if (!project || _ptnClip === null) return;
+  const to = project.current_pattern || 0;
+  if (to === _ptnClip) return;
+  try { await PUT("/pattern/copy", { from: _ptnClip, to }); project = await GET("/project"); }
+  catch { setStatus("paste failed", false); return; }
+  sel = { trackId: null, idx: null };
+  renderTracks(); renderPatternMeta(); hideTrimmer(); lfoPanel.classList.remove("visible");
+  setStatus(`pasted ${patName(_ptnClip)} → ${patName(to)}`, true);
+}
+let _clrTimer = null;
+async function clearPattern(btn) {
+  if (!project) return;
+  if (!btn.classList.contains("armed")) {
+    btn.classList.add("armed"); btn.textContent = "SURE?";
+    clearTimeout(_clrTimer);
+    _clrTimer = setTimeout(() => { btn.classList.remove("armed"); btn.textContent = "CLR"; }, 2500);
+    return;
+  }
+  clearTimeout(_clrTimer);
+  btn.classList.remove("armed"); btn.textContent = "CLR";
+  try { await PUT("/pattern/clear", {}); project = await GET("/project"); }
+  catch { setStatus("clear failed", false); return; }
+  sel = { trackId: null, idx: null };
+  renderTracks();
+  setStatus(`cleared pattern ${patName(project.current_pattern || 0)} (kit kept)`, true);
+}
+
+// "Song Mode" only means something once the project has a song; dim it otherwise.
+function renderSongModeMeta() {
+  const meta = $("song-mode-meta");
+  if (meta && project) meta.classList.toggle("no-song", !(project.songs && project.songs.length));
+}
+
+// Standalone: double-click the BPM readout to type a tempo.
+function editBpmInline() {
+  if (!_standalone || $("bpm-edit")) return;
+  const input = document.createElement("input");
+  input.id = "bpm-edit"; input.type = "number"; input.min = 20; input.max = 300; input.step = "0.1";
+  input.value = (uiBpm || 120).toFixed(1);
+  bpmEl.style.display = "none";
+  bpmEl.parentNode.insertBefore(input, bpmEl);
+  input.focus(); input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return; done = true;
+    if (commit) {
+      const v = Math.max(20, Math.min(300, parseFloat(input.value)));
+      if (!isNaN(v)) { uiBpm = v; bpmEl.textContent = v.toFixed(1); _bpmWheelAt = Date.now(); PUT("/transport/bpm", { bpm: v }); }
+    }
+    input.remove(); bpmEl.style.display = "";
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); });
+  input.addEventListener("blur", () => finish(true));
+}
+
+const helpScreen = document.getElementById("help-screen");
+function toggleHelp(force) { helpScreen.classList.toggle("open", force); }
 
 // ── Per-track colour ─────────────────────────────────────────────────────────
 // Assign the next UNused palette colour to any track without one (new tracks,
@@ -641,6 +799,7 @@ function paintCell(cell, trackId, idx, step) {
     + (idx % 4 === 0 ? " beat" : "")
     + (stepIsLocked(step) ? " locked" : "")
     + (sel.trackId === trackId && sel.idx === idx ? " selected" : "");
+  cell.title = `step ${idx + 1}` + (step.active ? ` · vel ${step.velocity ?? 100}` : "") + (stepIsLocked(step) ? " · p-locked" : "");
   // Velocity = pad brightness (a harder hit lights the pad more). Pure CSS via the
   // --vel custom property; set once per edit, so there's no runtime/animation cost.
   if (step.active)
@@ -660,6 +819,7 @@ async function toggleStep(trackId, idx) {
   const step = findTrack(trackId).steps[idx];
   step.active = !step.active;
   repaintCell(trackId, idx);
+  updateEmptyHint();
   await PUT(`/tracks/${trackId}/steps/${idx}`, { step });
 }
 
@@ -672,22 +832,26 @@ async function saveSelectedStep() {
   await PUT(`/tracks/${sel.trackId}/steps/${sel.idx}`, { step });
 }
 
+// Mute/solo update the buttons in place (no full grid rebuild — that would tear
+// down a knob mid-drag and flash the row).
 async function toggleMute(trackId) {
   const res = await PUT(`/tracks/${trackId}/mute`, {});
   const track = findTrack(trackId);
   if (track) track.muted = !!res.muted;
-  renderTracks();
+  document.querySelector(`[data-track-id="${trackId}"] .ms .mute`)?.classList.toggle("on", !!res.muted);
 }
 
 async function toggleSolo(trackId) {
   const res = await PUT(`/tracks/${trackId}/solo`, {});
   project.tracks.forEach(t => { t.solo = (t.id === trackId) ? !!res.solo : t.solo; });
   if (!res.any_solo) project.tracks.forEach(t => { t.solo = false; });
-  renderTracks();
+  for (const t of project.tracks)
+    document.querySelector(`[data-track-id="${t.id}"] .ms .solo`)?.classList.toggle("on", !!t.solo);
 }
 
-// Right-click a step: wipe its p-locks + per-step tweaks back to a plain step
-// (keeps the on/off state), then select it so the inspector shows the defaults.
+// Reset a step (inspector RESET STEP button, shift+right-click, Delete key):
+// wipe its p-locks + per-step tweaks back to a plain step (keeps the on/off
+// state), then select it so the inspector shows the defaults.
 async function resetStep(trackId, idx) {
   const track = findTrack(trackId);
   const step = track && track.steps[idx];
@@ -702,6 +866,7 @@ async function resetStep(trackId, idx) {
   step.retrig_fade = 0;
   step.p_locks = {};        // clears start/end/cutoff/resonance/lfo/filter_mode
   repaintCell(trackId, idx);
+  updateEmptyHint();
   selectStep(trackId, idx); // select + refresh the inspector to the reset values
   await PUT(`/tracks/${trackId}/steps/${idx}`, { step });
   setStatus("step reset", true);
@@ -775,10 +940,17 @@ function buildInspectorKnobs() {
 
 // Clicking a track name selects the track (no step): surface its LFO + trimmer
 // panels without needing to click a step first.
+// Highlight the lane the inspector is editing.
+function markSelectedRow(trackId) {
+  document.querySelectorAll(".track-row.selected").forEach(r => r.classList.remove("selected"));
+  if (trackId !== null) document.querySelector(`[data-track-id="${trackId}"]`)?.classList.add("selected");
+}
+
 function selectTrack(trackId) {
   const prev = sel;
   sel = { trackId, idx: null };
   if (prev.trackId !== null && prev.idx !== null) repaintCell(prev.trackId, prev.idx);
+  markSelectedRow(trackId);
   showLfo(trackId);
   showTrimmer(trackId);
 }
@@ -786,8 +958,9 @@ function selectTrack(trackId) {
 function selectStep(trackId, idx) {
   const prev = sel;
   sel = { trackId, idx };
-  if (prev.trackId !== null) repaintCell(prev.trackId, prev.idx);
+  if (prev.trackId !== null && prev.idx !== null) repaintCell(prev.trackId, prev.idx);
   repaintCell(trackId, idx);
+  markSelectedRow(trackId);
 
   const track = findTrack(trackId);
   const step = track.steps[idx];
@@ -884,6 +1057,51 @@ function wireInspector() {
   $("i-trig").addEventListener("change", () => { const s = curStep(); if (s) { s.trig_condition = $("i-trig").value; saveSelectedStep(); } });
   $("i-fmode").addEventListener("change", () => { const s = curStep(); if (s) { (s.p_locks = s.p_locks || {}).filter_mode = $("i-fmode").value; saveSelectedStep(); } });
   $("i-length").addEventListener("change", () => { const s = curStep(); if (s) { s.length = parseFloat($("i-length").value); saveSelectedStep(); } });
+  $("insp-reset").addEventListener("click", () => { if (sel.trackId !== null && sel.idx !== null) resetStep(sel.trackId, sel.idx); });
+}
+
+// ── Keyboard navigation over the grid ────────────────────────────────────────
+// Arrow keys walk the selection (← → wrap across pages, ↑ ↓ move between the
+// visible lanes); Enter toggles; Delete clears; + / − nudge velocity; M / S
+// mute / solo the selected lane. All no-ops without a selection.
+function visibleTracks() { return project ? project.tracks.filter(t => t.active !== false) : []; }
+function moveSelection(dTrack, dStep) {
+  if (!project) return false;
+  const vis = visibleTracks();
+  if (!vis.length) return false;
+  let ti = vis.findIndex(t => t.id === sel.trackId);
+  if (ti < 0) { ti = 0; dTrack = 0; }
+  ti = Math.max(0, Math.min(vis.length - 1, ti + dTrack));
+  const track = vis[ti];
+  const n = track.steps.length;
+  let idx = sel.idx === null ? 0 : sel.idx + dStep;
+  idx = ((idx % n) + n) % n;
+  const page = Math.floor(idx / STEPS_PER_PAGE);
+  if (page !== currentPage) setPage(page);   // rebuilds the grid; selection re-applied below
+  selectStep(track.id, idx);
+  return true;
+}
+function handleGridKey(e) {
+  if (!project) return false;
+  const hasStep = sel.trackId !== null && sel.idx !== null;
+  switch (e.key) {
+    case "ArrowLeft":  return moveSelection(0, -1);
+    case "ArrowRight": return moveSelection(0, 1);
+    case "ArrowUp":    return moveSelection(-1, 0);
+    case "ArrowDown":  return moveSelection(1, 0);
+    case "PageUp":     setPage(currentPage - 1); return true;
+    case "PageDown":   setPage(currentPage + 1); return true;
+    case "Enter":      if (hasStep) { toggleStep(sel.trackId, sel.idx); return true; } return false;
+    case "Delete":
+    case "Backspace":
+      if (hasStep) { const s = curStep(); if (s && s.active) { s.active = false; } resetStep(sel.trackId, sel.idx); return true; }
+      return false;
+    case "+": case "=": if (hasStep) { nudgeVelocity(sel.trackId, sel.idx, 5); return true; } return false;
+    case "-": case "_": if (hasStep) { nudgeVelocity(sel.trackId, sel.idx, -5); return true; } return false;
+    case "m": case "M": if (sel.trackId !== null) { toggleMute(sel.trackId); return true; } return false;
+    case "s": case "S": if (sel.trackId !== null) { toggleSolo(sel.trackId); return true; } return false;
+  }
+  return false;
 }
 
 // ── Playhead (C++ -> UI) ────────────────────────────────────────────────────
@@ -1498,6 +1716,11 @@ async function onProjectReload() {
   if (swingKnob) swingKnob.set(project.swing || 0);       // header reflects restored swing
   const mv = Math.round((project.master_vol ?? 1) * 100); // …and restored master volume
   masterVolEl.value = mv; masterPctEl.textContent = mv + "%";
+  renderSongModeMeta();
+  $("insp-empty").style.display = "block";
+  $("insp-fields").style.display = "none";
+  $("insp-title").textContent = "INSPECTOR";
+  $("insp-sub").textContent = "click toggles · right-click inspects";
   setStatus(`project loaded — ${project.tracks.length} tracks`, true);
 }
 
@@ -1550,7 +1773,7 @@ async function refreshProjectList() {
     row.className = "lib-sample proj-item";
     const label = document.createElement("span");
     label.textContent = name;
-    label.onclick = () => loadProject(name);
+    label.onclick = () => loadProject(name, row);
     row.appendChild(label);
     // Delete button (2-click arm, so a stray click can't wipe a project).
     const del = document.createElement("button");
@@ -1581,15 +1804,28 @@ async function saveProject() {
   if (!name) { setStatus("enter a project name", false); return; }
   try {
     const res = await POST("/projects/save", { name });
-    if (res && res.saved) { setStatus(`saved "${res.saved}"`, true); projName.value = ""; refreshProjectList(); }
+    if (res && res.saved) { setDirty(false); setStatus(`saved "${res.saved}"`, true); projName.value = ""; refreshProjectList(); }
     else setStatus("save failed: " + ((res && res.error) || "?"), false);
   } catch { setStatus("save failed", false); }
 }
 
-async function loadProject(name) {
+// Loading replaces the whole session. With unsaved edits the first click only
+// ARMS the row ("click again to discard"); the second click within 3 s loads.
+let _loadArmed = null, _loadArmTimer = null;
+async function loadProject(name, rowEl) {
+  if (_dirty && _loadArmed !== name) {
+    _loadArmed = name;
+    document.querySelectorAll(".proj-item.armed").forEach(r => r.classList.remove("armed"));
+    if (rowEl) rowEl.classList.add("armed");
+    setStatus(`unsaved changes — click "${name}" again to discard them and load`, false);
+    clearTimeout(_loadArmTimer);
+    _loadArmTimer = setTimeout(() => { _loadArmed = null; if (rowEl) rowEl.classList.remove("armed"); }, 3000);
+    return;
+  }
+  _loadArmed = null;
   try {
     const res = await POST("/projects/load", { name });
-    if (res && res.loaded) { closeProjects(); setStatus(`loaded "${res.loaded}"`, true); }
+    if (res && res.loaded) { closeProjects(); setDirty(false); setStatus(`loaded "${res.loaded}"`, true); }
     else setStatus("load failed: " + ((res && res.error) || "?"), false);
   } catch { setStatus("load failed", false); }
   // grid refresh arrives via the "project" event (projectEpoch bump)
@@ -1631,7 +1867,13 @@ async function refreshSong() {
 
 // Structural changes (insert/delete/select/new) re-render from the response;
 // field edits keep focus by NOT re-rendering (see editRow).
-function applySongState(state) { if (state) { songState = state; renderSong(); } }
+function applySongState(state) {
+  if (!state) return;
+  songState = state;
+  renderSong();
+  // Keep the header's "Song Mode (no song)" hint honest without a project re-fetch.
+  if (project) { project.songs = (state.songs || []).map(name => ({ name })); renderSongModeMeta(); }
+}
 
 function renderSong() {
   if (!songState) return;
@@ -1934,6 +2176,7 @@ async function loadPart(preset) {
   catch { setStatus("part load failed", false); return; }
   closeParts();
   try { project = await GET("/project"); } catch { return; }
+  if (sel.trackId === partsTrackId) sel = { trackId: sel.trackId, idx: null };   // the old step's params are gone
   renderTracks();
   setStatus(`loaded "${preset.name}"`, true);
 }
@@ -1971,10 +2214,25 @@ async function boot() {
   renderTracks();
   renderPatternSelect();
   renderPatternMeta();
+  renderSongModeMeta();
   wireInspector();
   syncKeySelectors();   // reflect the project key (selectors live in the inspector)
   patternSelectEl.addEventListener("change", () => selectPattern(parseInt(patternSelectEl.value)));
   patternLenEl.addEventListener("change", () => setPatternLength(patternLenEl.value));
+
+  // Pattern clipboard + the onboarding hint's showcase link + the shortcut sheet.
+  $("ptn-copy").addEventListener("click", copyPattern);
+  $("ptn-paste").addEventListener("click", pastePattern);
+  $("ptn-clear").addEventListener("click", (e) => clearPattern(e.currentTarget));
+  attachTip($("ptn-copy"),  "<b>Copy pattern</b> — remember this slot's steps + kit.");
+  attachTip($("ptn-paste"), "<b>Paste pattern</b> — duplicate the copied slot over this one (variations!).");
+  attachTip($("ptn-clear"), "<b>Clear pattern</b> — blank every step here; the kit and length stay.");
+  $("hint-showcase").addEventListener("click", openProjects);
+  $("help-btn").addEventListener("click", () => toggleHelp());
+  $("help-close").addEventListener("click", () => toggleHelp(false));
+  helpScreen.addEventListener("click", (e) => { if (e.target === helpScreen) toggleHelp(false); });
+  bpmEl.addEventListener("dblclick", editBpmInline);
+  setDirty(false);   // a freshly-restored session isn't "unsaved"
 
   // Initial transport status (live updates after this arrive via the event).
   try { onStatus(await GET("/sequencer/status")); } catch { /* ignore */ }
@@ -2064,17 +2322,30 @@ async function boot() {
     const t = e.target;
     const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
                          || t.tagName === "SELECT" || t.isContentEditable);
+    const overlayOpen = helpScreen.classList.contains("open")
+                     || libModal.classList.contains("open") || partsModal.classList.contains("open")
+                     || projModal.classList.contains("open") || libScreen.classList.contains("open")
+                     || songScreen.classList.contains("open");
     if (e.key === "Escape") {
       if (typing) { t.blur(); return; }
-      if      (libModal.classList.contains("open"))   closeLibrary();
+      if      (helpScreen.classList.contains("open")) toggleHelp(false);
+      else if (libModal.classList.contains("open"))   closeLibrary();
       else if (partsModal.classList.contains("open")) closeParts();
       else if (projModal.classList.contains("open"))  closeProjects();
       else if (libScreen.classList.contains("open"))  closeLibraryManager();
       else if (songScreen.classList.contains("open")) closeSongEditor();
+      else if (sel.trackId !== null) { const p = sel; sel = { trackId: null, idx: null };   // drop the selection
+                                       if (p.idx !== null) repaintCell(p.trackId, p.idx); markSelectedRow(null); }
+    } else if (e.key === "?" && !typing) {
+      e.preventDefault();
+      toggleHelp();
     } else if (e.code === "Space" && _standalone && !typing
                && (!t || t.tagName !== "BUTTON")) {   // let a focused button keep its native Space-click
       e.preventDefault();   // don't scroll the grid
       PUT("/transport/playing", { playing: !_playing });
+    } else if (!typing && !overlayOpen && !e.ctrlKey && !e.metaKey && !e.altKey
+               && !(e.key === "Enter" && t && t.tagName === "BUTTON")) {   // a focused button keeps its Enter-click
+      if (handleGridKey(e)) e.preventDefault();   // arrows / Enter / Delete / +− / M / S
     }
   });
 
@@ -2130,7 +2401,7 @@ async function boot() {
   attachTip($("i-fmode"), "<b>Filter mode</b> — low-pass / high-pass / band-pass.");
   attachTip($("i-length"), "<b>Length</b> — note length / gate (∞ = one-shot).");
 
-  setStatus(`connected — ${project.tracks.length} tracks · click a step, right-click to inspect`, true);
+  setStatus(`connected — ${project.tracks.length} tracks · click a pad to program, right-click to inspect, ? for shortcuts`, true);
 }
 
 boot().catch(e => setStatus("bridge error: " + (e && e.message ? e.message : e)));

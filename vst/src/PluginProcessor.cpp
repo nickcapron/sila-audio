@@ -314,6 +314,10 @@ void SilaAudioProcessor::reapRetired()
         std::remove_if (retiredSamplers.begin(), retiredSamplers.end(),
                         [] (const SamplerSetPtr& b) { return b.use_count() <= 1; }),
         retiredSamplers.end());
+
+    // Drop the keepAlive pins finished voices handed over (the last reference to a
+    // retired or audition sampler is released HERE, never on the audio thread).
+    mixer.drainGraveyard();
 }
 
 juce::File SilaAudioProcessor::libraryRoot()
@@ -379,6 +383,41 @@ void SilaAudioProcessor::recallLaneParams (int slot)
         setP (lane, "res",    ls.resonance);
         setP (lane, "fmode",  (float) (int) ls.filterMode);
     }
+}
+
+void SilaAudioProcessor::copyPatternSlot (int from, int to)
+{
+    using sila::engine::PatternBank;
+    if (from == to || from < 0 || to < 0 || from >= PatternBank::kNumSlots || to >= PatternBank::kNumSlots)
+        return;
+
+    bool toIsCurrent = false;
+    editProject ([&] (sila::engine::Project& proj)
+    {
+        // The edited pattern's live knob values are only flushed into its kit on a
+        // switch-away — flush now so the copy carries them.
+        if (proj.currentPattern == from)
+            captureLaneParams (proj, from);
+        proj.patternBank.slots[(size_t) to] = proj.patternBank.slots[(size_t) from];
+        proj.patternBank.kits[(size_t) to]  = proj.patternBank.kits[(size_t) from];
+        toIsCurrent = proj.currentPattern == to;
+    });
+
+    if (auto cur = liveSamplers.load (std::memory_order_acquire))
+    {
+        auto next = std::make_shared<SamplerSet> (*cur);
+        (*next)[(size_t) to] = (*cur)[(size_t) from];   // share the source slot's bank
+        auto old = liveSamplers.exchange (std::make_shared<const SamplerSet> (std::move (*next)),
+                                          std::memory_order_acq_rel);
+        if (old)
+        {
+            const std::scoped_lock lock (retireMutex);
+            retiredSamplers.push_back (std::move (old));
+        }
+    }
+
+    if (toIsCurrent)
+        recallLaneParams (to);   // the grid's pattern just got a new kit mix
 }
 
 void SilaAudioProcessor::addTrack (const juce::String& name)
@@ -1164,7 +1203,8 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // Library audition: consume a pending preview (one per block) and spawn a
     // one-shot voice through the master bus. Works whether or not the transport is
     // playing; trackIndex = -1 => unity gain/pan (no per-track mix). The sampler is
-    // pinned by keepAlive for the voice's lifetime (RT-safe, no dealloc race).
+    // pinned by keepAlive for the voice's lifetime; when the voice ends the pin goes
+    // to the mixer's graveyard so the buffer is freed on the message thread.
     if (auto preview = pendingAudition.exchange (nullptr, std::memory_order_acquire))
     {
         const auto slice = preview->get (127);
@@ -1178,6 +1218,9 @@ void SilaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             v.keepAlive  = std::move (preview);
             mixer.addVoice (v);
         }
+        // An unplayable preview must not be freed here either.
+        if (preview != nullptr)
+            mixer.retirePin (std::move (preview));
     }
 
     // Multi-out: the Main bus (0) carries the full summed mix; each enabled aux bus

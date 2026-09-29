@@ -78,7 +78,10 @@ Sanitizer / `safeChild` path-traversal backstop. Run after touching
    thread never frees memory. The sampler bank set follows the same pattern.
 2. **`Voice::keepAlive`** pins the voice's sampler (`shared_ptr`) so a bank swap
    can't free a buffer a ringing voice still reads (this fixed a real
-   use-after-free crash). Every spawned voice must set it.
+   use-after-free crash). Every spawned voice must set it. When a voice ends,
+   its pin goes to the mixer's lock-free **graveyard** (`VoiceMixer::retirePin`),
+   drained by `reapRetired` on the message thread — never drop a `keepAlive`
+   (or any `shared_ptr` that might be the last owner) on the audio thread.
 3. **Audio thread is allocation-free in steady state.** No heap allocation, no
    string-keyed APVTS lookups (`getRawParameterValue` is cached into member
    pointers in the constructor), no locks.
@@ -116,13 +119,21 @@ human/audible verification.
   so a user deletion sticks) — it is an EXAMPLE in the PROJECTS list, not
   baked-in state. `makeShowcaseProject` builds its structure.
 
-## Status & open items (as of 2026-07-06)
+## Status & open items (as of 2026-09-29)
 
 Feature-complete v1.0: sequencer (patterns/pages/song mode/p-locks/retrig),
 per-pattern kits, sampler + library importer, DSP (filter/LFO/gate/pitch),
 multi-out, MIDI + Digitakt export, live MIDI note input (channel N → lane N−1,
 C3 = programmed pitch — mirrors the export map), factory pack, tests, hardened
 webui.
+
+UX pass (2026-09-29, pending human verify): pad gestures are **click = toggle,
+right-click = inspect (never destructive), shift+right-click / RESET STEP =
+clear p-locks, drag = paint a run, wheel = velocity**; keyboard grid navigation
+(arrows / Enter / Delete / +− / M / S, `?` opens the cheat-sheet); pattern
+COPY / PASTE / CLR (`PUT /pattern/copy`, `PUT /pattern/clear`,
+`copyPatternSlot`); unsaved-changes badge + armed load; empty-pattern
+onboarding hint; pads scale to the editor width (default 1280×720, min 900×520).
 
 Open items (public-release audit, 2026-07-06 — ordered by priority):
 

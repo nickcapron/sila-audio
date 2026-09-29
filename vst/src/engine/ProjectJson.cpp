@@ -129,6 +129,7 @@ void applyStepVar (Step& s, const juce::var& v)
         s.pResonance.reset();
         s.pLfoDepth.reset();
         s.pLfoRate.reset();
+        s.pFilterMode.reset();   // was missing: a step reset left the filter-mode lock behind
         if (pl.isObject())
         {
             if (pl.hasProperty ("start"))     s.pStart     = (float) (double) pl["start"];

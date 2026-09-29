@@ -113,6 +113,31 @@ void VoiceMixer::reset()
     ssSub[0] = ssSub[1] = ssLow[0] = ssLow[1] = ssHarm[0] = ssHarm[1] = 0.0;
 }
 
+void VoiceMixer::retirePin (std::shared_ptr<const void>&& pin)
+{
+    if (pin == nullptr)
+        return;
+    int s1 = 0, n1 = 0, s2 = 0, n2 = 0;
+    graveFifo.prepareToWrite (1, s1, n1, s2, n2);
+    if (n1 > 0)
+    {
+        // The slot was reset by drainGraveyard before the FIFO could hand it out
+        // again, so this move-assign frees nothing here.
+        graveyard[(size_t) s1] = std::move (pin);
+        graveFifo.finishedWrite (1);
+    }
+    // else: ring full — `pin` drops here (see the header note on when that matters).
+}
+
+void VoiceMixer::drainGraveyard()
+{
+    int s1 = 0, n1 = 0, s2 = 0, n2 = 0;
+    graveFifo.prepareToRead (graveFifo.getNumReady(), s1, n1, s2, n2);
+    for (int i = 0; i < n1; ++i) graveyard[(size_t) (s1 + i)].reset();
+    for (int i = 0; i < n2; ++i) graveyard[(size_t) (s2 + i)].reset();
+    graveFifo.finishedRead (n1 + n2);
+}
+
 void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<TrackMix>& trackMix,
                              const LaneOut* lanes, int numLanes)
 {
@@ -190,9 +215,12 @@ void VoiceMixer::renderInto (juce::AudioBuffer<float>& block, const std::vector<
 
         if (v.pos >= (double) v.endPos || (gated && v.elapsed >= v.gateSamples + envRelease))
         {
-            // Voice finished (sample ran out / gate released). Swap-and-pop is O(1)
-            // — voices are order-independent. Don't advance i: reprocess the voice
-            // swapped into this slot. (Self-move guarded when i is already last.)
+            // Voice finished (sample ran out / gate released). Hand its keepAlive
+            // pin to the message thread first (this may be the last reference to
+            // a retired/audition sampler — never free it here). Then swap-and-pop,
+            // O(1) — voices are order-independent. Don't advance i: reprocess the
+            // voice swapped into this slot. (Self-move guarded when i is already last.)
+            retirePin (std::move (v.keepAlive));
             if (i != voices.size() - 1)
                 voices[i] = std::move (voices.back());
             voices.pop_back();

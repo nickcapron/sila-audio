@@ -180,7 +180,10 @@ SilaAudioProcessorEditor::SilaAudioProcessorEditor (SilaAudioProcessor& p)
 {
     addAndMakeVisible (webView);
     setResizable (true, true);
-    setSize (980, 460);
+    // Default large enough for 8 lanes x 16 pads + the inspector without scrolling;
+    // the web layout scales the pads down at narrower widths (min 900x520).
+    setResizeLimits (900, 520, 4096, 4096);
+    setSize (1280, 720);
 
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
@@ -537,6 +540,30 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
             proj.currentPattern = idx;
         });
         processor.recallLaneParams (idx);
+        return emptyObject();
+    }
+
+    // PUT /pattern/copy { from, to } — duplicate a pattern slot (steps + kit + mix)
+    // onto another, e.g. to build a variation. The UI re-fetches GET /project.
+    if (method == "PUT" && path == "/pattern/copy")
+    {
+        const int from = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) body.getProperty ("from", 0));
+        const int to   = juce::jlimit (0, PatternBank::kNumSlots - 1, (int) body.getProperty ("to", 0));
+        processor.copyPatternSlot (from, to);
+        return emptyObject();
+    }
+
+    // PUT /pattern/clear { index? } — blank every step in a pattern slot (default:
+    // the edited one). Keeps the slot's length, kit and mix; only trigs are wiped.
+    if (method == "PUT" && path == "/pattern/clear")
+    {
+        processor.editProject ([&] (Project& proj)
+        {
+            const int slot = juce::jlimit (0, PatternBank::kNumSlots - 1,
+                                           (int) body.getProperty ("index", proj.currentPattern));
+            for (auto& col : proj.patternBank.slots[(size_t) slot])
+                col.assign (col.size(), Step {});
+        });
         return emptyObject();
     }
 

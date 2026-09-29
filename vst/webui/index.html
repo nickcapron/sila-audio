@@ -73,6 +73,30 @@
     /* pattern length input */
     #pattern-len { width: 50px; background: var(--bg); color: var(--text); border: 1px solid var(--border);
       border-radius: 4px; font: inherit; font-size: 12px; padding: 3px 5px; }
+    /* pattern clipboard (copy / paste / clear the edited slot) */
+    .ptn-tools { display: inline-flex; gap: 3px; }
+    .ptn-tools button {
+      height: 24px; padding: 0 7px; border: 1px solid var(--border); background: var(--surface);
+      color: var(--text-dim); border-radius: 4px; cursor: pointer; font: inherit; font-size: 10px; letter-spacing: 1px;
+      transition: background .1s, color .1s, border-color .1s;
+    }
+    .ptn-tools button:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); }
+    .ptn-tools button:disabled { opacity: .35; cursor: default; }
+    .ptn-tools button.armed { background: var(--danger); border-color: var(--danger); color: #04110d; font-weight: 700; }
+    .ptn-tools button.has-clip { color: var(--accent-2); border-color: #4a3d7a; }
+    /* BPM can be typed (double-click) in Standalone */
+    #bpm-edit { width: 58px; background: #0a1019; color: var(--accent); border: 1px solid var(--accent);
+      border-radius: 3px; font: inherit; font-size: 12px; padding: 2px 5px; }
+    /* unsaved-changes dot on the PROJECTS button */
+    #projects-btn.dirty::after { content: " •"; color: var(--warn); }
+    /* header help button */
+    #help-btn { background: transparent; color: var(--text-dim); border: 1px solid var(--border); border-radius: 50%;
+      width: 26px; height: 26px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; line-height: 1;
+      transition: color .12s, border-color .12s; }
+    #help-btn:hover { color: var(--accent); border-color: var(--accent); }
+    /* "Song Mode" reads dim while the project has no song to play */
+    .meta.no-song label { color: var(--text-dim); }
+    .meta.no-song label::after { content: " (no song)"; font-size: 9px; letter-spacing: 0; text-transform: none; }
     /* page navigation chips (shown above the grid when length > 16) */
     #page-bar { display: none; gap: 5px; align-items: center; margin-bottom: 12px; }
     #page-bar.visible { display: flex; }
@@ -111,6 +135,9 @@
       cursor: pointer; padding: 2px 8px; border-radius: 5px; font-size: 12px; line-height: 1; }
     .proj-del:hover { color: #ff6b6b; }
     .proj-del.armed { color: #fff; background: #c0392b; font-size: 11px; }
+    /* a load that would discard unsaved work is armed on the first click */
+    .proj-item.armed > span { color: var(--warn); }
+    .proj-item.armed > span::after { content: "  ·  click again to discard unsaved changes"; font-size: 10px; }
     /* themed sliders (teal by default; .pan/.res are purple) */
     input[type=range] { -webkit-appearance: none; appearance: none; width: 120px; background: transparent; cursor: pointer; }
     input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 3px; background: #1c2836; }
@@ -151,8 +178,11 @@
     .color-pop .sw { width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 1px solid rgba(0,0,0,.4); transition: transform .1s; }
     .color-pop .sw:hover { transform: scale(1.18); }
     .color-pop .sw.active { box-shadow: 0 0 0 2px #0b1118, 0 0 0 3px #fff; }
-    .track-name { width: 84px; flex-shrink: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
-    .track-name-edit { width: 84px; flex-shrink: 0; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 3px; font: inherit; font-size: 13px; padding: 1px 3px; }
+    .track-name { width: 80px; flex-shrink: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    .track-name-edit { width: 80px; flex-shrink: 0; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 3px; font: inherit; font-size: 13px; padding: 1px 3px; }
+    /* the lane whose step (or name) is selected: the inspector edits THIS row */
+    .track-row.selected { background: rgba(255,255,255,.035); box-shadow: inset 2px 0 0 var(--track-color, var(--accent)); }
+    .track-row.selected .track-name { color: var(--track-color, var(--accent)); }
     #add-track { margin-top: 8px; background: transparent; color: var(--text-dim); border: 1px dashed var(--border); border-radius: var(--radius); padding: 6px 14px; font: inherit; font-size: 11px; letter-spacing: 1px; cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
     #add-track:hover { color: var(--accent); border-color: var(--accent); background: rgba(52,227,196,.04); }
     #add-track:disabled { opacity: .35; cursor: default; }
@@ -225,11 +255,14 @@
     }
     #tooltip.show { opacity: 1; }
     #tooltip b { color: var(--accent); }
-    .step-grid { display: flex; gap: 4px; }
+    /* the pad row fills whatever width is left of the lane; pads scale between
+       14 and 30 px so every step stays visible at narrow editor sizes (no h-scroll) */
+    .step-grid { display: flex; gap: 4px; flex: 1 1 auto; min-width: 0; }
     /* physical backlit pad: a domed face (top highlight + inner bottom shadow) that
        lights from within when on; velocity sets how bright the light reads (--vel, JS). */
     .step {
-      width: 30px; height: 30px; border-radius: 6px; position: relative; cursor: pointer;
+      flex: 1 1 0; min-width: 14px; max-width: 30px; aspect-ratio: 1 / 1; height: auto;
+      border-radius: 6px; position: relative; cursor: pointer;
       background: linear-gradient(180deg, #1d2735 0%, #141d29 100%); border: 1px solid #0c121b;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 -2px 3px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.4);
       transition: box-shadow .08s, transform .04s, background .08s;
@@ -241,7 +274,9 @@
       transition: opacity .08s;
     }
     /* group every 4 steps into a beat with a little breathing room */
-    .step-grid .step:nth-child(4n+1):not(:first-child) { margin-left: 13px; }
+    .step-grid .step:nth-child(4n+1):not(:first-child) { margin-left: max(6px, min(13px, 1vw)); }
+    /* drag-painting: the row being painted shows a faint guide so the gesture reads */
+    .track-row.painting .step:not(.on):hover { box-shadow: 0 0 0 1px var(--track-color, #34e3c4); }
     .step.beat { background: linear-gradient(180deg, #243042 0%, #18222f 100%); }   /* downbeats read brighter */
     .step:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 0 0 1px #34465c, 0 1px 3px rgba(0,0,0,.45); }
     .step:active { transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,.5); }   /* tactile press */
@@ -273,13 +308,37 @@
       border-radius: 4px; padding: 5px; font: inherit; font-size: 12px; cursor: pointer;
     }
     #insp-empty { color: var(--text-dim); font-size: 12px; line-height: 1.7; }
+    #insp-empty kbd, .help-body kbd, #empty-hint kbd {
+      display: inline-block; padding: 0 5px; border: 1px solid var(--border); border-bottom-width: 2px;
+      border-radius: 3px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 10px; line-height: 16px; }
     #insp-fields { display: none; }
+    #insp-reset { width: 100%; margin-top: 4px; background: transparent; color: var(--text-dim); border: 1px dashed var(--border);
+      border-radius: var(--radius); padding: 6px; font: inherit; font-size: 10px; letter-spacing: 1px; cursor: pointer;
+      transition: color .12s, border-color .12s; }
+    #insp-reset:hover { color: var(--warn); border-color: var(--warn); }
+    /* empty-pattern onboarding hint (auto-hides once any step is programmed) */
+    #empty-hint { display: none; margin: 0 0 12px; padding: 10px 14px; border: 1px dashed var(--border);
+      border-radius: var(--radius); color: var(--text-dim); font-size: 12px; line-height: 1.7; max-width: 760px; }
+    #empty-hint.visible { display: block; }
+    #empty-hint b { color: var(--accent); }
+    #empty-hint a { color: var(--accent-2); cursor: pointer; text-decoration: underline dotted; }
+    /* keyboard / mouse cheat-sheet overlay */
+    #help-screen { position: fixed; inset: 0; z-index: 2600; background: rgba(4,8,12,.78); display: none;
+      align-items: center; justify-content: center; }
+    #help-screen.open { display: flex; }
+    .help-card { width: min(640px, 92vw); max-height: 86vh; overflow: auto; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+    .help-body { padding: 6px 18px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 28px; font-size: 12px; }
+    .help-body h3 { grid-column: 1 / -1; color: var(--accent-2); font-size: 10px; letter-spacing: 2px; margin: 12px 0 4px; }
+    .help-body .hk { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 3px 0;
+      border-bottom: 1px solid var(--border-soft); color: var(--text-dim); }
+    .help-body .hk span:first-child { color: var(--text); }
     #status { padding: 7px 18px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12px; flex-shrink: 0; background: var(--surface-2); }
     #status.ok { color: var(--accent); }
 
     /* per-track sample slot (opens the library browser) */
     .sample-slot {
-      width: 132px; flex-shrink: 0; padding: 5px 9px; border: 1px solid var(--border);
+      width: 118px; flex-shrink: 0; padding: 5px 9px; border: 1px solid var(--border);
       border-radius: var(--radius); background: var(--surface-2); color: var(--text-dim); cursor: pointer;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px;
       transition: border-color .12s, color .12s, background .12s;
@@ -480,21 +539,32 @@
     <span class="meta" id="transport"><span class="dot"></span><span id="play-state">—</span></span>
     <span class="meta">BPM <span id="bpm" class="val" style="min-width:46px">—</span></span>
     <span class="meta">Bar·Beat <span id="barbeat" class="val">—</span></span>
-    <span class="meta">PTN <select id="pattern-select"></select></span>
+    <span class="meta">PTN <select id="pattern-select"></select>
+      <span class="ptn-tools">
+        <button id="ptn-copy" title="copy this pattern (steps + kit)">COPY</button>
+        <button id="ptn-paste" title="paste the copied pattern over this slot" disabled>PASTE</button>
+        <button id="ptn-clear" title="clear every step in this pattern (click twice)">CLR</button>
+      </span>
+    </span>
     <span class="meta">LEN <input type="number" id="pattern-len" min="1" max="128"></span>
     <span class="meta" id="swing-host"></span>
     <span class="meta">MASTER <input type="range" id="master-vol" min="0" max="200" value="100"><span id="master-pct" class="val" style="min-width:38px">100%</span></span>
-    <span class="meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
+    <span class="meta" id="song-mode-meta"><input type="checkbox" id="songMode"><label for="songMode">Song Mode</label></span>
     <span class="meta" id="active-pattern"></span>
     <button id="song-btn">SONG</button>
     <button id="library-btn">LIBRARY</button>
     <button id="projects-btn">PROJECTS</button>
     <button id="export-midi-btn">MIDI</button>
+    <button id="help-btn" title="shortcuts (?)">?</button>
   </header>
 
   <div class="body">
     <main>
       <div id="page-bar"></div>
+      <div id="empty-hint">
+        <b>This pattern is empty.</b> Click a pad to program a step, drag across pads to paint a run, or press <b>≣</b> on a lane to load a rhythm.
+        Want to hear a full example first? <a id="hint-showcase">Open PROJECTS → Factory Showcase</a>. Press <kbd>?</kbd> for every shortcut.
+      </div>
       <div id="tracks"></div>
       <button id="add-track" title="Add a track (max 8)">+ Track</button>
 
@@ -536,9 +606,12 @@
 
     <aside>
       <h2 id="insp-title">INSPECTOR</h2>
-      <div class="sub" id="insp-sub">left-click toggles · right-click inspects</div>
+      <div class="sub" id="insp-sub">click toggles · right-click inspects</div>
 
-      <div id="insp-empty">Select a step to edit its velocity, probability, trig condition, micro-timing and sample slice.</div>
+      <div id="insp-empty">
+        <b>Right-click</b> a pad to inspect it without toggling, then edit its velocity, probability, trig condition, micro-timing, retrig and sample slice here.<br><br>
+        <kbd>drag</kbd> paints a run · <kbd>wheel</kbd> over a pad sets velocity · <kbd>← →</kbd> walk the selection · <kbd>?</kbd> all shortcuts
+      </div>
 
       <div id="insp-fields">
         <div class="field" id="note-field">
@@ -581,6 +654,7 @@
             <option value="3">3 (dotted)</option>
           </select>
         </div>
+        <button id="insp-reset" title="clear every p-lock and per-step tweak on this step (keeps it on/off) · shift+right-click a pad does the same">RESET STEP</button>
       </div>
     </aside>
   </div>
@@ -682,6 +756,41 @@
       </div>
       <div id="lib-target"></div>
       <div class="lib-tree" id="lib-tree"></div>
+    </div>
+  </div>
+
+  <div id="help-screen">
+    <div class="help-card">
+      <div class="modal-head">
+        <h2>SHORTCUTS</h2>
+        <span style="flex:1"></span>
+        <button class="close" id="help-close" title="close">×</button>
+      </div>
+      <div class="help-body">
+        <h3>PADS</h3>
+        <div class="hk"><span>Toggle a step</span><span><kbd>click</kbd></span></div>
+        <div class="hk"><span>Inspect without toggling</span><span><kbd>right-click</kbd></span></div>
+        <div class="hk"><span>Paint a run on / off</span><span><kbd>drag</kbd></span></div>
+        <div class="hk"><span>Set velocity</span><span><kbd>wheel</kbd> over the pad</span></div>
+        <div class="hk"><span>Reset p-locks on a step</span><span><kbd>shift</kbd>+<kbd>right-click</kbd></span></div>
+        <div class="hk"><span>Walk the selection</span><span><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></span></div>
+        <div class="hk"><span>Toggle the selected step</span><span><kbd>Enter</kbd></span></div>
+        <div class="hk"><span>Clear the selected step</span><span><kbd>Delete</kbd></span></div>
+        <div class="hk"><span>Nudge velocity of the selected step</span><span><kbd>+</kbd> / <kbd>−</kbd></span></div>
+        <h3>LANES</h3>
+        <div class="hk"><span>Mute / solo the selected lane</span><span><kbd>M</kbd> / <kbd>S</kbd></span></div>
+        <div class="hk"><span>Select a lane (LFO + trim panels)</span><span>click its name</span></div>
+        <div class="hk"><span>Rename a lane</span><span>double-click its name</span></div>
+        <div class="hk"><span>Hide a lane in this pattern</span><span><kbd>×</kbd> twice</span></div>
+        <div class="hk"><span>Remove a lane everywhere</span><span><kbd>shift</kbd>+<kbd>×</kbd> twice</span></div>
+        <h3>TRANSPORT &amp; PATTERNS</h3>
+        <div class="hk"><span>Play / stop (Standalone)</span><span><kbd>Space</kbd></span></div>
+        <div class="hk"><span>Tempo (Standalone)</span><span><kbd>wheel</kbd> or double-click BPM</span></div>
+        <div class="hk"><span>Pattern page</span><span><kbd>PgUp</kbd> / <kbd>PgDn</kbd></span></div>
+        <div class="hk"><span>Copy / paste / clear a pattern</span><span>COPY · PASTE · CLR</span></div>
+        <div class="hk"><span>Close a panel</span><span><kbd>Esc</kbd></span></div>
+        <div class="hk"><span>This sheet</span><span><kbd>?</kbd></span></div>
+      </div>
     </div>
   </div>
 

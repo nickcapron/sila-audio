@@ -1,8 +1,10 @@
 # SILA as a VST3/AU plugin — design & port plan
 
-> Status: **scaffold / decision-ready**. No audio code has been ported yet.
-> This document + the stubs in `vst/` exist so we can judge the effort before
-> committing to the full build.
+> Status: **the port is complete (v1.0, feature-complete — see `CLAUDE.md` for
+> the current state and open items).** This document is the original design
+> rationale for the host-synced timing model, the RCU state seam and the WebView
+> bridge; the phase notes below are historical. Read it for the *why*, read
+> `CLAUDE.md` for the *what is*.
 
 ## TL;DR
 

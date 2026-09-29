@@ -170,6 +170,13 @@ public:
     void captureLaneParams (sila::engine::Project& proj, int slot);
     void recallLaneParams (int slot);
 
+    // Copy pattern slot `from` (steps + kit + mix snapshot) over slot `to`, and point
+    // `to` at `from`'s sampler bank (sharing a bank across slots is safe: only the
+    // active slot is triggered, and a later per-lane assignment copies the bank
+    // before mutating it). If `to` is the edited pattern its mix is recalled into
+    // APVTS. Message thread. No-op when from == to or out of range.
+    void copyPatternSlot (int from, int to);
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout makeParameters();
 

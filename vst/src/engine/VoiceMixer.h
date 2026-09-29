@@ -134,12 +134,22 @@ public:
             for (size_t i = 1; i < voices.size(); ++i)
                 if (voices[i].elapsed > voices[victim].elapsed)
                     victim = i;
+            retirePin (std::move (voices[victim].keepAlive));   // never free on this thread
             voices[victim] = v;
             return;
         }
         voices.push_back (v);
     }
     int  activeVoiceCount() const { return (int) voices.size(); }
+
+    // MESSAGE THREAD: release the keepAlive pins that finished voices handed over
+    // (see retirePin). Called from the processor's reapRetired.
+    void drainGraveyard();
+
+    // AUDIO THREAD: hand a keepAlive pin to the message thread instead of dropping
+    // it here (see the graveyard note below). Public so the processor can retire a
+    // sampler it holds directly (an unplayable audition).
+    void retirePin (std::shared_ptr<const void>&& pin);
 
     // `trackMix` is indexed by Voice.trackIndex (per-track gain + equal-power pan).
     // `block` is the Main bus (the full summed mix). If `lanes` is non-null, each
@@ -162,6 +172,18 @@ private:
     // never reallocates; a transient burst past this still grows correctly.
     static constexpr int kMaxVoices = 512;
     std::vector<Voice> voices;
+
+    // Keep-alive graveyard. A finished voice's keepAlive may be the LAST reference
+    // to its Sampler (an audition sampler always is; a retired bank's sampler is
+    // once the message thread has reaped the bank) — dropping it on the audio
+    // thread would run the buffer's free() there. So finished voices MOVE their pin
+    // into this lock-free ring instead, and the message thread drops them in
+    // drainGraveyard(). If the ring is full (editor closed, nothing draining) the
+    // pin is dropped in place — a real free only for a retired/audition sampler,
+    // which needs the editor in the first place.
+    static constexpr int kGraveSize = 1024;
+    juce::AbstractFifo graveFifo { kGraveSize };
+    std::vector<std::shared_ptr<const void>> graveyard = std::vector<std::shared_ptr<const void>> ((size_t) kGraveSize);
     double sampleRate { 48000.0 };
     juce::Random rng;                  // sample-and-hold random source (audio thread only)
 
