@@ -120,6 +120,12 @@ package. JUCE 8 and the VST3 SDK are fetched automatically. See
 lock-free state seam, the WebView bridge), and `vst/release/make-release.ps1`
 to package a release zip.
 
+## License
+
+MIT — see [`LICENSE`](LICENSE). The factory samples were recorded by the
+author from his own RD-6 and CZ-1 and are released under the same terms.
+JUCE and the VST3 SDK are used under their own licenses.
+
 ## The Python app (`sila/`)
 
 The original prototype: a local FastAPI server with the grid UI in a browser.

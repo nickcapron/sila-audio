@@ -41,6 +41,11 @@ In a DAW
   - MIDI export bounces the song (or current pattern) to a .mid file, one channel per lane.
   - Live MIDI input: MIDI channel N plays lane N. C3 is the lane's programmed pitch.
 
+License
+-------
+  MIT (see LICENSE). Free to use, share and modify. The factory samples were recorded by
+  the author from his own hardware and are covered by the same license.
+
 Known gaps (v1.0)
 -----------------
   - No undo. Edits are immediate. Save often (PROJECTS -> Save).
