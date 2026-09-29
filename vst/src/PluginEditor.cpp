@@ -160,32 +160,66 @@ juce::var statusVar (bool playing, double bpm, int songSlot, int songRow, int so
 }
 }
 
+juce::WebBrowserComponent::Options SilaAudioProcessorEditor::makeWebOptions()
+{
+    return juce::WebBrowserComponent::Options{}
+        .withBackend (juce::WebBrowserComponent::Options::Backend::webview2)
+        .withWinWebView2Options (juce::WebBrowserComponent::Options::WinWebView2{}
+            .withUserDataFolder (juce::File::getSpecialLocation (juce::File::tempDirectory)))
+        .withNativeIntegrationEnabled()
+        .withOptionsFrom (songModeRelay)
+        .withNativeFunction ("backendCall",
+            [this] (const juce::Array<juce::var>& args,
+                    juce::WebBrowserComponent::NativeFunctionCompletion completion)
+            {
+                completion (handleBackendCall (args));
+            })
+        .withResourceProvider ([this] (const juce::String& url) { return serveResource (url); });
+}
+
+void SilaAudioProcessorEditor::emitToUi (const juce::String& eventName, const juce::var& payload)
+{
+    if (webView != nullptr)
+        webView->emitEventIfBrowserIsVisible (eventName, payload);
+}
+
 SilaAudioProcessorEditor::SilaAudioProcessorEditor (SilaAudioProcessor& p)
     : juce::AudioProcessorEditor (&p),
       processor (p),
-      webView (juce::WebBrowserComponent::Options{}
-                   .withBackend (juce::WebBrowserComponent::Options::Backend::webview2)
-                   .withWinWebView2Options (juce::WebBrowserComponent::Options::WinWebView2{}
-                       .withUserDataFolder (juce::File::getSpecialLocation (juce::File::tempDirectory)))
-                   .withNativeIntegrationEnabled()
-                   .withOptionsFrom (songModeRelay)
-                   .withNativeFunction ("backendCall",
-                       [this] (const juce::Array<juce::var>& args,
-                               juce::WebBrowserComponent::NativeFunctionCompletion completion)
-                       {
-                           completion (handleBackendCall (args));
-                       })
-                   .withResourceProvider ([this] (const juce::String& url) { return serveResource (url); })),
+      runtimeLink ("Download the Microsoft Edge WebView2 Runtime (free)",
+                   juce::URL ("https://developer.microsoft.com/microsoft-edge/webview2/")),
       songModeAttachment (*p.apvts.getParameter ("songMode"), songModeRelay, p.apvts.undoManager)
 {
-    addAndMakeVisible (webView);
     setResizable (true, true);
     // Default large enough for 8 lanes x 16 pads + the inspector without scrolling;
     // the web layout scales the pads down at narrower widths (min 900x520).
     setResizeLimits (900, 520, 4096, 4096);
     setSize (1280, 720);
 
-    webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
+    const auto opts = makeWebOptions();
+    if (juce::WebBrowserComponent::areOptionsSupported (opts))
+    {
+        webView = std::make_unique<juce::WebBrowserComponent> (opts);
+        addAndMakeVisible (*webView);
+        webView->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
+    }
+    else
+    {
+        // No WebView2 runtime on this machine: say so instead of showing a blank
+        // window. The engine still runs (host state, MIDI input, playback).
+        noRuntimeLabel.setText (
+            "SILA's editor needs the Microsoft Edge WebView2 Runtime, which is not installed on this computer.\n\n"
+            "Install it with the link below (a one-time, ~2 MB download from Microsoft), then reopen this window.\n"
+            "The sequencer itself is still running; only the editor is unavailable.",
+            juce::dontSendNotification);
+        noRuntimeLabel.setJustificationType (juce::Justification::centred);
+        noRuntimeLabel.setColour (juce::Label::textColourId, juce::Colour (0xffd7e3e8));
+        noRuntimeLabel.setFont (juce::Font (juce::FontOptions (16.0f)));
+        addAndMakeVisible (noRuntimeLabel);
+        runtimeLink.setColour (juce::HyperlinkButton::textColourId, juce::Colour (0xff34e3c4));
+        runtimeLink.setFont (juce::Font (juce::FontOptions (16.0f)), false, juce::Justification::centred);
+        addAndMakeVisible (runtimeLink);
+    }
 
     // Seed from the current epoch so a state load applied before the UI opened
     // (host restores state, then shows the editor) doesn't trigger a redundant
@@ -207,7 +241,14 @@ void SilaAudioProcessorEditor::paint (juce::Graphics& g)
 
 void SilaAudioProcessorEditor::resized()
 {
-    webView.setBounds (getLocalBounds());
+    if (webView != nullptr)
+    {
+        webView->setBounds (getLocalBounds());
+        return;
+    }
+    auto area = getLocalBounds().reduced (40);
+    runtimeLink.setBounds (area.removeFromBottom (40));
+    noRuntimeLabel.setBounds (area);
 }
 
 float SilaAudioProcessorEditor::currentSwing() const
@@ -253,7 +294,7 @@ void SilaAudioProcessorEditor::timerCallback()
     if (ppq != lastSentPpq)
     {
         lastSentPpq = ppq;
-        webView.emitEventIfBrowserIsVisible ("playhead", juce::var (ppq));
+        emitToUi ("playhead", juce::var (ppq));
     }
 
     // Push transport status only on change (replaces the Python app's 2 s poll).
@@ -269,7 +310,7 @@ void SilaAudioProcessorEditor::timerCallback()
         lastSentBpm      = bpm;
         lastSentSongSlot = slot;
         lastSentSongRow  = row;
-        webView.emitEventIfBrowserIsVisible ("status", statusVar (playing, bpm, slot, row, repeat,
+        emitToUi ("status", statusVar (playing, bpm, slot, row, repeat,
             processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone));
     }
 
@@ -282,7 +323,7 @@ void SilaAudioProcessorEditor::timerCallback()
     if (epoch != lastSeenEpoch)
     {
         lastSeenEpoch = epoch;
-        webView.emitEventIfBrowserIsVisible ("project", juce::var());
+        emitToUi ("project", juce::var());
     }
 
     // Push per-slot vol/pan to the UI when they change (host automation / generic
@@ -315,7 +356,7 @@ void SilaAudioProcessorEditor::timerCallback()
             }
         }
         if (! changed.isEmpty())
-            webView.emitEventIfBrowserIsVisible ("params", juce::var (changed));
+            emitToUi ("params", juce::var (changed));
     }
 }
 
@@ -711,6 +752,14 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
         return emptyObject();
     }
 
+    // PUT /transport/fill { active } — hold/release FILL (arms the Fill / Not-Fill
+    // trig conditions). Works hosted too: it's a performance flag, not transport.
+    if (method == "PUT" && path == "/transport/fill")
+    {
+        processor.fillActive.store ((bool) body.getProperty ("active", false), std::memory_order_relaxed);
+        return emptyObject();
+    }
+
     // PUT /project/swing { swing }  → drive the APVTS param (already atomic).
     if (method == "PUT" && path == "/project/swing")
     {
@@ -860,7 +909,7 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                 if (auto* ed = safeThis.getComponent())   // editor may have closed mid-scan
                 {
                     ed->importBusy.store (false);
-                    ed->webView.emitEventIfBrowserIsVisible ("import-scan", result);
+                    ed->emitToUi ("import-scan", result);
                 }
             });
         });
@@ -916,7 +965,7 @@ juce::var SilaAudioProcessorEditor::handleBackendCall (const juce::Array<juce::v
                 if (auto* ed = safeThis.getComponent())
                 {
                     ed->importBusy.store (false);
-                    ed->webView.emitEventIfBrowserIsVisible ("import-done", result);
+                    ed->emitToUi ("import-done", result);
                 }
             });
         });
@@ -1367,7 +1416,7 @@ void SilaAudioProcessorEditor::launchMidiExport()
         o->setProperty ("notes",   result.notes);
         o->setProperty ("ok",      ok);
         o->setProperty ("path",    file.getFullPathName());
-        webView.emitEventIfBrowserIsVisible ("midi-export", juce::var (o));
+        emitToUi ("midi-export", juce::var (o));
     });
 }
 
@@ -1388,7 +1437,7 @@ void SilaAudioProcessorEditor::launchImportBrowse()
 
         auto* o = new juce::DynamicObject();
         o->setProperty ("path", dir.getFullPathName());
-        webView.emitEventIfBrowserIsVisible ("import-folder", juce::var (o));
+        emitToUi ("import-folder", juce::var (o));
     });
 }
 

@@ -62,7 +62,21 @@ private:
     // Declared before webView: the browser Options reference the relay.
     juce::WebToggleButtonRelay songModeRelay { "songModeToggle" };
 
-    juce::WebBrowserComponent webView;
+    // The browser options (backend, bridge, resource provider). Built once in the
+    // ctor and checked with WebBrowserComponent::areOptionsSupported BEFORE the
+    // view is created: on Windows that probes the WebView2 runtime, which most
+    // machines have (Edge ships it) but not all — a missing runtime used to mean a
+    // blank editor with no explanation.
+    juce::WebBrowserComponent::Options makeWebOptions();
+
+    // Null when the WebView2 runtime is missing; then the fallback label + link
+    // below are shown instead and every UI push (emitToUi) is a no-op.
+    std::unique_ptr<juce::WebBrowserComponent> webView;
+    juce::Label           noRuntimeLabel;
+    juce::HyperlinkButton runtimeLink;
+
+    // Push an event to the web UI (no-op without a browser).
+    void emitToUi (const juce::String& eventName, const juce::var& payload);
 
     // Binds the relay to the APVTS "songMode" parameter (two-way, lock-free).
     juce::WebToggleButtonParameterAttachment songModeAttachment;

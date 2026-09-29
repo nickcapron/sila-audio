@@ -1,153 +1,128 @@
 # SILA
 
-A fast, sample-based step sequencer and groovebox inspired by the Elektron
-Digitakt. The goal is simple: **make a beat faster than with any other tool.**
+**A free, Digitakt-style sampler and step sequencer for Windows — as a VST3
+plugin and a Standalone app.** Eight sample lanes, 16 patterns of up to 128
+steps, per-step parameter locks, trig conditions, retrig, per-pattern kits, a
+song mode, and a sample library with an importer. The UI is built for one thing:
+**getting a beat down fast.**
 
-SILA exists in two forms in this repo:
+> **Download:** grab `SILA-v1.0.0-win64.zip` from the
+> [Releases](../../releases) page. It contains the VST3, the Standalone, an
+> installer script and a README. Source is in [`vst/`](vst/).
 
-- **`vst/` — the native plugin (active, feature-complete).** A JUCE 8
-  **VST3 / AU / Standalone** instrument written in C++, with the UI running in
-  an embedded WebView. This is the primary effort and what you'll want to build.
-- **`sila/` — the original Python app (reference).** A local FastAPI server +
-  HTML/JS grid UI that the plugin's engine was ported from. Still runnable; kept
-  as the engine spec and for the Digitakt export pipeline.
+![SILA](vst/branding/sila-logo.svg)
 
 ---
 
-## The plugin (`vst/`)
+## Install (2 minutes)
 
-A self-contained instrument plugin — no external server, no scripts, no
-configuration. Load it in your DAW (or run the Standalone) and go.
+1. Unzip.
+2. **Plugin:** double-click `install-vst3.cmd` (it copies `SILA.vst3` into
+   `C:\Program Files\Common Files\VST3`, the folder every DAW scans, and asks
+   for admin rights to do it). Rescan plugins in your DAW and add **SILA** as an
+   instrument.
+   **Standalone:** put `SILA.exe` anywhere and run it.
+3. Windows shows *"Windows protected your PC"* the first time — this is a free,
+   unsigned build. Click **More info → Run anyway**.
 
-On first load it opens to a **playable factory beat** — a Behringer RD-6 drum kit
-plus Casio CZ-1 mini synth voices, with an extended showcase song already
-arranged — so there's sound the moment you insert it. The factory samples install
-themselves to `~/SILA/library` (they never overwrite your own files).
+Needs the Microsoft Edge WebView2 Runtime, which nearly every Windows 10/11 PC
+already has. If it is missing SILA says so and links to the download.
 
-### Features
+Your samples and projects live in `%USERPROFILE%\SILA\` (`library\`,
+`projects\`). The bundled factory kit (Behringer RD-6 drums + Casio CZ-1 voices)
+installs itself there on first run and never overwrites your files.
 
-**Sampler**
-- Velocity layers + round-robin per track
-- Per-layer start/end trimming over a waveform view
-- Sample-rate conversion on load (windowed-sinc), so off-rate files play in tune
-- Per-step varispeed pitch (cubic-Hermite interpolation)
+## First five minutes
 
-**Sequencer** (host-synced, sample-accurate)
-- Polyrhythmic step lengths, derived from the host's PPQ (loop/seek-safe)
-- Swing + positive micro-timing
-- Trig conditions (always, 1:2, 1:4, fill, not-fill) and per-step probability
-- Per-step **parameter locks** (pitch, cutoff, resonance, filter mode, LFO depth/rate, …)
-- Per-step **note length / gate** and **retrig / ratchet** (1–8 hits with a velocity fade)
+- A new instance opens to an **empty project with 8 lanes and the factory kit
+  loaded**. Click pads to program steps; it makes sound immediately.
+- **PROJECTS → Factory Showcase** loads a complete example song. Turn on
+  *Song Mode* and press play.
+- **Right-click a pad** to inspect it: velocity, probability, trig condition,
+  micro-timing, retrig, per-step filter / LFO / sample-slice locks.
+- **Drag** across pads to paint a run, **wheel** over a pad for velocity,
+  **hold FILL** (or `F`) to fire fill steps, **COPY / PASTE** to make a
+  variation of a pattern.
+- Press **`?`** inside SILA for the full keyboard and mouse cheat-sheet.
+- Click a lane's sample slot to pick a sound; **LIBRARY → + Import** pulls in
+  any folder of WAV/AIFF files and sorts it by type (kick, snare, hat, bass…).
 
-**Per-voice DSP**
-- TPT state-variable filter — low-pass / high-pass / band-pass, with cutoff + resonance
-- Per-voice LFO (sine / triangle / square / saw / random S&H) routable to
-  cutoff, volume or pitch, trig-synced or free-running
+## How it compares to a Digitakt
 
-**Mixer & automation**
-- Per-track volume + constant-power pan, master volume, small-speaker monitor
-- Per-track volume / pan / cutoff / resonance / filter-mode, swing and master
-  exposed as host-automatable parameters
+SILA is *inspired by* the Elektron Digitakt's workflow. It is not a clone and
+not a replacement for the hardware; it's the parts of that workflow that make
+sense inside a DAW, plus a few things the box doesn't do.
 
-**DAW integration**
-- **Multi-out** — a Main mix bus plus one stereo bus per track, so each lane can
-  be routed to its own DAW channel / FX chain (e.g. Reaper per-track effects)
-- Host-synced transport — tempo and play/stop follow your DAW; in the Standalone,
-  SILA drives its own clock
-- **MIDI export** — bounce the song (or current pattern) to a Standard MIDI File,
-  one track per lane on its own MIDI channel
+| | Digitakt (hardware) | SILA (plugin) |
+|---|---|---|
+| Tracks | 8 audio + 8 MIDI | 8 sample lanes |
+| Pattern length | 64 steps (4 pages) | 128 steps (8 pages), master length per pattern |
+| Patterns / banks | 128 (8 banks × 16) | 16 patterns per project |
+| Per-pattern sounds | Sound per track per pattern (kit) | **Kit per pattern** — same lane, different sample/LFO per pattern |
+| Parameter locks | Almost every parameter | Pitch, velocity, cutoff, resonance, filter mode, LFO depth/rate, sample start/end, length, micro-timing |
+| Trig conditions | Large set (A:B, PRE, NEI, FILL, %…) | Always, 1:2, 1:4, Fill, Not Fill, plus per-step probability |
+| Retrig / ratchet | Yes, with rate + velocity curve | Yes, ×2–×8 with a velocity swell/fade |
+| Micro-timing | ± | Late only (the engine can't play before the grid) |
+| Velocity layers / round-robin | No | **Yes** — multiple samples per lane by velocity range, round-robin groups |
+| Filter | Multimode + base-width | TPT state-variable LP/HP/BP per voice |
+| Amp envelope | Attack / hold / decay / release | Gate length + one-shot (no envelope stages) |
+| LFO | 1 per track (2 on Digitakt II), many destinations | 1 per lane per pattern → cutoff / volume / pitch, synced or free |
+| Effects | Overdrive, delay, reverb, compressor | **None built in** — use your DAW's effects via the per-lane outputs |
+| Sampling / resampling | Yes | No (import files instead) |
+| Song mode | Yes | Yes — label / pattern / repeat / length / tempo / per-lane mutes, loop or stop |
+| Chromatic play | Yes | Key + scale note keyboard per step; live MIDI in (channel N = lane N) |
+| Sequencing external gear | 8 MIDI tracks | No live MIDI out — **export the song as a .mid** instead |
+| Outputs | Stereo + individual outs (II) | Main mix + **one stereo bus per lane** to the DAW |
+| Undo | Yes | No — save often |
+| Price | Hardware | Free |
 
-**Arrangement**
-- Pattern bank: 16 slots, up to 128 steps each, paged in 16s with a per-pattern master length
-- **Song mode** — a Digitakt-style row chain (label / pattern / repeat / length /
-  tempo override / per-track mutes, loop or stop at the end)
+The short version: SILA gets you the *step-sequencer-with-locks* feeling, the
+kit-per-pattern arrangement trick, and a song mode, inside the DAW you already
+have. Effects, sampling, and the knobs-under-your-hands part stay with the
+hardware.
 
-**Musical tools**
-- Global key + scale with a mini note-keyboard (chromatic, in-scale notes highlighted)
-- Scale-aware melodic factory presets
-- ~80 factory **pattern parts** (per-track preset sequences) across 9 categories
+## In a DAW
 
-**Workflow**
-- Add / remove / rename tracks, per-track colour
-- Vanilla HTML/JS UI in a JUCE WebView: rotary dials, hover tooltips, beat-grouped grid
-- Project save/load (`~/SILA/projects`) **and** full DAW state persistence
-- Sample library browser + importer (auto-categorizes an external sample pack)
+- **Tempo and transport follow the DAW.** The BPM readout in SILA is display-only
+  when hosted; the internal clock only runs in the Standalone.
+- **Per-lane outputs.** SILA exposes a Main mix plus one stereo bus per lane.
+  In Reaper: set the SILA track to 16 channels, then add tracks with receives
+  from channel pairs 3/4 (lane 1), 5/6 (lane 2), … and mute the SILA track's
+  master send if you don't want to hear lanes twice.
+- **MIDI export** bounces the active song (or the current pattern) to a Standard
+  MIDI File, one track per lane on its own channel. **Live MIDI in** mirrors that
+  map: channel N triggers lane N, C3 is the lane's programmed pitch.
+- **Everything is saved with the DAW project**, and you can also save/load
+  named projects in SILA's PROJECTS panel.
 
-See **[`vst/DESIGN.md`](vst/DESIGN.md)** for the architecture (host-transport
-timing model, the lock-free RCU state seam, the WebView bridge) and the phased
-roadmap.
+## Known gaps (v1.0)
 
-### Getting started
+- No undo.
+- Renaming, moving or deleting a sample in LIBRARY doesn't update projects that
+  reference it; they show a *sample missing* badge on the lane — click it to
+  pick a replacement.
+- Windows only for now. The code builds for macOS (VST3 / AU) but that has not
+  been tested.
+- Song mode does not recall each pattern's mix snapshot as it advances (it uses
+  the live mixer values).
 
-1. **Install** — drop `SILA.vst3` into your VST3 folder (`%USERPROFILE%\VST3` on
-   Windows), or run the Standalone app. *(No prebuilt release yet — build from
-   source, below.)*
-2. Add SILA to an instrument track and press play — the factory beat plays.
-3. Hit **SONG** (or the Song Mode toggle) for the full arrangement.
-4. Swap sounds: click a track's sample slot to **BROWSE** the library, or import
-   your own pack with **LIBRARY → + Import**.
-
-### Per-track outputs (multi-out)
-
-SILA exposes a **Main** mix plus one stereo bus per track, so each lane can be
-processed with your DAW's effects. In Reaper:
-
-1. On the SILA track, open **Route** and set **Track channels** to 16.
-2. Add a track and give it a **Receive** from the SILA track, picking the lane's
-   channel pair (Track 1 = 3/4, Track 2 = 5/6, Track 3 = 7/8, …).
-3. Drop effects on that track; repeat per lane. To avoid hearing a lane twice,
-   turn off the SILA track's master/parent send.
-
-### Build
-
-Requires a C++20 toolchain and CMake. JUCE 8 and the VST3 SDK are fetched
-automatically. On Windows you also need the WebView2 SDK (NuGet) and the
-WebView2 runtime (ships with modern Windows).
+## Building from source
 
 ```
 cmake -B vst/build -S vst -DCMAKE_BUILD_TYPE=Release
-cmake --build vst/build
+cmake --build vst/build --config Release
 ```
 
-The build installs the VST3 to a user-writable folder (`%USERPROFILE%/VST3` on
-Windows). The Standalone target lets you test without a DAW.
+Needs a C++20 toolchain, CMake ≥ 3.22, and on Windows the WebView2 SDK NuGet
+package. JUCE 8 and the VST3 SDK are fetched automatically. See
+[`vst/README.md`](vst/README.md) for the layout and Windows build notes,
+[`vst/DESIGN.md`](vst/DESIGN.md) for the architecture (host-synced timing, the
+lock-free state seam, the WebView bridge), and `vst/release/make-release.ps1`
+to package a release zip.
 
----
+## The Python app (`sila/`)
 
-## The Python app (`sila/`) — original / reference
-
-A local FastAPI server with the grid UI in the browser. The plugin's C++ engine
-was ported from here; it remains the spec and still runs.
-
-```
-pip install -r requirements.txt
-python -m sila.main
-```
-
-Open `http://127.0.0.1:8765`. The session token is printed to stdout on startup
-(the UI reads it from the URL hash or localStorage).
-
-**Layout**
-
-```
-sila/
-  main.py              Entry point — binds to 127.0.0.1:8765
-  security.py          Security primitives (token, safe_path, sanitize)
-  engine/              sequencer · sampler · lfo · fx · audio · clock
-  models/              ProjectModel, TrackModel, Step, SampleLayer, FX, LFO
-  export/digitakt.py   Digitakt-ready WAV export
-  api/routes.py        FastAPI routes (all token-gated)
-  ui/                  index.html + app.js (grid-first UI)
-  storage/             JSON load/save + undo/redo
-  tests/
-```
-
-**Security model**
-
-- Binds to `127.0.0.1` only.
-- Every API route requires an `X-SILA-Token` header (session token, generated at startup).
-- All file paths go through `safe_path()`; all notes fields through `sanitize_notes()`.
-- Project files are backed up before every write.
-
-Projects live at `~/SILA/projects/<name>/project.json`, samples alongside in
-`samples/`.
+The original prototype: a local FastAPI server with the grid UI in a browser.
+The plugin's C++ engine was ported from it. It is kept as reference only and is
+not maintained. `pip install -r requirements.txt && python -m sila.main`, then
+open `http://127.0.0.1:8765`.

@@ -687,6 +687,18 @@ function editBpmInline() {
 const helpScreen = document.getElementById("help-screen");
 function toggleHelp(force) { helpScreen.classList.toggle("open", force); }
 
+// FILL is momentary (Digitakt "hold for fill"): true while the button or the F
+// key is held. Steps with the Fill trig condition fire only then; Not-Fill steps
+// go silent. Works hosted too — it's a performance flag, not transport.
+let _fill = false;
+function setFill(on) {
+  on = !!on;
+  if (on === _fill) return;
+  _fill = on;
+  $("fill-btn").classList.toggle("on", on);
+  PUT("/transport/fill", { active: on });
+}
+
 // ── Per-track colour ─────────────────────────────────────────────────────────
 // Assign the next UNused palette colour to any track without one (new tracks,
 // pre-colour projects). Sets it locally + persists (fire-and-forget). Must run
@@ -2232,6 +2244,13 @@ async function boot() {
   $("help-close").addEventListener("click", () => toggleHelp(false));
   helpScreen.addEventListener("click", (e) => { if (e.target === helpScreen) toggleHelp(false); });
   bpmEl.addEventListener("dblclick", editBpmInline);
+  const fillBtn = $("fill-btn");
+  fillBtn.addEventListener("mousedown", (e) => { e.preventDefault(); setFill(true); });
+  fillBtn.addEventListener("mouseup", () => setFill(false));
+  fillBtn.addEventListener("mouseleave", () => setFill(false));
+  window.addEventListener("blur", () => setFill(false));
+  document.addEventListener("keyup", (e) => { if (e.key === "f" || e.key === "F") setFill(false); });
+  attachTip(fillBtn, "<b>Fill</b> — hold to fire steps whose trig condition is <i>Fill</i> (and silence <i>Not Fill</i> steps). Or hold <b>F</b>.");
   setDirty(false);   // a freshly-restored session isn't "unsaved"
 
   // Initial transport status (live updates after this arrive via the event).
@@ -2339,6 +2358,8 @@ async function boot() {
     } else if (e.key === "?" && !typing) {
       e.preventDefault();
       toggleHelp();
+    } else if ((e.key === "f" || e.key === "F") && !typing && !overlayOpen) {
+      setFill(true);   // released on keyup
     } else if (e.code === "Space" && _standalone && !typing
                && (!t || t.tagName !== "BUTTON")) {   // let a focused button keep its native Space-click
       e.preventDefault();   // don't scroll the grid

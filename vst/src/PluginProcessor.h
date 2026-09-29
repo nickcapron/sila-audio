@@ -79,6 +79,11 @@ public:
     std::atomic<bool>   internalPlaying { false };
     std::atomic<double> internalBpm     { kDefaultBpm };
 
+    // FILL (Digitakt "hold for fill"): a live performance scalar, not an APVTS
+    // param — held by the UI's FILL button / F key, read per boundary by the
+    // sequencer for the Fill / Not-Fill trig conditions. Set on the message thread.
+    std::atomic<bool>   fillActive      { false };
+
     // Song Mode playhead (Phase 6), published once per block for the song-edit UI.
     // currentSongSlot above carries the active row's pattern slot in song mode.
     std::atomic<int>    currentSongRow    { -1 };  // -1 = not in a song
@@ -261,9 +266,6 @@ private:
     // the mutex has zero real-time impact.
     std::mutex retireMutex;
     std::vector<ProjectPtr> retiredProjects;
-
-    // Performance scalar not (yet) an APVTS param; read by the audio thread.
-    std::atomic<bool> fillActive { false };
 
     // Library audition handoff: the message thread stores a prepared one-shot
     // Sampler here; processBlock exchanges it for null and spawns a voice. The
