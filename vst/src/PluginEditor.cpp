@@ -177,6 +177,35 @@ juce::WebBrowserComponent::Options SilaAudioProcessorEditor::makeWebOptions()
         .withResourceProvider ([this] (const juce::String& url) { return serveResource (url); });
 }
 
+// Is the Microsoft Edge WebView2 (Evergreen) runtime installed? Microsoft's
+// documented detection: the EdgeUpdate client key's `pv` value, per-machine or
+// per-user (WOW6432Node on 64-bit Windows). A synchronous registry read — we
+// deliberately do NOT use WebBrowserComponent::areOptionsSupported, which spins
+// up a real WebView2 environment asynchronously to answer and then discards it;
+// doing that right before creating the actual view left the editor blank.
+static bool webView2RuntimeInstalled()
+{
+   #if JUCE_WINDOWS
+    const juce::String key = "\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\"
+                             "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}\\pv";
+    for (const auto* hive : { "HKEY_LOCAL_MACHINE", "HKEY_CURRENT_USER" })
+    {
+        const auto pv = juce::WindowsRegistry::getValue (juce::String (hive) + key, {},
+                                                         juce::WindowsRegistry::WoW64_Default).trim();
+        if (pv.isNotEmpty() && pv != "0.0.0.0")
+            return true;
+        // 32-bit view too, in case the process is 32-bit or the key was written there.
+        const auto pv32 = juce::WindowsRegistry::getValue (juce::String (hive) + key, {},
+                                                           juce::WindowsRegistry::WoW64_32bit).trim();
+        if (pv32.isNotEmpty() && pv32 != "0.0.0.0")
+            return true;
+    }
+    return false;
+   #else
+    return true;   // WKWebView / WebKitGTK ship with the OS
+   #endif
+}
+
 void SilaAudioProcessorEditor::emitToUi (const juce::String& eventName, const juce::var& payload)
 {
     if (webView != nullptr)
@@ -196,10 +225,9 @@ SilaAudioProcessorEditor::SilaAudioProcessorEditor (SilaAudioProcessor& p)
     setResizeLimits (900, 520, 4096, 4096);
     setSize (1280, 720);
 
-    const auto opts = makeWebOptions();
-    if (juce::WebBrowserComponent::areOptionsSupported (opts))
+    if (webView2RuntimeInstalled())
     {
-        webView = std::make_unique<juce::WebBrowserComponent> (opts);
+        webView = std::make_unique<juce::WebBrowserComponent> (makeWebOptions());
         addAndMakeVisible (*webView);
         webView->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
     }
@@ -220,6 +248,7 @@ SilaAudioProcessorEditor::SilaAudioProcessorEditor (SilaAudioProcessor& p)
         runtimeLink.setFont (juce::Font (juce::FontOptions (16.0f)), false, juce::Justification::centred);
         addAndMakeVisible (runtimeLink);
     }
+    resized();   // setSize() above ran resized() before the child existed — lay it out now
 
     // Seed from the current epoch so a state load applied before the UI opened
     // (host restores state, then shows the editor) doesn't trigger a redundant

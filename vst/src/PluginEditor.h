@@ -62,11 +62,10 @@ private:
     // Declared before webView: the browser Options reference the relay.
     juce::WebToggleButtonRelay songModeRelay { "songModeToggle" };
 
-    // The browser options (backend, bridge, resource provider). Built once in the
-    // ctor and checked with WebBrowserComponent::areOptionsSupported BEFORE the
-    // view is created: on Windows that probes the WebView2 runtime, which most
-    // machines have (Edge ships it) but not all — a missing runtime used to mean a
-    // blank editor with no explanation.
+    // The browser options (backend, bridge, resource provider). The ctor first
+    // checks the WebView2 runtime is installed (registry, see the .cpp) — most
+    // machines have it (Edge ships it) but not all, and a missing runtime used to
+    // mean a blank editor with no explanation.
     juce::WebBrowserComponent::Options makeWebOptions();
 
     // Null when the WebView2 runtime is missing; then the fallback label + link
